@@ -23,7 +23,7 @@ export async function setupVite(app: Express, server: Server) {
   const serverOptions = {
     middlewareMode: true,
     hmr: { server },
-    allowedHosts: true,
+    allowedHosts: true as const,
   };
 
   const vite = await createViteServer({
@@ -73,7 +73,12 @@ export async function setupVite(app: Express, server: Server) {
 }
 
 export function serveStatic(app: Express) {
-  const distPath = path.resolve(import.meta.dirname, "public");
+  // In production (Vercel), files are in dist/public relative to project root
+  // In built code, import.meta.dirname is dist/, so we need to go up and then to dist/public
+  // Or use process.cwd() which is the project root
+  const distPath = process.env.VERCEL 
+    ? path.resolve(process.cwd(), "dist", "public")
+    : path.resolve(import.meta.dirname, "..", "dist", "public");
 
   if (!fs.existsSync(distPath)) {
     throw new Error(
