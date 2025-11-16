@@ -35,9 +35,18 @@ if (databaseUrl) {
     
     console.log(`🔧 Creating database pool (serverless: ${isServerless}, max: ${maxConnections})...`);
     
-    // Use connection string directly - pg.Pool handles parsing
+    // Clean up the connection string - remove unsupported query parameters
+    // Supabase pooler adds 'supa=base-pooler.x' which pg doesn't recognize
+    // Simple regex replacement to remove the supa parameter
+    let cleanConnectionString = databaseUrl.replace(/[?&]supa=[^&]*/g, '');
+    // If we removed a parameter and it was the first one, we need to fix the ? vs &
+    cleanConnectionString = cleanConnectionString.replace(/\?&/, '?');
+    
+    console.log(`🔧 Using connection string: ${cleanConnectionString.substring(0, 60)}...`);
+    
+    // Use cleaned connection string - pg.Pool handles parsing
     poolInstance = new Pool({ 
-      connectionString: databaseUrl,
+      connectionString: cleanConnectionString,
       // Optimized for serverless environments
       max: maxConnections,
       idleTimeoutMillis: 30000, // 30 seconds for serverless
