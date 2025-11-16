@@ -1,0 +1,854 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitcoin News Analysis System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        bitcoin: {
+                            50: '#fef7ee',
+                            100: '#fdedd3',
+                            500: '#f97316',
+                            600: '#ea580c',
+                            900: '#9a3412'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .bitcoin-gradient { background: linear-gradient(135deg, #f7931e 0%, #ff6b35 100%); }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <!-- Header Navigation -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-2">
+                        <div class="w-8 h-8 bitcoin-gradient rounded-full flex items-center justify-center">
+                            <i class="fab fa-bitcoin text-white text-sm"></i>
+                        </div>
+                        <h1 class="text-xl font-bold text-slate-900">BitNews Analyzer</h1>
+                    </div>
+                    <!-- Breadcrumb Navigation -->
+                    <nav class="hidden md:flex items-center space-x-2 text-sm">
+                        <span class="text-slate-500">Dashboard</span>
+                        <i class="fas fa-chevron-right text-slate-300 text-xs"></i>
+                        <span class="text-slate-900 font-medium">Timeline</span>
+                    </nav>
+                </div>
+                
+                <div class="flex items-center space-x-4">
+                    <button class="p-2 text-slate-400 hover:text-slate-600 transition-colors">
+                        <i class="fas fa-bell"></i>
+                    </button>
+                    <button class="p-2 text-slate-400 hover:text-slate-600 transition-colors">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                    <div class="w-8 h-8 bg-indigo-500 rounded-full flex items-center justify-center">
+                        <span class="text-white text-xs font-medium">JD</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Dashboard Overview Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-slate-600">Total Days</p>
+                        <p class="text-2xl font-bold text-slate-900">6,205</p>
+                    </div>
+                    <div class="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <i class="fas fa-calendar-alt text-blue-600"></i>
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <div class="flex items-center text-sm">
+                        <span class="text-emerald-600 font-medium">Since 2008</span>
+                        <span class="text-slate-500 ml-2">to present</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-slate-600">Analyzed</p>
+                        <p class="text-2xl font-bold text-slate-900">4,892</p>
+                    </div>
+                    <div class="w-12 h-12 bg-emerald-100 rounded-lg flex items-center justify-center">
+                        <i class="fas fa-check-circle text-emerald-600"></i>
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <div class="flex items-center text-sm">
+                        <span class="text-emerald-600 font-medium">78.8%</span>
+                        <span class="text-slate-500 ml-2">completion</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-slate-600">AI Summaries</p>
+                        <p class="text-2xl font-bold text-slate-900">4,654</p>
+                    </div>
+                    <div class="w-12 h-12 bg-violet-100 rounded-lg flex items-center justify-center">
+                        <i class="fas fa-robot text-violet-600"></i>
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <div class="flex items-center text-sm">
+                        <span class="text-violet-600 font-medium">GPT-4 & Gemini</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm font-medium text-slate-600">News Sources</p>
+                        <p class="text-2xl font-bold text-slate-900">247</p>
+                    </div>
+                    <div class="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
+                        <i class="fas fa-newspaper text-orange-600"></i>
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <div class="flex items-center text-sm">
+                        <span class="text-orange-600 font-medium">Verified sources</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="bg-white rounded-xl border border-slate-200 mb-8">
+            <div class="border-b border-slate-200">
+                <nav class="flex space-x-8 px-6">
+                    <button class="py-4 px-1 border-b-2 border-blue-500 text-blue-600 font-medium text-sm">
+                        <i class="fas fa-timeline mr-2"></i>Timeline View
+                    </button>
+                    <button class="py-4 px-1 border-b-2 border-transparent text-slate-500 font-medium text-sm hover:text-slate-700">
+                        <i class="fas fa-calendar-days mr-2"></i>Month View
+                    </button>
+                    <button class="py-4 px-1 border-b-2 border-transparent text-slate-500 font-medium text-sm hover:text-slate-700">
+                        <i class="fas fa-chart-line mr-2"></i>Analytics
+                    </button>
+                    <button class="py-4 px-1 border-b-2 border-transparent text-slate-500 font-medium text-sm hover:text-slate-700">
+                        <i class="fas fa-flask mr-2"></i>Test Arena
+                    </button>
+                </nav>
+            </div>
+
+            <!-- Timeline Content -->
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-semibold text-slate-900">Historical Timeline</h2>
+                    <div class="flex items-center space-x-3">
+                        <button class="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors">
+                            <i class="fas fa-download mr-2"></i>Export Data
+                        </button>
+                        <button class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+                            <i class="fas fa-plus mr-2"></i>Add Entry
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Years Grid -->
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+                    <!-- Year 2024 (Current) -->
+                    <div class="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-xl p-4 cursor-pointer hover:shadow-md transition-all">
+                        <div class="flex justify-between items-start mb-3">
+                            <h3 class="text-lg font-bold text-slate-900">2024</h3>
+                            <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-1 rounded-full">Current</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-600">Progress</span>
+                                <span class="font-medium text-slate-900">89%</span>
+                            </div>
+                            <div class="w-full bg-slate-200 rounded-full h-2">
+                                <div class="bg-blue-500 h-2 rounded-full" style="width: 89%"></div>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500">
+                                <span>324/365 days</span>
+                                <span>41 left</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-blue-200">
+                            <div class="flex items-center text-xs text-slate-600">
+                                <i class="fas fa-star text-amber-500 mr-1"></i>
+                                <span>ETF Era</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Year 2023 -->
+                    <div class="bg-white border border-slate-200 rounded-xl p-4 cursor-pointer hover:shadow-md transition-all">
+                        <div class="flex justify-between items-start mb-3">
+                            <h3 class="text-lg font-bold text-slate-900">2023</h3>
+                            <span class="bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-1 rounded-full">Complete</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-600">Progress</span>
+                                <span class="font-medium text-slate-900">100%</span>
+                            </div>
+                            <div class="w-full bg-slate-200 rounded-full h-2">
+                                <div class="bg-emerald-500 h-2 rounded-full" style="width: 100%"></div>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500">
+                                <span>365/365 days</span>
+                                <span>Complete</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-slate-200">
+                            <div class="flex items-center text-xs text-slate-600">
+                                <i class="fas fa-chart-line text-green-500 mr-1"></i>
+                                <span>Recovery</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Year 2022 -->
+                    <div class="bg-white border border-slate-200 rounded-xl p-4 cursor-pointer hover:shadow-md transition-all">
+                        <div class="flex justify-between items-start mb-3">
+                            <h3 class="text-lg font-bold text-slate-900">2022</h3>
+                            <span class="bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-1 rounded-full">Complete</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-600">Progress</span>
+                                <span class="font-medium text-slate-900">100%</span>
+                            </div>
+                            <div class="w-full bg-slate-200 rounded-full h-2">
+                                <div class="bg-emerald-500 h-2 rounded-full" style="width: 100%"></div>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500">
+                                <span>365/365 days</span>
+                                <span>Complete</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-slate-200">
+                            <div class="flex items-center text-xs text-slate-600">
+                                <i class="fas fa-snowflake text-blue-500 mr-1"></i>
+                                <span>Bear Market</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Year 2021 -->
+                    <div class="bg-white border border-slate-200 rounded-xl p-4 cursor-pointer hover:shadow-md transition-all">
+                        <div class="flex justify-between items-start mb-3">
+                            <h3 class="text-lg font-bold text-slate-900">2021</h3>
+                            <span class="bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-1 rounded-full">Complete</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-600">Progress</span>
+                                <span class="font-medium text-slate-900">100%</span>
+                            </div>
+                            <div class="w-full bg-slate-200 rounded-full h-2">
+                                <div class="bg-emerald-500 h-2 rounded-full" style="width: 100%"></div>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500">
+                                <span>365/365 days</span>
+                                <span>Complete</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-slate-200">
+                            <div class="flex items-center text-xs text-slate-600">
+                                <i class="fas fa-rocket text-purple-500 mr-1"></i>
+                                <span>NFT/DeFi Boom</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Year 2020 -->
+                    <div class="bg-white border border-slate-200 rounded-xl p-4 cursor-pointer hover:shadow-md transition-all">
+                        <div class="flex justify-between items-start mb-3">
+                            <h3 class="text-lg font-bold text-slate-900">2020</h3>
+                            <span class="bg-amber-100 text-amber-800 text-xs font-medium px-2 py-1 rounded-full">94%</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-600">Progress</span>
+                                <span class="font-medium text-slate-900">94%</span>
+                            </div>
+                            <div class="w-full bg-slate-200 rounded-full h-2">
+                                <div class="bg-amber-500 h-2 rounded-full" style="width: 94%"></div>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500">
+                                <span>344/366 days</span>
+                                <span>22 left</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-slate-200">
+                            <div class="flex items-center text-xs text-slate-600">
+                                <i class="fas fa-building text-indigo-500 mr-1"></i>
+                                <span>Institutional</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Year 2019 -->
+                    <div class="bg-white border border-slate-200 rounded-xl p-4 cursor-pointer hover:shadow-md transition-all">
+                        <div class="flex justify-between items-start mb-3">
+                            <h3 class="text-lg font-bold text-slate-900">2019</h3>
+                            <span class="bg-red-100 text-red-800 text-xs font-medium px-2 py-1 rounded-full">67%</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-600">Progress</span>
+                                <span class="font-medium text-slate-900">67%</span>
+                            </div>
+                            <div class="w-full bg-slate-200 rounded-full h-2">
+                                <div class="bg-red-400 h-2 rounded-full" style="width: 67%"></div>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500">
+                                <span>245/365 days</span>
+                                <span>120 left</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-slate-200">
+                            <div class="flex items-center text-xs text-slate-600">
+                                <i class="fas fa-chart-area text-teal-500 mr-1"></i>
+                                <span>Consolidation</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Add more years with varying completion states -->
+                    <div class="bg-white border border-slate-200 rounded-xl p-4 cursor-pointer hover:shadow-md transition-all">
+                        <div class="flex justify-between items-start mb-3">
+                            <h3 class="text-lg font-bold text-slate-900">2018</h3>
+                            <span class="bg-slate-100 text-slate-800 text-xs font-medium px-2 py-1 rounded-full">12%</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-600">Progress</span>
+                                <span class="font-medium text-slate-900">12%</span>
+                            </div>
+                            <div class="w-full bg-slate-200 rounded-full h-2">
+                                <div class="bg-slate-400 h-2 rounded-full" style="width: 12%"></div>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500">
+                                <span>44/365 days</span>
+                                <span>321 left</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-slate-200">
+                            <div class="flex items-center text-xs text-slate-600">
+                                <i class="fas fa-snowflake text-cyan-500 mr-1"></i>
+                                <span>Crypto Winter</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white border border-slate-200 rounded-xl p-4 cursor-pointer hover:shadow-md transition-all">
+                        <div class="flex justify-between items-start mb-3">
+                            <h3 class="text-lg font-bold text-slate-900">2017</h3>
+                            <span class="bg-slate-100 text-slate-800 text-xs font-medium px-2 py-1 rounded-full">8%</span>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between text-sm">
+                                <span class="text-slate-600">Progress</span>
+                                <span class="font-medium text-slate-900">8%</span>
+                            </div>
+                            <div class="w-full bg-slate-200 rounded-full h-2">
+                                <div class="bg-slate-400 h-2 rounded-full" style="width: 8%"></div>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500">
+                                <span>29/365 days</span>
+                                <span>336 left</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-slate-200">
+                            <div class="flex items-center text-xs text-slate-600">
+                                <i class="fas fa-coins text-yellow-500 mr-1"></i>
+                                <span>ICO Boom</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Historical Periods Legend -->
+                <div class="mt-8 bg-slate-50 rounded-xl p-6">
+                    <h3 class="text-lg font-semibold text-slate-900 mb-4">Historical Periods</h3>
+                    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-seedling text-green-500"></i>
+                            <span class="text-sm text-slate-700">Early Bitcoin Era (2008-2010)</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-chart-line text-blue-500"></i>
+                            <span class="text-sm text-slate-700">First Bubble (2011-2013)</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-exclamation-triangle text-red-500"></i>
+                            <span class="text-sm text-slate-700">Mt. Gox Crisis (2014-2015)</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-coins text-yellow-500"></i>
+                            <span class="text-sm text-slate-700">ICO Boom (2017-2018)</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-snowflake text-cyan-500"></i>
+                            <span class="text-sm text-slate-700">Crypto Winter (2018-2020)</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-building text-indigo-500"></i>
+                            <span class="text-sm text-slate-700">Institutional (2020-2022)</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-rocket text-purple-500"></i>
+                            <span class="text-sm text-slate-700">DeFi/NFT Era (2021-2023)</span>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <i class="fas fa-star text-amber-500"></i>
+                            <span class="text-sm text-slate-700">ETF Era (2024+)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Month View Modal (Hidden by default, would be shown when year is clicked) -->
+        <div id="monthModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden">
+            <div class="flex items-center justify-center min-h-screen p-4">
+                <div class="bg-white rounded-2xl max-w-6xl w-full max-h-screen overflow-y-auto">
+                    <div class="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 rounded-t-2xl">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <h2 class="text-2xl font-bold text-slate-900">December 2024</h2>
+                                <p class="text-slate-600">31 days • 28 analyzed • 3 remaining</p>
+                            </div>
+                            <div class="flex items-center space-x-3">
+                                <button class="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200">
+                                    <i class="fas fa-download mr-2"></i>Export
+                                </button>
+                                <button class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">
+                                    <i class="fas fa-magic mr-2"></i>Auto-Fill Missing
+                                </button>
+                                <button onclick="closeModal()" class="p-2 text-slate-400 hover:text-slate-600">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="p-6">
+                        <!-- Calendar Grid -->
+                        <div class="grid grid-cols-7 gap-1 mb-4">
+                            <!-- Header -->
+                            <div class="text-center text-sm font-medium text-slate-500 py-2">Sun</div>
+                            <div class="text-center text-sm font-medium text-slate-500 py-2">Mon</div>
+                            <div class="text-center text-sm font-medium text-slate-500 py-2">Tue</div>
+                            <div class="text-center text-sm font-medium text-slate-500 py-2">Wed</div>
+                            <div class="text-center text-sm font-medium text-slate-500 py-2">Thu</div>
+                            <div class="text-center text-sm font-medium text-slate-500 py-2">Fri</div>
+                            <div class="text-center text-sm font-medium text-slate-500 py-2">Sat</div>
+
+                            <!-- Calendar Days -->
+                            <!-- Day 1 - Analyzed -->
+                            <div class="aspect-square bg-emerald-50 border-2 border-emerald-200 rounded-lg p-2 cursor-pointer hover:shadow-md transition-all">
+                                <div class="text-sm font-medium text-slate-900">1</div>
+                                <div class="flex items-center justify-center mt-1">
+                                    <i class="fas fa-check-circle text-emerald-500 text-xs"></i>
+                                </div>
+                                <div class="text-xs text-slate-500 mt-1 truncate">AI Summary</div>
+                            </div>
+
+                            <!-- Day 2 - Analyzed -->
+                            <div class="aspect-square bg-emerald-50 border-2 border-emerald-200 rounded-lg p-2 cursor-pointer hover:shadow-md transition-all">
+                                <div class="text-sm font-medium text-slate-900">2</div>
+                                <div class="flex items-center justify-center mt-1">
+                                    <i class="fas fa-check-circle text-emerald-500 text-xs"></i>
+                                </div>
+                                <div class="text-xs text-slate-500 mt-1 truncate">Manual Entry</div>
+                            </div>
+
+                            <!-- Day 3 - Missing -->
+                            <div class="aspect-square bg-red-50 border-2 border-red-200 rounded-lg p-2 cursor-pointer hover:shadow-md transition-all">
+                                <div class="text-sm font-medium text-slate-900">3</div>
+                                <div class="flex items-center justify-center mt-1">
+                                    <i class="fas fa-exclamation-circle text-red-500 text-xs"></i>
+                                </div>
+                                <div class="text-xs text-slate-500 mt-1">No Data</div>
+                            </div>
+
+                            <!-- Add more calendar days with varying states -->
+                            <div class="aspect-square bg-emerald-50 border-2 border-emerald-200 rounded-lg p-2 cursor-pointer hover:shadow-md transition-all">
+                                <div class="text-sm font-medium text-slate-900">4</div>
+                                <div class="flex items-center justify-center mt-1">
+                                    <i class="fas fa-check-circle text-emerald-500 text-xs"></i>
+                                </div>
+                                <div class="text-xs text-slate-500 mt-1 truncate">AI Summary</div>
+                            </div>
+
+                            <!-- Continue pattern for remaining days... -->
+                            <!-- For brevity, showing a few more examples -->
+                            <div class="aspect-square bg-amber-50 border-2 border-amber-200 rounded-lg p-2 cursor-pointer hover:shadow-md transition-all">
+                                <div class="text-sm font-medium text-slate-900">15</div>
+                                <div class="flex items-center justify-center mt-1">
+                                    <i class="fas fa-clock text-amber-500 text-xs"></i>
+                                </div>
+                                <div class="text-xs text-slate-500 mt-1">Processing</div>
+                            </div>
+
+                            <div class="aspect-square bg-blue-50 border-2 border-blue-200 rounded-lg p-2 cursor-pointer hover:shadow-md transition-all">
+                                <div class="text-sm font-medium text-slate-900">23</div>
+                                <div class="flex items-center justify-center mt-1">
+                                    <i class="fas fa-star text-blue-500 text-xs"></i>
+                                </div>
+                                <div class="text-xs text-slate-500 mt-1">Featured</div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Actions -->
+                        <div class="mt-6 flex flex-wrap gap-3">
+                            <button class="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700">
+                                <i class="fas fa-play mr-2"></i>Analyze Missing Days
+                            </button>
+                            <button class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200">
+                                <i class="fas fa-edit mr-2"></i>Bulk Edit
+                            </button>
+                            <button class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200">
+                                <i class="fas fa-trash mr-2"></i>Clear Month
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Day Analysis Modal -->
+        <div id="dayModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden">
+            <div class="flex items-center justify-center min-h-screen p-4">
+                <div class="bg-white rounded-2xl max-w-5xl w-full max-h-screen overflow-y-auto">
+                    <div class="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 rounded-t-2xl">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <h2 class="text-xl font-bold text-slate-900">December 15, 2024</h2>
+                                <p class="text-slate-600">Bitcoin News Analysis</p>
+                            </div>
+                            <button onclick="closeDayModal()" class="p-2 text-slate-400 hover:text-slate-600">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="p-6">
+                        <!-- AI Summary Card -->
+                        <div class="bg-gradient-to-r from-violet-50 to-purple-50 border border-violet-200 rounded-xl p-6 mb-6">
+                            <div class="flex items-start justify-between mb-4">
+                                <div class="flex items-center space-x-2">
+                                    <i class="fas fa-robot text-violet-600"></i>
+                                    <h3 class="text-lg font-semibold text-slate-900">AI Summary</h3>
+                                    <span class="bg-violet-100 text-violet-800 text-xs font-medium px-2 py-1 rounded-full">GPT-4</span>
+                                </div>
+                                <button class="text-violet-600 hover:text-violet-700">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                            </div>
+                            <p class="text-slate-800 text-lg leading-relaxed mb-4">
+                                "Bitcoin hits new ATH of $47K as institutional adoption accelerates with MicroStrategy's latest purchase."
+                            </p>
+                            <div class="flex items-center justify-between text-sm">
+                                <div class="flex items-center space-x-4">
+                                    <span class="text-slate-600">Confidence: <span class="font-medium text-slate-900">94%</span></span>
+                                    <span class="text-slate-600">Sources: <span class="font-medium text-slate-900">23 articles</span></span>
+                                </div>
+                                <span class="text-slate-500">108 characters</span>
+                            </div>
+                        </div>
+
+                        <!-- Top Article -->
+                        <div class="bg-white border border-slate-200 rounded-xl p-6 mb-6">
+                            <div class="flex items-start space-x-4">
+                                <!-- Professional tech news website image -->
+                                <img src="https://images.unsplash.com/photo-1611224923853-80b023f02d71?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=300&h=200" 
+                                     alt="Financial news article showing Bitcoin price charts and market analysis" 
+                                     class="w-24 h-16 object-cover rounded-lg flex-shrink-0">
+                                <div class="flex-1">
+                                    <div class="flex items-center space-x-2 mb-2">
+                                        <span class="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-1 rounded-full">Top Article</span>
+                                        <span class="text-slate-500 text-sm">CoinDesk</span>
+                                        <span class="text-slate-400">•</span>
+                                        <span class="text-slate-500 text-sm">8:30 AM</span>
+                                    </div>
+                                    <h4 class="text-lg font-semibold text-slate-900 leading-tight mb-2">
+                                        Bitcoin Reaches New All-Time High as MicroStrategy Adds $500M to Holdings
+                                    </h4>
+                                    <p class="text-slate-600 text-sm leading-relaxed mb-3">
+                                        The world's largest cryptocurrency surged past $47,000 for the first time, driven by renewed institutional interest and MicroStrategy's announcement of its largest Bitcoin purchase to date...
+                                    </p>
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex items-center space-x-4 text-sm text-slate-500">
+                                            <span><i class="fas fa-eye mr-1"></i>12.5K views</span>
+                                            <span><i class="fas fa-star mr-1"></i>9.2 rating</span>
+                                        </div>
+                                        <button class="text-blue-600 hover:text-blue-700 text-sm font-medium">
+                                            Read Article <i class="fas fa-external-link-alt ml-1"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Additional Articles -->
+                        <div class="space-y-4 mb-6">
+                            <h3 class="text-lg font-semibold text-slate-900">Related Articles (22 more)</h3>
+                            
+                            <div class="bg-white border border-slate-200 rounded-lg p-4">
+                                <div class="flex justify-between items-start">
+                                    <div class="flex-1">
+                                        <div class="flex items-center space-x-2 mb-1">
+                                            <span class="text-slate-500 text-sm">Bloomberg</span>
+                                            <span class="text-slate-400">•</span>
+                                            <span class="text-slate-500 text-sm">9:15 AM</span>
+                                        </div>
+                                        <h5 class="font-medium text-slate-900 mb-1">Institutional Bitcoin Adoption Reaches Tipping Point</h5>
+                                        <p class="text-slate-600 text-sm">Fortune 500 companies increasingly view Bitcoin as digital gold...</p>
+                                    </div>
+                                    <div class="text-right">
+                                        <span class="text-emerald-600 text-sm font-medium">8.9/10</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="bg-white border border-slate-200 rounded-lg p-4">
+                                <div class="flex justify-between items-start">
+                                    <div class="flex-1">
+                                        <div class="flex items-center space-x-2 mb-1">
+                                            <span class="text-slate-500 text-sm">Reuters</span>
+                                            <span class="text-slate-400">•</span>
+                                            <span class="text-slate-500 text-sm">10:45 AM</span>
+                                        </div>
+                                        <h5 class="font-medium text-slate-900 mb-1">Crypto Market Cap Exceeds $1 Trillion Again</h5>
+                                        <p class="text-slate-600 text-sm">Bitcoin's surge lifts entire cryptocurrency market...</p>
+                                    </div>
+                                    <div class="text-right">
+                                        <span class="text-blue-600 text-sm font-medium">8.7/10</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- AI Reasoning -->
+                        <div class="bg-slate-50 rounded-xl p-6">
+                            <h3 class="text-lg font-semibold text-slate-900 mb-3">AI Reasoning</h3>
+                            <p class="text-slate-700 leading-relaxed">
+                                Selected the CoinDesk article as the top story because it combines the most significant price milestone (new ATH) 
+                                with concrete institutional news (MicroStrategy purchase). The $47K breakthrough represents a psychological barrier 
+                                and the institutional angle provides fundamental backing. Other articles support this narrative but lack the 
+                                combination of immediate price action and institutional validation that defines this day's significance.
+                            </p>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="mt-6 flex justify-between">
+                            <div class="flex space-x-3">
+                                <button class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">
+                                    <i class="fas fa-sync-alt mr-2"></i>Reanalyze
+                                </button>
+                                <button class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200">
+                                    <i class="fas fa-edit mr-2"></i>Edit Summary
+                                </button>
+                            </div>
+                            <button class="px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-100 rounded-lg hover:bg-emerald-200">
+                                <i class="fas fa-save mr-2"></i>Save Changes
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Test Arena Section -->
+        <div class="bg-white rounded-xl border border-slate-200 mt-8">
+            <div class="border-b border-slate-200 px-6 py-4">
+                <h2 class="text-xl font-semibold text-slate-900">Test Arena</h2>
+                <p class="text-slate-600">System testing and API validation tools</p>
+            </div>
+            
+            <div class="p-6">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- API Playground -->
+                    <div class="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6">
+                        <div class="flex items-center space-x-2 mb-4">
+                            <i class="fas fa-code text-blue-600"></i>
+                            <h3 class="text-lg font-semibold text-slate-900">API Playground</h3>
+                        </div>
+                        <p class="text-slate-600 text-sm mb-4">Test individual API connections and responses</p>
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between p-3 bg-white rounded-lg">
+                                <span class="text-sm font-medium">EXA News API</span>
+                                <span class="w-2 h-2 bg-emerald-500 rounded-full"></span>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-white rounded-lg">
+                                <span class="text-sm font-medium">OpenAI GPT-4</span>
+                                <span class="w-2 h-2 bg-emerald-500 rounded-full"></span>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-white rounded-lg">
+                                <span class="text-sm font-medium">Google Gemini</span>
+                                <span class="w-2 h-2 bg-amber-500 rounded-full"></span>
+                            </div>
+                        </div>
+                        <button class="w-full mt-4 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">
+                            Run Tests
+                        </button>
+                    </div>
+
+                    <!-- Scenario Tester -->
+                    <div class="bg-gradient-to-br from-purple-50 to-pink-50 border border-purple-200 rounded-xl p-6">
+                        <div class="flex items-center space-x-2 mb-4">
+                            <i class="fas fa-flask text-purple-600"></i>
+                            <h3 class="text-lg font-semibold text-slate-900">Scenario Tester</h3>
+                        </div>
+                        <p class="text-slate-600 text-sm mb-4">Real-world filtering validation with test data</p>
+                        <div class="space-y-3">
+                            <div class="p-3 bg-white rounded-lg">
+                                <div class="text-sm font-medium mb-1">Historical Period Detection</div>
+                                <div class="text-xs text-slate-500">Testing period awareness (2017 vs 2024)</div>
+                            </div>
+                            <div class="p-3 bg-white rounded-lg">
+                                <div class="text-sm font-medium mb-1">Source Credibility</div>
+                                <div class="text-xs text-slate-500">Validating domain scoring system</div>
+                            </div>
+                        </div>
+                        <button class="w-full mt-4 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700">
+                            Run Scenarios
+                        </button>
+                    </div>
+
+                    <!-- Summary Engine Test -->
+                    <div class="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-6">
+                        <div class="flex items-center space-x-2 mb-4">
+                            <i class="fas fa-brain text-emerald-600"></i>
+                            <h3 class="text-lg font-semibold text-slate-900">Summary Engine</h3>
+                        </div>
+                        <p class="text-slate-600 text-sm mb-4">AI analysis testing with different prompts</p>
+                        <div class="space-y-3">
+                            <div class="p-3 bg-white rounded-lg">
+                                <div class="text-sm font-medium mb-1">Character Limits</div>
+                                <div class="text-xs text-slate-500">Testing 100-110 character summaries</div>
+                            </div>
+                            <div class="p-3 bg-white rounded-lg">
+                                <div class="text-sm font-medium mb-1">Prompt Variations</div>
+                                <div class="text-xs text-slate-500">A/B testing different AI prompts</div>
+                            </div>
+                        </div>
+                        <button class="w-full mt-4 px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700">
+                            Test Engine
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // TODO: Implement business logic, API calls, and state management
+        
+        (function() {
+            // Modal Management
+            function showModal(modalId) {
+                document.getElementById(modalId).classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+            }
+
+            function hideModal(modalId) {
+                document.getElementById(modalId).classList.add('hidden');
+                document.body.style.overflow = 'auto';
+            }
+
+            // Global functions for modal controls
+            window.closeModal = function() {
+                hideModal('monthModal');
+            };
+
+            window.closeDayModal = function() {
+                hideModal('dayModal');
+            };
+
+            // Add click handlers for year cards
+            document.querySelectorAll('.bg-gradient-to-br, .bg-white.border.border-slate-200.rounded-xl.p-4').forEach(card => {
+                card.addEventListener('click', function() {
+                    showModal('monthModal');
+                });
+            });
+
+            // Add click handlers for calendar days
+            document.addEventListener('click', function(e) {
+                if (e.target.closest('.aspect-square')) {
+                    hideModal('monthModal');
+                    showModal('dayModal');
+                }
+            });
+
+            // Close modals on escape key
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    hideModal('monthModal');
+                    hideModal('dayModal');
+                }
+            });
+
+            // Close modals when clicking outside
+            document.addEventListener('click', function(e) {
+                if (e.target.classList.contains('fixed') && e.target.classList.contains('bg-black')) {
+                    hideModal('monthModal');
+                    hideModal('dayModal');
+                }
+            });
+
+            // Simulate progress updates
+            function updateProgress() {
+                const progressBars = document.querySelectorAll('.bg-blue-500, .bg-emerald-500, .bg-amber-500, .bg-red-400, .bg-slate-400');
+                progressBars.forEach(bar => {
+                    // Animation could be added here for live progress updates
+                });
+            }
+
+            // Initialize tooltips and interactions
+            function initializeInteractions() {
+                // Add hover effects and tooltips
+                const cards = document.querySelectorAll('.cursor-pointer');
+                cards.forEach(card => {
+                    card.addEventListener('mouseenter', function() {
+                        this.style.transform = 'translateY(-2px)';
+                    });
+                    card.addEventListener('mouseleave', function() {
+                        this.style.transform = 'translateY(0)';
+                    });
+                });
+            }
+
+            // Initialize when DOM is loaded
+            document.addEventListener('DOMContentLoaded', function() {
+                initializeInteractions();
+                updateProgress();
+            });
+        })();
+    </script>
+</body>
+</html>

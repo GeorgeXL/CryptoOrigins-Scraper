@@ -1,0 +1,605 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitcoin News Analysis System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+    tailwind.config = {
+        theme: {
+            extend: {
+                colors: {
+                    primary: '#1976D2',
+                    secondary: '#424242',
+                    accent: '#388E3C',
+                    surface: '#FAFAFA',
+                    error: '#D32F2F',
+                    warning: '#F57C00'
+                },
+                fontFamily: {
+                    'sans': ['Inter', 'system-ui', 'sans-serif'],
+                    'mono': ['JetBrains Mono', 'monospace']
+                }
+            }
+        }
+    };
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-surface font-sans text-secondary min-h-screen">
+    <!-- @COMPONENT: AppLayout [main application shell] -->
+    <div class="flex min-h-screen">
+        <!-- Sidebar Navigation -->
+        <!-- @COMPONENT: Sidebar [navigation menu] -->
+        <aside class="w-64 bg-white shadow-lg border-r border-gray-200 flex flex-col">
+            <div class="p-6 border-b border-gray-200">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
+                        <i class="fas fa-bitcoin text-white text-xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-lg font-semibold text-secondary">Bitcoin News</h1>
+                        <p class="text-sm text-gray-500">Analysis System</p>
+                    </div>
+                </div>
+            </div>
+            
+            <nav class="flex-1 p-4">
+                <ul class="space-y-2">
+                    <li>
+                        <a href="#" class="flex items-center space-x-3 px-4 py-3 text-primary bg-blue-50 rounded-lg font-medium">
+                            <i class="fas fa-newspaper w-5 text-center"></i>
+                            <span>News Analysis</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#" class="flex items-center space-x-3 px-4 py-3 text-gray-600 hover:text-primary hover:bg-gray-50 rounded-lg transition-colors">
+                            <i class="fas fa-timeline w-5 text-center"></i>
+                            <span>Timeline</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#" class="flex items-center space-x-3 px-4 py-3 text-gray-600 hover:text-primary hover:bg-gray-50 rounded-lg transition-colors">
+                            <i class="fas fa-flask w-5 text-center"></i>
+                            <span>Test Arena</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#" class="flex items-center space-x-3 px-4 py-3 text-gray-600 hover:text-primary hover:bg-gray-50 rounded-lg transition-colors">
+                            <i class="fas fa-cog w-5 text-center"></i>
+                            <span>Settings</span>
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+            
+            <div class="p-4 border-t border-gray-200">
+                <div class="flex items-center space-x-3 px-4 py-3">
+                    <div class="w-8 h-8 bg-gray-300 rounded-full"></div>
+                    <div class="flex-1">
+                        <p class="text-sm font-medium text-secondary" data-bind="user.name">Admin User</p>
+                        <p class="text-xs text-gray-500">admin@system.com</p>
+                    </div>
+                </div>
+            </div>
+        </aside>
+        <!-- @END_COMPONENT: Sidebar -->
+
+        <!-- Main Content Area -->
+        <main class="flex-1 flex flex-col">
+            <!-- Header -->
+            <!-- @COMPONENT: Header [top navigation bar] -->
+            <header class="bg-white shadow-sm border-b border-gray-200 px-6 py-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h1 class="text-2xl font-semibold text-secondary">Daily News Analysis</h1>
+                        <p class="text-gray-500 mt-1">AI-powered Bitcoin news summarization and analysis</p>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <!-- Date Picker -->
+                        <div class="flex items-center space-x-2">
+                            <label class="text-sm font-medium text-gray-700">Analysis Date:</label>
+                            <input type="date" 
+                                   class="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent" 
+                                   value="2024-01-15"
+                                   data-bind="selectedDate">
+                        </div>
+                        <!-- Status Indicator -->
+                        <div class="flex items-center space-x-2">
+                            <div class="w-3 h-3 bg-accent rounded-full"></div>
+                            <span class="text-sm text-gray-600">System Online</span>
+                        </div>
+                    </div>
+                </div>
+            </header>
+            <!-- @END_COMPONENT: Header -->
+
+            <!-- Content Area -->
+            <div class="flex-1 p-6">
+                <!-- @COMPONENT: NewsPageLayout [main content layout] -->
+                <div class="max-w-7xl mx-auto space-y-6">
+                    
+                    <!-- Analysis Controls -->
+                    <!-- @COMPONENT: AnalysisControls [fetch and analyze controls] -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-lg font-semibold text-secondary">Analysis Controls</h2>
+                            <div class="flex items-center space-x-2">
+                                <span class="text-sm text-gray-500">Last updated:</span>
+                                <span class="text-sm font-medium" data-bind="lastUpdated">2024-01-15 10:30 AM</span>
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <button class="flex items-center justify-center space-x-2 px-4 py-3 bg-primary text-white rounded-lg hover:bg-blue-700 transition-colors"
+                                    data-event="click:fetchNews"
+                                    data-implementation="Should fetch news from EXA API for selected date">
+                                <i class="fas fa-download"></i>
+                                <span>Fetch News</span>
+                            </button>
+                            
+                            <button class="flex items-center justify-center space-x-2 px-4 py-3 bg-accent text-white rounded-lg hover:bg-green-700 transition-colors"
+                                    data-event="click:analyzeWithAI"
+                                    data-implementation="Should analyze fetched articles with OpenAI GPT-4">
+                                <i class="fas fa-brain"></i>
+                                <span>Analyze with AI</span>
+                            </button>
+                            
+                            <button class="flex items-center justify-center space-x-2 px-4 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                                    data-event="click:createManualEntry"
+                                    data-implementation="Should open modal for manual entry creation">
+                                <i class="fas fa-edit"></i>
+                                <span>Manual Entry</span>
+                            </button>
+                            
+                            <button class="flex items-center justify-center space-x-2 px-4 py-3 bg-warning text-white rounded-lg hover:bg-orange-600 transition-colors"
+                                    data-event="click:exportData"
+                                    data-implementation="Should export analysis data to Excel">
+                                <i class="fas fa-file-export"></i>
+                                <span>Export Data</span>
+                            </button>
+                        </div>
+                    </div>
+                    <!-- @END_COMPONENT: AnalysisControls -->
+
+                    <!-- AI Analysis Summary -->
+                    <!-- @COMPONENT: AISummaryCard [displays AI analysis results] -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-lg font-semibold text-secondary">AI Analysis Summary</h2>
+                            <div class="flex items-center space-x-2">
+                                <span class="px-3 py-1 bg-accent/10 text-accent rounded-full text-sm font-medium">GPT-4</span>
+                                <span class="px-3 py-1 bg-blue-100 text-primary rounded-full text-sm font-medium">Confidence: 87%</span>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-gray-50 rounded-lg p-4 mb-4">
+                            <p class="text-secondary font-medium text-lg" data-bind="aiSummary" data-mock="true">
+                                Bitcoin surges past $45K as institutional adoption grows amid regulatory clarity in major markets.
+                            </p>
+                        </div>
+                        
+                        <div class="space-y-3">
+                            <div>
+                                <h3 class="text-sm font-semibold text-gray-700 mb-2">AI Reasoning:</h3>
+                                <p class="text-gray-600 text-sm" data-bind="aiReasoning" data-mock="true">
+                                    Selected this summary based on the convergence of three major themes: institutional investment announcements from BlackRock and Fidelity, regulatory approval signals from the SEC, and technical analysis showing strong bullish momentum above key resistance levels.
+                                </p>
+                            </div>
+                            
+                            <div class="flex items-center justify-between pt-3 border-t border-gray-200">
+                                <div class="text-sm text-gray-500">
+                                    <span>Top Article:</span>
+                                    <span class="font-medium text-secondary ml-1" data-bind="topArticle.title" data-mock="true">
+                                        "Bitcoin Breaks $45K Barrier as Institutional Money Flows In"
+                                    </span>
+                                </div>
+                                <div class="flex items-center space-x-2">
+                                    <span class="text-xs text-gray-400">Source:</span>
+                                    <span class="text-xs font-medium text-gray-600" data-bind="topArticle.source" data-mock="true">CoinDesk</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- @END_COMPONENT: AISummaryCard -->
+
+                    <!-- News Articles Grid -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        
+                        <!-- Fetched Articles Column -->
+                        <!-- @COMPONENT: FetchedArticlesList [displays articles from EXA API] -->
+                        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                            <div class="flex items-center justify-between mb-4">
+                                <h2 class="text-lg font-semibold text-secondary">Fetched Articles</h2>
+                                <div class="flex items-center space-x-2">
+                                    <span class="px-3 py-1 bg-blue-100 text-primary rounded-full text-sm font-medium">12 articles</span>
+                                    <button class="p-2 text-gray-400 hover:text-gray-600" title="Refresh articles">
+                                        <i class="fas fa-refresh"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="space-y-4 max-h-96 overflow-y-auto">
+                                <!-- @MAP: fetchedArticles.map(article => ( -->
+                                <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow" data-mock="true">
+                                    <div class="flex items-start justify-between mb-2">
+                                        <h3 class="text-sm font-semibold text-secondary line-clamp-2" data-bind="article.title">
+                                            Bitcoin Breaks $45K Barrier as Institutional Money Flows In
+                                        </h3>
+                                        <div class="flex items-center space-x-1 ml-2">
+                                            <div class="w-2 h-2 bg-accent rounded-full"></div>
+                                            <span class="text-xs text-gray-500" data-bind="article.credibilityScore">8.5</span>
+                                        </div>
+                                    </div>
+                                    <p class="text-xs text-gray-600 mb-2" data-bind="article.snippet">
+                                        Major institutional investors continue to allocate significant capital to Bitcoin as regulatory frameworks become clearer...
+                                    </p>
+                                    <div class="flex items-center justify-between text-xs text-gray-500">
+                                        <span data-bind="article.source">CoinDesk</span>
+                                        <span data-bind="article.publishedAt">2 hours ago</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow" data-mock="true">
+                                    <div class="flex items-start justify-between mb-2">
+                                        <h3 class="text-sm font-semibold text-secondary line-clamp-2" data-bind="article.title">
+                                            SEC Signals Clearer Crypto Regulations Coming in 2024
+                                        </h3>
+                                        <div class="flex items-center space-x-1 ml-2">
+                                            <div class="w-2 h-2 bg-yellow-400 rounded-full"></div>
+                                            <span class="text-xs text-gray-500" data-bind="article.credibilityScore">7.2</span>
+                                        </div>
+                                    </div>
+                                    <p class="text-xs text-gray-600 mb-2" data-bind="article.snippet">
+                                        The Securities and Exchange Commission has indicated that comprehensive cryptocurrency regulations...
+                                    </p>
+                                    <div class="flex items-center justify-between text-xs text-gray-500">
+                                        <span data-bind="article.source">Reuters</span>
+                                        <span data-bind="article.publishedAt">4 hours ago</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow" data-mock="true">
+                                    <div class="flex items-start justify-between mb-2">
+                                        <h3 class="text-sm font-semibold text-secondary line-clamp-2" data-bind="article.title">
+                                            BlackRock's Bitcoin ETF Sees Record Inflows This Week
+                                        </h3>
+                                        <div class="flex items-center space-x-1 ml-2">
+                                            <div class="w-2 h-2 bg-accent rounded-full"></div>
+                                            <span class="text-xs text-gray-500" data-bind="article.credibilityScore">9.1</span>
+                                        </div>
+                                    </div>
+                                    <p class="text-xs text-gray-600 mb-2" data-bind="article.snippet">
+                                        BlackRock's iShares Bitcoin Trust has attracted over $500 million in net inflows...
+                                    </p>
+                                    <div class="flex items-center justify-between text-xs text-gray-500">
+                                        <span data-bind="article.source">Bloomberg</span>
+                                        <span data-bind="article.publishedAt">6 hours ago</span>
+                                    </div>
+                                </div>
+                                <!-- @END_MAP )) -->
+                            </div>
+                        </div>
+                        <!-- @END_COMPONENT: FetchedArticlesList -->
+
+                        <!-- Analysis Tools Column -->
+                        <div class="space-y-6">
+                            <!-- Quick Stats -->
+                            <!-- @COMPONENT: QuickStats [system performance metrics] -->
+                            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                                <h2 class="text-lg font-semibold text-secondary mb-4">Quick Stats</h2>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div class="text-center">
+                                        <div class="text-2xl font-bold text-primary" data-bind="stats.totalAnalyses" data-mock="true">1,247</div>
+                                        <div class="text-sm text-gray-500">Total Analyses</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="text-2xl font-bold text-accent" data-bind="stats.successRate" data-mock="true">94.3%</div>
+                                        <div class="text-sm text-gray-500">Success Rate</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="text-2xl font-bold text-warning" data-bind="stats.avgConfidence" data-mock="true">87.2%</div>
+                                        <div class="text-sm text-gray-500">Avg Confidence</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="text-2xl font-bold text-secondary" data-bind="stats.articlesProcessed" data-mock="true">15,892</div>
+                                        <div class="text-sm text-gray-500">Articles Processed</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- @END_COMPONENT: QuickStats -->
+
+                            <!-- Historical Period Context -->
+                            <!-- @COMPONENT: HistoricalContext [period awareness display] -->
+                            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                                <h2 class="text-lg font-semibold text-secondary mb-4">Historical Context</h2>
+                                <div class="space-y-3">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-sm text-gray-600">Current Period:</span>
+                                        <span class="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-medium" data-bind="currentPeriod" data-mock="true">
+                                            Institutional Adoption Era
+                                        </span>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-sm text-gray-600">Period Start:</span>
+                                        <span class="text-sm font-medium text-secondary" data-bind="periodStart" data-mock="true">2020-2024</span>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-sm text-gray-600">Key Themes:</span>
+                                        <div class="flex flex-wrap gap-1">
+                                            <span class="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs" data-mock="true">ETFs</span>
+                                            <span class="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs" data-mock="true">Regulation</span>
+                                            <span class="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs" data-mock="true">Corporate Adoption</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- @END_COMPONENT: HistoricalContext -->
+
+                            <!-- API Status -->
+                            <!-- @COMPONENT: APIStatus [external service status] -->
+                            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                                <h2 class="text-lg font-semibold text-secondary mb-4">API Status</h2>
+                                <div class="space-y-3">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-sm text-gray-600">EXA API</span>
+                                        <div class="flex items-center space-x-2">
+                                            <div class="w-2 h-2 bg-accent rounded-full"></div>
+                                            <span class="text-sm text-accent font-medium">Online</span>
+                                            <span class="text-xs text-gray-400">(124ms)</span>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-sm text-gray-600">OpenAI API</span>
+                                        <div class="flex items-center space-x-2">
+                                            <div class="w-2 h-2 bg-accent rounded-full"></div>
+                                            <span class="text-sm text-accent font-medium">Online</span>
+                                            <span class="text-xs text-gray-400">(892ms)</span>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-sm text-gray-600">Database</span>
+                                        <div class="flex items-center space-x-2">
+                                            <div class="w-2 h-2 bg-accent rounded-full"></div>
+                                            <span class="text-sm text-accent font-medium">Connected</span>
+                                            <span class="text-xs text-gray-400">(45ms)</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- @END_COMPONENT: APIStatus -->
+                        </div>
+                    </div>
+
+                    <!-- Recent Analyses -->
+                    <!-- @COMPONENT: RecentAnalyses [historical analysis list] -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-lg font-semibold text-secondary">Recent Analyses</h2>
+                            <button class="text-primary hover:text-blue-700 text-sm font-medium">View All</button>
+                        </div>
+                        
+                        <div class="overflow-x-auto">
+                            <table class="w-full">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">Date</th>
+                                        <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">Summary</th>
+                                        <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">AI Provider</th>
+                                        <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">Confidence</th>
+                                        <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-200">
+                                    <!-- @MAP: recentAnalyses.map(analysis => ( -->
+                                    <tr class="hover:bg-gray-50" data-mock="true">
+                                        <td class="px-4 py-3 text-sm text-gray-600" data-bind="analysis.date">2024-01-15</td>
+                                        <td class="px-4 py-3 text-sm text-secondary max-w-md truncate" data-bind="analysis.summary">
+                                            Bitcoin surges past $45K as institutional adoption grows amid regulatory clarity...
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <span class="px-2 py-1 bg-blue-100 text-primary rounded text-xs font-medium" data-bind="analysis.aiProvider">GPT-4</span>
+                                        </td>
+                                        <td class="px-4 py-3 text-sm text-gray-600" data-bind="analysis.confidence">87%</td>
+                                        <td class="px-4 py-3">
+                                            <div class="flex items-center space-x-2">
+                                                <button class="text-primary hover:text-blue-700" title="View details">
+                                                    <i class="fas fa-eye"></i>
+                                                </button>
+                                                <button class="text-gray-400 hover:text-gray-600" title="Edit">
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <tr class="hover:bg-gray-50" data-mock="true">
+                                        <td class="px-4 py-3 text-sm text-gray-600" data-bind="analysis.date">2024-01-14</td>
+                                        <td class="px-4 py-3 text-sm text-secondary max-w-md truncate" data-bind="analysis.summary">
+                                            Market consolidation continues as traders await ETF approval decisions...
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <span class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium" data-bind="analysis.aiProvider">Gemini</span>
+                                        </td>
+                                        <td class="px-4 py-3 text-sm text-gray-600" data-bind="analysis.confidence">92%</td>
+                                        <td class="px-4 py-3">
+                                            <div class="flex items-center space-x-2">
+                                                <button class="text-primary hover:text-blue-700" title="View details">
+                                                    <i class="fas fa-eye"></i>
+                                                </button>
+                                                <button class="text-gray-400 hover:text-gray-600" title="Edit">
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <tr class="hover:bg-gray-50" data-mock="true">
+                                        <td class="px-4 py-3 text-sm text-gray-600" data-bind="analysis.date">2024-01-13</td>
+                                        <td class="px-4 py-3 text-sm text-secondary max-w-md truncate" data-bind="analysis.summary">
+                                            DeFi protocols show resilience despite broader market volatility concerns...
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <span class="px-2 py-1 bg-blue-100 text-primary rounded text-xs font-medium" data-bind="analysis.aiProvider">GPT-4</span>
+                                        </td>
+                                        <td class="px-4 py-3 text-sm text-gray-600" data-bind="analysis.confidence">79%</td>
+                                        <td class="px-4 py-3">
+                                            <div class="flex items-center space-x-2">
+                                                <button class="text-primary hover:text-blue-700" title="View details">
+                                                    <i class="fas fa-eye"></i>
+                                                </button>
+                                                <button class="text-gray-400 hover:text-gray-600" title="Edit">
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <!-- @END_MAP )) -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <!-- @END_COMPONENT: RecentAnalyses -->
+
+                </div>
+                <!-- @END_COMPONENT: NewsPageLayout -->
+            </div>
+        </main>
+    </div>
+    <!-- @END_COMPONENT: AppLayout -->
+
+    <!-- Modal Overlay for Manual Entry (Hidden by default) -->
+    <!-- @COMPONENT: ManualEntryModal [modal for creating manual entries] -->
+    <div class="fixed inset-0 bg-black bg-opacity-50 hidden z-50" id="manualEntryModal">
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-xl shadow-xl max-w-2xl w-full">
+                <div class="flex items-center justify-between p-6 border-b border-gray-200">
+                    <h2 class="text-xl font-semibold text-secondary">Create Manual Entry</h2>
+                    <button class="text-gray-400 hover:text-gray-600" onclick="closeModal()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="p-6">
+                    <form class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
+                            <input type="text" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent" 
+                                   placeholder="Enter event title" data-bind="manualEntry.title">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Summary (100-110 characters)</label>
+                            <textarea class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent h-20" 
+                                      placeholder="Enter brief summary..." data-bind="manualEntry.summary" maxlength="110"></textarea>
+                            <div class="text-xs text-gray-500 mt-1">
+                                <span data-bind="summaryLength">0</span>/110 characters
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                            <textarea class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent h-32" 
+                                      placeholder="Enter detailed description..." data-bind="manualEntry.description"></textarea>
+                        </div>
+                        <div class="flex items-center justify-end space-x-3 pt-4">
+                            <button type="button" class="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50" onclick="closeModal()">
+                                Cancel
+                            </button>
+                            <button type="submit" class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-blue-700"
+                                    data-event="click:saveManualEntry"
+                                    data-implementation="Should save manual entry to database">
+                                Save Entry
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- @END_COMPONENT: ManualEntryModal -->
+
+    <!-- Toast Notification (Hidden by default) -->
+    <!-- @COMPONENT: ToastNotification [success/error messaging] -->
+    <div class="fixed top-4 right-4 bg-accent text-white px-6 py-3 rounded-lg shadow-lg hidden z-50" id="toast">
+        <div class="flex items-center space-x-2">
+            <i class="fas fa-check-circle"></i>
+            <span id="toastMessage">Operation completed successfully!</span>
+        </div>
+    </div>
+    <!-- @END_COMPONENT: ToastNotification -->
+
+    <script>
+        // TODO: Implement business logic, API calls, and state management
+        
+        (function() {
+            // Modal management
+            window.openModal = function(modalId) {
+                document.getElementById(modalId).classList.remove('hidden');
+            };
+            
+            window.closeModal = function() {
+                document.getElementById('manualEntryModal').classList.add('hidden');
+            };
+            
+            // Toast notifications
+            window.showToast = function(message, type = 'success') {
+                const toast = document.getElementById('toast');
+                const messageEl = document.getElementById('toastMessage');
+                
+                messageEl.textContent = message;
+                toast.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg z-50 ${
+                    type === 'success' ? 'bg-accent text-white' : 'bg-error text-white'
+                }`;
+                toast.classList.remove('hidden');
+                
+                setTimeout(() => {
+                    toast.classList.add('hidden');
+                }, 3000);
+            };
+            
+            // Character counter for manual entry
+            const summaryTextarea = document.querySelector('[data-bind="manualEntry.summary"]');
+            const lengthDisplay = document.querySelector('[data-bind="summaryLength"]');
+            
+            if (summaryTextarea && lengthDisplay) {
+                summaryTextarea.addEventListener('input', function() {
+                    lengthDisplay.textContent = this.value.length;
+                });
+            }
+            
+            // Keyboard navigation support
+            document.addEventListener('keydown', function(e) {
+                // ESC to close modals
+                if (e.key === 'Escape') {
+                    closeModal();
+                }
+            });
+            
+            // Demo button interactions
+            const buttons = document.querySelectorAll('button[data-event]');
+            buttons.forEach(button => {
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const action = this.getAttribute('data-event').split(':')[1];
+                    
+                    switch(action) {
+                        case 'fetchNews':
+                            showToast('Fetching news articles from EXA API...');
+                            break;
+                        case 'analyzeWithAI':
+                            showToast('Analyzing articles with OpenAI GPT-4...');
+                            break;
+                        case 'createManualEntry':
+                            openModal('manualEntryModal');
+                            break;
+                        case 'exportData':
+                            showToast('Exporting analysis data to Excel...');
+                            break;
+                        case 'saveManualEntry':
+                            closeModal();
+                            showToast('Manual entry saved successfully!');
+                            break;
+                    }
+                });
+            });
+        })();
+    </script>
+</body>
+</html>

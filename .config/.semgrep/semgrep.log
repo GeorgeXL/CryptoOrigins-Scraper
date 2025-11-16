@@ -1,0 +1,121 @@
+2025-07-02 22:03:12,582 - semgrep.notifications - WARNING - METRICS: Using configs from the Registry (like --config=p/ci) reports pseudonymous rule metrics to semgrep.dev.
+To disable Registry rule metrics, use "--metrics=off".
+Using configs only from local files (like --config=xyz.yml) does not enable metrics.
+
+More information: https://semgrep.dev/docs/metrics
+
+2025-07-02 22:03:12,583 - semgrep.run_scan - DEBUG - semgrep version 1.4.0
+2025-07-02 22:03:12,587 - semgrep.git - DEBUG - Failed to get project url from 'git ls-remote': Command failed with exit code: 128
+-----
+Command failed with output:
+fatal: No remote configured to list refs from.
+
+
+Failed to run 'git ls-remote --get-url'. Possible reasons:
+
+- the git binary is not available
+- the current working directory is not a git repository
+- the baseline commit is not a parent of the current commit
+    (if you are running through semgrep-app, check if you are setting `SEMGREP_BRANCH` or `SEMGREP_BASELINE_COMMIT` properly)
+- the current working directory is not marked as safe
+    (fix with `git config --global --add safe.directory $(pwd)`)
+
+Try running the command yourself to debug the issue.
+2025-07-02 22:03:12,588 - semgrep.config_resolver - DEBUG - Loading local config from /home/runner/workspace/.config/.semgrep/semgrep_rules.json
+2025-07-02 22:03:12,589 - semgrep.config_resolver - DEBUG - Done loading local config from /home/runner/workspace/.config/.semgrep/semgrep_rules.json
+2025-07-02 22:03:12,592 - semgrep.config_resolver - DEBUG - Saving rules to /tmp/semgrep-4s99x4_1.rules
+2025-07-02 22:03:13,461 - semgrep.rule_lang - DEBUG - semgrep-core validation response: valid=True
+2025-07-02 22:03:13,462 - semgrep.rule_lang - DEBUG - semgrep-core validation succeeded
+2025-07-02 22:03:13,463 - semgrep.rule_lang - DEBUG - RPC validation succeeded
+2025-07-02 22:03:13,463 - semgrep.config_resolver - DEBUG - loaded 1 configs in 0.8756706714630127
+2025-07-02 22:03:13,545 - semgrep.run_scan - VERBOSE - running 715 rules from 1 config /home/runner/workspace/.config/.semgrep/semgrep_rules.json_0
+2025-07-02 22:03:13,546 - semgrep.run_scan - VERBOSE - No .semgrepignore found. Using default .semgrepignore rules. See the docs for the list of default ignores: https://semgrep.dev/docs/cli-usage/#ignore-files
+2025-07-02 22:03:13,548 - semgrep.run_scan - VERBOSE - Rules:
+2025-07-02 22:03:13,548 - semgrep.run_scan - VERBOSE - <SKIPPED DATA (too many entries; use --max-log-list-entries)>
+2025-07-02 22:03:14,164 - semgrep.core_runner - DEBUG - Passing whole rules directly to semgrep_core
+2025-07-02 22:03:14,325 - semgrep.core_runner - DEBUG - Running Semgrep engine with command:
+2025-07-02 22:03:14,326 - semgrep.core_runner - DEBUG - /tmp/_MEIfhjn6b/semgrep/bin/opengrep-core -json -rules /tmp/tmp4gf_4t90.json -j 8 -targets /tmp/tmp6ymvf7po -timeout 5 -timeout_threshold 3 -max_memory 0 -fast
+2025-07-02 22:03:21,179 - semgrep.core_runner - DEBUG - --- semgrep-core stderr ---
+[00.07][[34mINFO[0m]: Executed as: /tmp/_MEIfhjn6b/semgrep/bin/opengrep-core -json -rules /tmp/tmp4gf_4t90.json -j 8 -targets /tmp/tmp6ymvf7po -timeout 5 -timeout_threshold 3 -max_memory 0 -fast
+[00.07][[34mINFO[0m]: Version: 1.4.0
+[00.07][[34mINFO[0m]: Parsing rules in /tmp/tmp4gf_4t90.json
+[00.58][[34mINFO[0m]: scan: processing 300 files (skipping 0), with 457 rules (skipping 0 )
+[03.63][[33mWARNING[0m]: Fixpoint timeout while performing taint analysis [rule: config..semgrep.vendored-rules.typescript.react.security.audit.react-href-var file: client/src/pages/HomePage.tsx func: HomePage:17544]
+[0m[04.70][[33mWARNING[0m]: Fixpoint timeout while performing taint analysis [rule: config..semgrep.vendored-rules.javascript.lang.security.audit.path-traversal.path-join-resolve-traversal file: server/services/news-analyzer.ts func: analyzeNewsForDate:29625]
+[0m[04.84][[33mWARNING[0m]: Fixpoint timeout while performing taint analysis [rule: config..semgrep.vendored-rules.javascript.express.security.injection.raw-html-format file: client/src/pages/Settings.tsx func: Settings:25392]
+[0m--- end semgrep-core stderr ---
+2025-07-02 22:03:21,186 - semgrep.rule_match - DEBUG - match_key = ('', PosixPath('client/index.html'), 'config..semgrep.vendored-rules.html.security.audit.missing-integrity') match_id = 0ee74fd49637bebe183eca7188dbde26e386314e62cc2e7ba1ee60b377b638243fcd84e6c6fa04886198ccacfa6a711bfbcc61a28f9ddc913d5b3c53083cbc90_0
+2025-07-02 22:03:21,186 - semgrep.rule_match - DEBUG - match_key = (' type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js" (?is).*integrity= (google-analytics\\.com|fonts\\.googleapis\\.com|fonts\\.gstatic\\.com|googletagmanager\\.com) .*rel\\s*=\\s*[\'"]?preconnect.* href="... :// ..." href="//..." href=\'... :// ...\' href=\'//...\' src="... :// ..." src="//..." src=\'... :// ...\' src=\'//...\' <link  type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js" > <script  type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js" >...</script>', PosixPath('client/index.html'), 'config..semgrep.vendored-rules.html.security.audit.missing-integrity') match_id = 0728b64e224596592d04447ba8a642ff94e1fb9fcc07be26d49dc7e7f6898e638ad16ffcaca086932c58f4c6400fe32603323afef02cf9bfebcb0e4a53562a40_0
+2025-07-02 22:03:21,187 - semgrep.rule_match - DEBUG - match_key = (' type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js" (?is).*integrity= (google-analytics\\.com|fonts\\.googleapis\\.com|fonts\\.gstatic\\.com|googletagmanager\\.com) .*rel\\s*=\\s*[\'"]?preconnect.* href="... :// ..." href="//..." href=\'... :// ...\' href=\'//...\' src="... :// ..." src="//..." src=\'... :// ...\' src=\'//...\' <link  type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js" > <script  type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js" >...</script>', PosixPath('client/index.html'), 'config..semgrep.vendored-rules.html.security.audit.missing-integrity') match_id = 0728b64e224596592d04447ba8a642ff94e1fb9fcc07be26d49dc7e7f6898e638ad16ffcaca086932c58f4c6400fe32603323afef02cf9bfebcb0e4a53562a40_0
+2025-07-02 22:03:21,188 - semgrep.rule_match - DEBUG - match_key = (' type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js" (?is).*integrity= (google-analytics\\.com|fonts\\.googleapis\\.com|fonts\\.gstatic\\.com|googletagmanager\\.com) .*rel\\s*=\\s*[\'"]?preconnect.* href="... :// ..." href="//..." href=\'... :// ...\' href=\'//...\' src="... :// ..." src="//..." src=\'... :// ...\' src=\'//...\' <link  type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js" > <script  type="text/javascript" src="https://replit.com/public/js/replit-dev-banner.js" >...</script>', PosixPath('client/index.html'), 'config..semgrep.vendored-rules.html.security.audit.missing-integrity') match_id = 0728b64e224596592d04447ba8a642ff94e1fb9fcc07be26d49dc7e7f6898e638ad16ffcaca086932c58f4c6400fe32603323afef02cf9bfebcb0e4a53562a40_0
+2025-07-02 22:03:21,189 - semgrep.rule_match - DEBUG - match_key = ('', PosixPath('server/services/exa.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 2cd654670594c5e16fcb49ceaf79e2dcd08b1112b28eb6add248c5dfe2933b5012f5c6f829ccf493e4c616e6741e00f5b8ee2f5ae896a5766503457bf3d66de3_0
+2025-07-02 22:03:21,189 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``Search failed for query: query` $UTIL = require(\'util\')\n...\n $UTIL.format(``Search failed for query: query`,error.message,...)\n console.warn(``Search failed for query: query`,error.message,...)\n', PosixPath('server/services/exa.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = d2fdca53aa61fcc19a6f624dd5b722cde93068a6b7e66a8e65b7b0c7eaf11c5df9d8bba781f5e7530e0c0419a9044d5ba727b7e1550c54731e8ef95e82486ecf_0
+2025-07-02 22:03:21,190 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``Search failed for query: query` $UTIL = require(\'util\')\n...\n $UTIL.format(``Search failed for query: query`,error.message,...)\n console.warn(``Search failed for query: query`,error.message,...)\n', PosixPath('server/services/exa.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = d2fdca53aa61fcc19a6f624dd5b722cde93068a6b7e66a8e65b7b0c7eaf11c5df9d8bba781f5e7530e0c0419a9044d5ba727b7e1550c54731e8ef95e82486ecf_0
+2025-07-02 22:03:21,191 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``Search failed for query: query` $UTIL = require(\'util\')\n...\n $UTIL.format(``Search failed for query: query`,error.message,...)\n console.warn(``Search failed for query: query`,error.message,...)\n', PosixPath('server/services/exa.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = d2fdca53aa61fcc19a6f624dd5b722cde93068a6b7e66a8e65b7b0c7eaf11c5df9d8bba781f5e7530e0c0419a9044d5ba727b7e1550c54731e8ef95e82486ecf_0
+2025-07-02 22:03:21,192 - semgrep.rule_match - DEBUG - match_key = ('', PosixPath('server/services/news-analyzer.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = af9851c144c41d079e4d6ff2fc099d1502e8f7d509950da8a1ca896ff6f0da7e524652bc9eada7b16c54889dd1eee8ea1cf0ff2ad744ef3241dc6a97934ba7e8_0
+2025-07-02 22:03:21,193 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``News analysis failed for date:` $UTIL = require(\'util\')\n...\n $UTIL.format(``News analysis failed for date:`,error,...)\n console.error(``News analysis failed for date:`,error,...)\n', PosixPath('server/services/news-analyzer.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 256c0337061d974e628d59f3a747ea43e63cd3e89dcd7027e461e19bed69ba456b648fcfa14e8dcca9d1259707b852632ad8166f8c1f050dc3b89acca5fbb926_0
+2025-07-02 22:03:21,194 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``News analysis failed for date:` $UTIL = require(\'util\')\n...\n $UTIL.format(``News analysis failed for date:`,error,...)\n console.error(``News analysis failed for date:`,error,...)\n', PosixPath('server/services/news-analyzer.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 256c0337061d974e628d59f3a747ea43e63cd3e89dcd7027e461e19bed69ba456b648fcfa14e8dcca9d1259707b852632ad8166f8c1f050dc3b89acca5fbb926_0
+2025-07-02 22:03:21,195 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``News analysis failed for date:` $UTIL = require(\'util\')\n...\n $UTIL.format(``News analysis failed for date:`,error,...)\n console.error(``News analysis failed for date:`,error,...)\n', PosixPath('server/services/news-analyzer.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 256c0337061d974e628d59f3a747ea43e63cd3e89dcd7027e461e19bed69ba456b648fcfa14e8dcca9d1259707b852632ad8166f8c1f050dc3b89acca5fbb926_0
+2025-07-02 22:03:21,196 - semgrep.rule_match - DEBUG - match_key = ('', PosixPath('server/services/news-analyzer.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = af9851c144c41d079e4d6ff2fc099d1502e8f7d509950da8a1ca896ff6f0da7e524652bc9eada7b16c54889dd1eee8ea1cf0ff2ad744ef3241dc6a97934ba7e8_0
+2025-07-02 22:03:21,197 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``✗ Failed analysis for date:` $UTIL = require(\'util\')\n...\n $UTIL.format(``✗ Failed analysis for date:`,error.message,...)\n console.error(``✗ Failed analysis for date:`,error.message,...)\n', PosixPath('server/services/news-analyzer.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 1c96984667174907ff434d3e1bf86b0aedd06bbcc8f918ca7e87cc371544fcc3629c4241bb516d7dd613f2dda87057d02348da961080f7b6a326fda5458c3df0_0
+2025-07-02 22:03:21,198 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``✗ Failed analysis for date:` $UTIL = require(\'util\')\n...\n $UTIL.format(``✗ Failed analysis for date:`,error.message,...)\n console.error(``✗ Failed analysis for date:`,error.message,...)\n', PosixPath('server/services/news-analyzer.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 1c96984667174907ff434d3e1bf86b0aedd06bbcc8f918ca7e87cc371544fcc3629c4241bb516d7dd613f2dda87057d02348da961080f7b6a326fda5458c3df0_0
+2025-07-02 22:03:21,198 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``✗ Failed analysis for date:` $UTIL = require(\'util\')\n...\n $UTIL.format(``✗ Failed analysis for date:`,error.message,...)\n console.error(``✗ Failed analysis for date:`,error.message,...)\n', PosixPath('server/services/news-analyzer.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 1c96984667174907ff434d3e1bf86b0aedd06bbcc8f918ca7e87cc371544fcc3629c4241bb516d7dd613f2dda87057d02348da961080f7b6a326fda5458c3df0_0
+2025-07-02 22:03:21,199 - semgrep.rule_match - DEBUG - match_key = ('', PosixPath('server/services/optimization-engine.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = f8241fbaa20b82694c4c939e252fd75e4e50f409deecd26fad3e3c650bcd653eb180103a50eabbe3dd60c3c23d7853f48a9d6ed060e90b2edd5a04529ed9dbfc_0
+2025-07-02 22:03:21,200 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``Failed to optimize date:` $UTIL = require(\'util\')\n...\n $UTIL.format(``Failed to optimize date:`,error,...)\n console.error(``Failed to optimize date:`,error,...)\n', PosixPath('server/services/optimization-engine.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 62508f9db25684a9d4e13313db4ec4e23138f0452675923bc391d84c65abce19f4ddb4f6558bd5a6a2cc38d83068ac8f502e6908a7d6bc4b7bba8e77de23c424_0
+2025-07-02 22:03:21,201 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``Failed to optimize date:` $UTIL = require(\'util\')\n...\n $UTIL.format(``Failed to optimize date:`,error,...)\n console.error(``Failed to optimize date:`,error,...)\n', PosixPath('server/services/optimization-engine.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 62508f9db25684a9d4e13313db4ec4e23138f0452675923bc391d84c65abce19f4ddb4f6558bd5a6a2cc38d83068ac8f502e6908a7d6bc4b7bba8e77de23c424_0
+2025-07-02 22:03:21,201 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``Failed to optimize date:` $UTIL = require(\'util\')\n...\n $UTIL.format(``Failed to optimize date:`,error,...)\n console.error(``Failed to optimize date:`,error,...)\n', PosixPath('server/services/optimization-engine.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 62508f9db25684a9d4e13313db4ec4e23138f0452675923bc391d84c65abce19f4ddb4f6558bd5a6a2cc38d83068ac8f502e6908a7d6bc4b7bba8e77de23c424_0
+2025-07-02 22:03:21,202 - semgrep.rule_match - DEBUG - match_key = ('', PosixPath('server/services/tavily.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = 5d0a02d8f58027f5dcf6813b9d8ec0a56f79f69cb9e322f92c632c846caf265dfd207c4154da83f78b7163c3a6c42884c1d5d3c3b29234d1d9008b25152d6f6d_0
+2025-07-02 22:03:21,203 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``Tavily query failed: query` $UTIL = require(\'util\')\n...\n $UTIL.format(``Tavily query failed: query`,error,...)\n console.warn(``Tavily query failed: query`,error,...)\n', PosixPath('server/services/tavily.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = ef4c0ca59521089fd76a08eb2726d627d21620adffd6165c689ee76b6b808f5a9b1ab9d4fbfdba36f03aab17ab90645e3811c98e49ef85354189f21d466b4080_0
+2025-07-02 22:03:21,204 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``Tavily query failed: query` $UTIL = require(\'util\')\n...\n $UTIL.format(``Tavily query failed: query`,error,...)\n console.warn(``Tavily query failed: query`,error,...)\n', PosixPath('server/services/tavily.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = ef4c0ca59521089fd76a08eb2726d627d21620adffd6165c689ee76b6b808f5a9b1ab9d4fbfdba36f03aab17ab90645e3811c98e49ef85354189f21d466b4080_0
+2025-07-02 22:03:21,204 - semgrep.rule_match - DEBUG - match_key = ('"..." + "..."\n $X + $Y $X.concat($Y) `...${...}...`\n $X.concat("...")\n ``Tavily query failed: query` $UTIL = require(\'util\')\n...\n $UTIL.format(``Tavily query failed: query`,error,...)\n console.warn(``Tavily query failed: query`,error,...)\n', PosixPath('server/services/tavily.ts'), 'config..semgrep.vendored-rules.javascript.lang.security.audit.unsafe-formatstring') match_id = ef4c0ca59521089fd76a08eb2726d627d21620adffd6165c689ee76b6b808f5a9b1ab9d4fbfdba36f03aab17ab90645e3811c98e49ef85354189f21d466b4080_0
+2025-07-02 22:03:21,206 - semgrep.core_runner - DEBUG - semgrep ran in 0:00:07.042449 on 102 files
+2025-07-02 22:03:21,208 - semgrep.core_runner - DEBUG - findings summary: 1 warning, 0 error, 5 info
+2025-07-02 22:03:21,210 - semgrep.app.auth - DEBUG - Getting API token from settings file
+2025-07-02 22:03:21,210 - semgrep.app.auth - DEBUG - No API token found in settings file
+2025-07-02 22:03:21,314 - semgrep.output - VERBOSE - 
+========================================
+Files skipped:
+========================================
+
+  Always skipped by Opengrep:
+
+   • <none>
+
+  Skipped by .gitignore:
+  (Disable by passing --no-git-ignore)
+
+   • <all files not listed by `git ls-files` were skipped>
+
+  Skipped by .semgrepignore:
+  - https://semgrep.dev/docs/ignoring-files-folders-code/#understand-semgrep-defaults
+
+   • <none>
+
+  Skipped by --include patterns:
+
+   • <none>
+
+  Skipped by --exclude patterns:
+
+   • <none>
+
+  Files skipped due to insufficient read permissions:
+
+   • <none>
+
+  Skipped by limiting to files smaller than 1000000 bytes:
+  (Adjust with the --max-target-bytes flag)
+
+   • <none>
+
+  Partially analyzed due to parsing or internal Opengrep errors
+
+   • tailwind.config.ts (1 lines skipped)
+
+2025-07-02 22:03:21,315 - semgrep.output - INFO - Some files were skipped or only partially analyzed.
+  Scan was limited to files tracked by git.
+  Partially scanned: 1 files only partially analyzed due to parsing or internal Opengrep errors
+
+Ran 438 rules on 102 files: 6 findings.
+2025-07-02 22:03:21,316 - semgrep.app.version - DEBUG - Version cache does not exist
+2025-07-02 22:03:21,328 - semgrep.metrics - VERBOSE - Not sending pseudonymous metrics since metrics are configured to OFF and registry usage is False

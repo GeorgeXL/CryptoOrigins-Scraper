@@ -1,0 +1,88 @@
+# Entity Tagging System - Technical Specification
+
+## Goal
+Add automatic entity tagging to each date's news summary. Extract entities (countries, companies, cryptocurrencies, people, etc.) from the summary text and store them as a simple array of tags.
+
+## What We're Building
+
+### 1. Database Schema Change
+Add a `tags` field to the `historicalNewsAnalyses` table:
+- Type: `jsonb`
+- Format: Array of objects: `[{name: "Bitcoin", category: "crypto"}, {name: "Tesla", category: "company"}]`
+- Purpose: Store extracted entities for each date's summary
+
+### 2. Entity Extraction Service
+Create a new service (`server/services/entity-extractor.ts`) that:
+- Takes a summary string as input
+- Uses OpenAI (gpt-4o-mini) to extract entities
+- Returns a simple array of tags with `name` and `category`
+- No context, no confidence scores — just the tags
+
+### 3. Entity Categories
+Extract these types of entities:
+- **Countries**: "Israel", "United States"
+- **Companies**: "Tesla", "Microsoft"
+- **Organizations**: "SEC", "Federal Reserve"
+- **Cryptocurrencies**: "Bitcoin", "Ethereum", "BTC", "ETH"
+- **NFT projects**: "Bored Ape", "CryptoPunks"
+- **People**: "Satoshi Nakamoto", "Elon Musk"
+- **Protocols/Technologies**: "Lightning Network", "Taproot" (optional)
+- **Exchanges**: "Binance", "Coinbase" (optional, or use "company")
+- **DeFi**: "Uniswap", "Aave" (optional, or use "crypto")
+- **Investment firms**: "Grayscale", "MicroStrategy" (optional, or use "company")
+
+### 4. Integration Points
+
+**When to tag:**
+- Option A: Automatically when a new analysis is created (after summary is generated)
+- Option B: Batch process all existing analyses via an API endpoint
+- Option C: Both
+
+**Example flow:**
+```
+1. Analysis summary is generated: "Bitcoin has been accepted by Tesla"
+2. Entity extractor runs on this summary
+3. Extracts: [{name: "Bitcoin", category: "crypto"}, {name: "Tesla", category: "company"}]
+4. Tags are saved to analysis.tags field
+```
+
+## Example Use Cases
+
+**Input Summary:**
+> "Bitcoin has been accepted by Tesla. Israel has been fighting legal battle with Ethereum due to Satoshi Nakamoto"
+
+**Expected Tags:**
+```json
+[
+  {"name": "Bitcoin", "category": "crypto"},
+  {"name": "Tesla", "category": "company"},
+  {"name": "Israel", "category": "country"},
+  {"name": "Ethereum", "category": "crypto"},
+  {"name": "Satoshi Nakamoto", "category": "person"}
+]
+```
+
+## Technical Requirements
+
+1. Use existing OpenAI service (`openaiService.generateCompletion`)
+2. Store tags as JSONB array in database
+3. No separate tables — just add field to existing `historicalNewsAnalyses` table
+4. Let AI decide which entities to extract (no predefined lists)
+5. Remove duplicates automatically
+6. Simple format: `{name: string, category: string}` only
+
+## Files to Create/Modify
+
+1. `shared/schema.ts` - Add `tags: jsonb("tags")` field
+2. `server/services/entity-extractor.ts` - New service for extraction
+3. `server/routes.ts` - Optional endpoint for batch processing
+4. Analysis creation flow - Integrate tagging after summary generation
+
+## Benefits
+
+- Search/filter by entities: "Show all dates mentioning Tesla"
+- Analytics: "Which companies are mentioned most?"
+- Better organization without manual tagging
+- Automatic — no human intervention needed
+
+Should I provide the complete code implementation for your programmer?

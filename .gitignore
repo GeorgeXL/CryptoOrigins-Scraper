@@ -1,0 +1,10 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gzsupabase_data.sql
+supabase_data.sql
+.env*
+.config/.semgrep/semgrep_rules.json
+.config/.semgrep/semgrep_rules.json
