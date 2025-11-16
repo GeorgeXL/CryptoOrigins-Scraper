@@ -1,18 +1,25 @@
+import type { Express } from 'express';
+
 // Import from built server code (built during Vercel build step)
 // The build process creates dist/index.js from server/index.ts
 // @ts-ignore - Vercel will compile this, and the server code is built first
 import { createApp } from "../dist/index.js";
 
-let appPromise: Promise<{ app: any }> | null = null;
+type AppContainer = { app: Express; server: any };
+
+let appPromise: Promise<AppContainer> | null = null;
+
+const initializeApp = () => {
+  if (!appPromise) {
+    appPromise = createApp();
+  }
+  return appPromise;
+};
 
 export default async function handler(req: any, res: any) {
   try {
-    // Initialize app on first request (lazy initialization for cold starts)
-    if (!appPromise) {
-      appPromise = createApp();
-    }
-
-    const { app } = await appPromise;
+    const promise = initializeApp();
+    const { app } = await promise;
 
     // Handle the request with Express
     return new Promise((resolve) => {
