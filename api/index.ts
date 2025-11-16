@@ -6,15 +6,29 @@ import { createApp } from "../dist/index.js";
 let appPromise: Promise<{ app: any }> | null = null;
 
 export default async function handler(req: any, res: any) {
-  // Initialize app on first request (lazy initialization for cold starts)
-  if (!appPromise) {
-    appPromise = createApp();
+  try {
+    // Initialize app on first request (lazy initialization for cold starts)
+    if (!appPromise) {
+      appPromise = createApp();
+    }
+
+    const { app } = await appPromise;
+
+    // Handle the request with Express
+    return new Promise((resolve) => {
+      app(req, res, resolve);
+    });
+  } catch (error) {
+    console.error('❌ Serverless function error:', error);
+    if (error instanceof Error) {
+      console.error('   Error message:', error.message);
+      console.error('   Error stack:', error.stack);
+    }
+    
+    // Return a proper error response
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
-
-  const { app } = await appPromise;
-
-  // Handle the request with Express
-  return new Promise((resolve) => {
-    app(req, res, resolve);
-  });
 }

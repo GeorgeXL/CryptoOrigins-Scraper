@@ -33,11 +33,11 @@ if (databaseUrl) {
     const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
     const maxConnections = isServerless ? 2 : 15; // Vercel serverless functions have connection limits
     
-    // Use connection string directly - pg.Pool handles parsing
-    const connectionString = databaseUrl;
+    console.log(`🔧 Creating database pool (serverless: ${isServerless}, max: ${maxConnections})...`);
     
+    // Use connection string directly - pg.Pool handles parsing
     poolInstance = new Pool({ 
-      connectionString: connectionString,
+      connectionString: databaseUrl,
       // Optimized for serverless environments
       max: maxConnections,
       idleTimeoutMillis: 30000, // 30 seconds for serverless
@@ -55,24 +55,26 @@ if (databaseUrl) {
     });
 
     dbInstance = drizzle({ client: poolInstance, schema });
+    console.log('✅ Database pool and drizzle instance created');
     
     // Test the connection asynchronously (don't block module loading)
+    // This is just for logging - don't fail if it doesn't work immediately
     poolInstance.connect()
       .then((client) => {
         return client.query('SELECT NOW()')
           .then(() => {
             client.release();
-            console.log('✅ Database connection pool created and tested successfully');
+            console.log('✅ Database connection test successful');
           })
           .catch((testError) => {
             client.release();
-            console.error('❌ Database connection test failed:', (testError as Error).message);
-            console.error('   This might indicate a connection string issue or network problem');
+            console.error('⚠️  Database connection test failed (non-blocking):', (testError as Error).message);
+            console.error('   Connection will be retried on first query');
           });
       })
       .catch((connectError) => {
-        console.error('❌ Failed to connect to database:', (connectError as Error).message);
-        console.error('   Check your DATABASE_URL in Vercel environment variables');
+        console.error('⚠️  Database connection test failed (non-blocking):', (connectError as Error).message);
+        console.error('   Connection will be retried on first query');
       });
   } catch (error) {
     console.error('❌ Failed to create database pool:', error);
@@ -80,16 +82,27 @@ if (databaseUrl) {
       console.error('   Error message:', error.message);
       console.error('   Error stack:', error.stack);
     }
+    // Don't throw - allow module to load, error will be thrown when db is used
   }
 } else {
-  console.warn('⚠️  No DATABASE_URL - database operations will fail');
+  console.warn('⚠️  No DATABASE_URL or POSTGRES_URL - database operations will fail');
 }
 
-// Export with null checks - will throw if used without proper DB connection
+// Export with proper initialization
+// In serverless, the pool is created at module load time
+// If it fails, we'll throw a clear error when it's used
 export const pool = poolInstance || (() => {
-  throw new Error("Database pool not initialized. Check DATABASE_URL in .env file or Vercel environment variables.");
+  const error = new Error("Database pool not initialized. Check DATABASE_URL or POSTGRES_URL in Vercel environment variables.");
+  console.error("❌", error.message);
+  throw error;
 })();
 
 export const db = dbInstance || (() => {
-  throw new Error("Database not initialized. Check DATABASE_URL in .env file or Vercel environment variables.");
+  if (!poolInstance) {
+    const error = new Error("Database not initialized. Check DATABASE_URL or POSTGRES_URL in Vercel environment variables.");
+    console.error("❌", error.message);
+    throw error;
+  }
+  dbInstance = drizzle({ client: poolInstance, schema });
+  return dbInstance;
 })();
