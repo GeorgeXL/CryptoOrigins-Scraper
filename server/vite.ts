@@ -16,9 +16,14 @@ export function log(message: string, source = "express") {
 
 export async function setupVite(app: Express, server: Server) {
   // Import Vite dependencies only when needed (development mode)
-  const { createServer as createViteServer, createLogger } = await import("vite");
-  const viteConfig = (await import("../vite.config.js")).default;
-  const { nanoid } = await import("nanoid");
+  const viteModule = await import("vite");
+  const viteConfigModule = await import("../vite.config.js");
+  const nanoidModule = await import("nanoid");
+  
+  const createViteServer = viteModule.createServer;
+  const createLogger = viteModule.createLogger;
+  const viteConfig = viteConfigModule.default;
+  const nanoid = nanoidModule.nanoid;
   
   const viteLogger = createLogger();
   
