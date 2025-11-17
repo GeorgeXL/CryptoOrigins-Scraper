@@ -203,5 +203,21 @@ Respond with only one word: "Valid" or "Incorrect". Do not provide any explanati
   }
 }
 
-export const geminiService = new GeminiService();
+// Lazy initialization to avoid errors at import time
+let _geminiServiceInstance: GeminiService | null = null;
+
+export function getGeminiService(): GeminiService {
+  if (!_geminiServiceInstance) {
+    _geminiServiceInstance = new GeminiService();
+  }
+  return _geminiServiceInstance;
+}
+
+// Export as a getter for backward compatibility
+export const geminiService = new Proxy({} as GeminiService, {
+  get(_target, prop) {
+    return getGeminiService()[prop as keyof GeminiService];
+  }
+});
+
 export type { VerificationResult, GoogleCheckResults };

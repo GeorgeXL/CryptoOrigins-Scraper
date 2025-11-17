@@ -277,4 +277,19 @@ export class ExaNewsService {
   }
 }
 
-export const exaService = new ExaNewsService();
+// Lazy initialization to avoid errors at import time
+let _exaServiceInstance: ExaNewsService | null = null;
+
+export function getExaService(): ExaNewsService {
+  if (!_exaServiceInstance) {
+    _exaServiceInstance = new ExaNewsService();
+  }
+  return _exaServiceInstance;
+}
+
+// Export as a getter for backward compatibility
+export const exaService = new Proxy({} as ExaNewsService, {
+  get(_target, prop) {
+    return getExaService()[prop as keyof ExaNewsService];
+  }
+});
