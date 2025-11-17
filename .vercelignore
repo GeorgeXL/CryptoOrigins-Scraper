@@ -1,0 +1,14 @@
+# Don't ignore dist folder - needed for API handler
+!dist
+
+# Ignore development files
+node_modules
+.env*
+!.env.example
+*.log
+.DS_Store
+
+# Ignore local development files
+.vscode
+.idea
+

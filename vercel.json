@@ -1,7 +1,7 @@
 {
   "version": 2,
   "buildCommand": "npm run build",
-  "installCommand": "pnpm install",
+  "installCommand": "npm install",
   "framework": null,
   "outputDirectory": "dist/public",
   "rewrites": [
@@ -13,5 +13,10 @@
       "source": "/(.*)",
       "destination": "/api"
     }
-  ]
+  ],
+  "functions": {
+    "api/*.ts": {
+      "maxDuration": 60
+    }
+  }
 }
