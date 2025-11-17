@@ -33,9 +33,9 @@ export default async function handler(req: any, res: any) {
   try {
     const { app } = await getOrCreateApp();
 
-    // Handle the request with Express
-    return new Promise((resolve) => {
-      app(req, res, resolve);
+    // Handle the request with Express. Cast to any so TypeScript doesn't complain
+    return new Promise<void>((resolve) => {
+      (app as unknown as (req: any, res: any, next: any) => void)(req, res, resolve);
     });
   } catch (error) {
     console.error('❌ Serverless function error:', error);
