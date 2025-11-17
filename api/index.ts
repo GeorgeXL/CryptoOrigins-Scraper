@@ -1,3 +1,7 @@
+// CRITICAL: Disable TLS certificate verification BEFORE any imports
+// This must be the very first line to handle Supabase pooler's self-signed cert
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 import type { Express } from 'express';
 
 // Import from built server code (built during Vercel build step)
@@ -15,6 +19,8 @@ function getOrCreateApp(): Promise<AppContainer> {
     console.log('🔧 Initializing app on first request...');
     appPromise = createApp().catch((error: Error) => {
       console.error('❌ FATAL: Failed to create app:', error);
+      console.error('   Error message:', error.message);
+      console.error('   Error stack:', error.stack);
       // Reset promise so next request can retry
       appPromise = null;
       throw error;
@@ -41,7 +47,8 @@ export default async function handler(req: any, res: any) {
     // Return a proper error response
     res.status(500).json({ 
       error: 'Internal server error',
-      message: error instanceof Error ? error.message : 'Unknown error'
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined
     });
   }
 }
