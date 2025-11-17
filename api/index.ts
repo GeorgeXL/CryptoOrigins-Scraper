@@ -5,13 +5,25 @@ import type { Express } from 'express';
 // @ts-ignore - Vercel will compile this, and the server code is built first
 import { createApp } from "../dist/index.js";
 
-// Initialize the app promise outside of the handler
-// This ensures it's only created once per serverless instance
-const appPromise = createApp();
+// Store the app promise but don't create it until first request
+let appPromise: Promise<{ app: Express; server: any }> | null = null;
+
+function getOrCreateApp() {
+  if (!appPromise) {
+    console.log('🔧 Initializing app on first request...');
+    appPromise = createApp().catch((error) => {
+      console.error('❌ FATAL: Failed to create app:', error);
+      // Reset promise so next request can retry
+      appPromise = null;
+      throw error;
+    });
+  }
+  return appPromise;
+}
 
 export default async function handler(req: any, res: any) {
   try {
-    const { app } = await appPromise;
+    const { app } = await getOrCreateApp();
 
     // Handle the request with Express
     return new Promise((resolve) => {
