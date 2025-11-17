@@ -26,7 +26,7 @@ function getOrCreateApp(): Promise<AppContainer> {
       throw error;
     });
   }
-  return appPromise;
+  return appPromise as Promise<AppContainer>;
 }
 
 export default async function handler(req: any, res: any) {
