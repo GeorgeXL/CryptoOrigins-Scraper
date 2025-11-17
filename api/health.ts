@@ -7,7 +7,7 @@ export default async function handler(req: any, res: any) {
       timestamp: new Date().toISOString(),
       vercel: process.env.VERCEL || 'not set',
       nodeEnv: process.env.NODE_ENV || 'not set',
-      databaseUrl: process.env.DATABASE_URL ? '✅ Set' : '❌ Not set',
+      databaseUrl: (process.env.DATABASE_URL || process.env.POSTGRES_URL) ? '✅ Set' : '❌ Not set',
       openaiKey: process.env.OPENAI_API_KEY ? '✅ Set' : '❌ Not set',
       googleKey: process.env.GOOGLE_API_KEY ? '✅ Set' : '❌ Not set',
       exaKey: process.env.EXA_API_KEY ? '✅ Set' : '❌ Not set',
