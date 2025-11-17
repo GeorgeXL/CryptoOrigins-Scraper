@@ -21,6 +21,7 @@ import { conflictClusterer } from "./services/conflict-clusterer";
 import { verifyDateWithPerplexity, type PerplexityDateVerificationResult } from "./services/perplexity";
 import { perplexityCleaner } from "./services/perplexity-cleaner";
 import { entityExtractor } from "./services/entity-extractor";
+import { sql } from "drizzle-orm";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -70,6 +71,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
       environment: process.env.NODE_ENV || "production",
       vercel: !!process.env.VERCEL 
     });
+  });
+
+  // Database connection diagnostic endpoint
+  app.get("/api/debug/db", async (req, res) => {
+    try {
+      const hasPostgresUrl = !!process.env.POSTGRES_URL;
+      const hasDatabaseUrl = !!process.env.DATABASE_URL;
+      const databaseUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+      
+      let connectionInfo = null;
+      if (databaseUrl) {
+        try {
+          const urlParts = new URL(databaseUrl);
+          connectionInfo = {
+            protocol: urlParts.protocol,
+            hostname: urlParts.hostname,
+            port: urlParts.port,
+            database: urlParts.pathname.split('/').pop(),
+            hasSslMode: databaseUrl.includes('sslmode='),
+            hasSupaParam: databaseUrl.includes('supa='),
+            urlLength: databaseUrl.length,
+          };
+        } catch (e) {
+          connectionInfo = { error: 'Invalid URL format', rawLength: databaseUrl.length };
+        }
+      }
+
+      // Try to actually connect to the database
+      let dbTest = null;
+      try {
+        const { db } = await import("./db.js");
+        // Try a simple query
+        const result = await db.execute(sql`SELECT 1 as test, NOW() as current_time`);
+        dbTest = { 
+          success: true, 
+          message: 'Database connection successful',
+          result: result.rows?.[0] || result
+        };
+      } catch (error) {
+        dbTest = { 
+          success: false, 
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined
+        };
+      }
+
+      res.json({
+        environment: {
+          NODE_ENV: process.env.NODE_ENV,
+          VERCEL: process.env.VERCEL,
+          hasPostgresUrl,
+          hasDatabaseUrl,
+          connectionInfo,
+        },
+        databaseTest: dbTest,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
   });
 
   // Analysis routes
