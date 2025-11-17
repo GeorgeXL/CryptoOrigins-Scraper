@@ -9,17 +9,6 @@ import { createApp } from "../dist/index.js";
 // This ensures it's only created once per serverless instance
 const appPromise = createApp();
 
-type AppContainer = { app: Express; server: any };
-
-let appPromise: Promise<AppContainer> | null = null;
-
-const initializeApp = () => {
-  if (!appPromise) {
-    appPromise = createApp();
-  }
-  return appPromise;
-};
-
 export default async function handler(req: any, res: any) {
   try {
     const { app } = await appPromise;
