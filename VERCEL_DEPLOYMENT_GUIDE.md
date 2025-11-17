@@ -4,7 +4,7 @@
 
 1. **Package Manager Mismatch**: Changed from `pnpm` to `npm` in `vercel.json`
 2. **Missing Export**: Created `server/serverless.ts` to properly export `createApp` for Vercel
-3. **Build Configuration**: Updated build command to create `dist/serverless.js` with proper exports
+3. **Build Configuration**: Updated build command to create `dist/server/serverless.js` with proper exports
 4. **Function Configuration**: Added function timeout configuration to `vercel.json`
 
 ## Environment Variables Required in Vercel
@@ -51,7 +51,7 @@ Option B: In Vercel Dashboard > Deployments > Click "Redeploy"
 1. Watch the build logs in Vercel
 2. Look for these success indicators:
    - ✅ `vite build` completes successfully
-   - ✅ `esbuild server/serverless.ts` creates `dist/serverless.js`
+   - ✅ `esbuild server/serverless.ts` creates `dist/server/serverless.js`
    - ✅ Build completes without errors
 
 ### 5. Test Your Deployment
@@ -68,11 +68,11 @@ After deployment completes, test these endpoints:
 
 ## Common Issues & Solutions
 
-### Issue: "Cannot find module '../dist/serverless.js'"
+### Issue: "Cannot find module '../dist/server/serverless.js'"
 **Solution**: The build didn't complete. Check:
 - Build logs in Vercel
 - Make sure `npm run build` succeeds locally
-- Verify `dist/serverless.js` is created during build
+- Verify `dist/server/serverless.js` is created during build
 
 ### Issue: "DATABASE_URL is not set"
 **Solution**: 

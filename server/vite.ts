@@ -80,10 +80,10 @@ export async function setupVite(app: Express, server: Server) {
 }
 
 export function serveStatic(app: Express) {
-  // In production (Vercel), files are in dist/public relative to project root
+  // In production (Vercel), files are in dist relative to project root
   const distPath = process.env.VERCEL 
-    ? path.resolve(process.cwd(), "dist", "public")
-    : path.resolve(import.meta.dirname, "..", "dist", "public");
+    ? path.resolve(process.cwd(), "dist")
+    : path.resolve(import.meta.dirname, "..", "dist");
 
   if (!fs.existsSync(distPath)) {
     throw new Error(

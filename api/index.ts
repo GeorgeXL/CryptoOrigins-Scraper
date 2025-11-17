@@ -5,9 +5,9 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 import type { Express } from 'express';
 
 // Import from built server code (built during Vercel build step)
-// The build process creates dist/serverless.js from server/serverless.ts
+// The build process creates dist/server/serverless.js from server/serverless.ts
 // @ts-ignore - Vercel will compile this, and the server code is built first
-import { createApp } from "../dist/serverless.js";
+import { createApp } from "../dist/server/serverless.js";
 
 type AppContainer = { app: Express; server: any };
 
