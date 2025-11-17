@@ -42,7 +42,10 @@ export class ExaNewsService {
   private lastRequestTime = 0;
 
   constructor() {
-    const apiKey = process.env.EXA_API_KEY || "6e8ea329-bb29-45de-923c-e1c6328ed14b";
+    const apiKey = process.env.EXA_API_KEY;
+    if (!apiKey) {
+      throw new Error("EXA_API_KEY environment variable is required. Please set it in your Vercel environment variables.");
+    }
     this.exa = new Exa(apiKey);
   }
 
