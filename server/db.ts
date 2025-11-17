@@ -8,8 +8,8 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const { Pool } = pg;
 import * as schema from "@shared/schema";
 
-// Support both DATABASE_URL and POSTGRES_URL (Vercel Storage integration)
-const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+// Vercel provides POSTGRES_URL through Postgres Storage integration
+const databaseUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
 
 // Log database URL status (without exposing the full connection string)
 if (!databaseUrl) {
