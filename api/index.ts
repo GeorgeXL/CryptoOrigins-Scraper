@@ -2,6 +2,8 @@
 // This must be the very first line to handle Supabase pooler's self-signed cert
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
+console.log('LOG: api/index.ts - Top-level execution start.');
+
 import type { Express } from 'express';
 
 // Import from built server code (built during Vercel build step)
@@ -16,7 +18,7 @@ let appPromise: Promise<AppContainer> | null = null;
 
 function getOrCreateApp(): Promise<AppContainer> {
   if (!appPromise) {
-    console.log('🔧 Initializing app on first request...');
+    console.log('LOG: getOrCreateApp() - Initializing app on first request...');
     appPromise = createApp().catch((error: Error) => {
       console.error('❌ FATAL: Failed to create app:', error);
       console.error('   Error message:', error.message);
@@ -25,13 +27,28 @@ function getOrCreateApp(): Promise<AppContainer> {
       appPromise = null;
       throw error;
     });
+  } else {
+    console.log('LOG: getOrCreateApp() - Reusing existing app promise.');
   }
   return appPromise as Promise<AppContainer>;
 }
 
 export default async function handler(req: any, res: any) {
+  console.log(`LOG: Handler invoked for URL: ${req.url}`);
+
+  // Barebones health check - NO DEPENDENCIES
+  if (req.url === '/api/healthcheck') {
+    console.log('LOG: /api/healthcheck endpoint hit. Responding directly.');
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+    return;
+  }
+
   try {
+    console.log('LOG: Attempting to get or create Express app...');
     const { app } = await getOrCreateApp();
+    console.log('LOG: Express app retrieved successfully.');
 
     // Handle the request with Express
     return new Promise((resolve) => {

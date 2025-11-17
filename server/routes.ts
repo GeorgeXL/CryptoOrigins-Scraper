@@ -63,6 +63,31 @@ let batchTaggingProcessed = 0;
 let batchTaggingTotal = 0;
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  console.log('LOG: registerRoutes() - Starting to register application routes.');
+
+  // New endpoint to dump environment variables
+  app.get("/api/debug/env", (req, res) => {
+    console.log('LOG: /api/debug/env endpoint hit.');
+    try {
+      // Sanitize sensitive values
+      const sanitizedEnv = { ...process.env };
+      for (const key in sanitizedEnv) {
+        if (key.includes('KEY') || key.includes('SECRET') || key.includes('PASSWORD') || key.includes('URL')) {
+          const value = sanitizedEnv[key];
+          sanitizedEnv[key] = value ? `${value.substring(0, 4)}... (hidden)` : value;
+        }
+      }
+      res.json({
+        message: "Server environment variables",
+        vercel: !!process.env.VERCEL,
+        node_env: process.env.NODE_ENV,
+        env: sanitizedEnv,
+      });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to read environment variables' });
+    }
+  });
+
   // Simple test endpoint - no dependencies
   app.get("/api/test", (req, res) => {
     res.json({ 
@@ -4927,5 +4952,6 @@ Keep reasoning concise (10-30 words).`;
     }
   });
 
+  console.log('LOG: registerRoutes() - Finished registering application routes.');
   return httpServer;
 }
