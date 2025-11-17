@@ -27,91 +27,61 @@ if (!databaseUrl) {
 let poolInstance: pg.Pool | null = null;
 let dbInstance: ReturnType<typeof drizzle> | null = null;
 
-if (databaseUrl) {
+function getDbInstance() {
+  if (dbInstance) {
+    return dbInstance;
+  }
+
+  if (!databaseUrl) {
+    throw new Error("FATAL: DATABASE_URL or POSTG-RES_URL is not set in Vercel environment variables.");
+  }
+
   try {
-    // For serverless (Vercel), use smaller pool size to avoid connection limits
     const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
-    const maxConnections = isServerless ? 2 : 15; // Vercel serverless functions have connection limits
-    
-    console.log(`🔧 Creating database pool (serverless: ${isServerless}, max: ${maxConnections})...`);
-    
-    // Clean up the connection string - remove unsupported query parameters
-    // Supabase pooler adds 'supa=base-pooler.x' which pg doesn't recognize
-    // Simple regex replacement to remove the supa parameter
+    const maxConnections = isServerless ? 2 : 15;
+
+    console.log(`🔧 LAZY INIT: Creating database pool (serverless: ${isServerless}, max: ${maxConnections})...`);
+
     let cleanConnectionString = databaseUrl.replace(/[?&]supa=[^&]*/g, '');
-    // If we removed a parameter and it was the first one, we need to fix the ? vs &
     cleanConnectionString = cleanConnectionString.replace(/\?&/, '?');
-    
+
     console.log(`🔧 Using connection string: ${cleanConnectionString.substring(0, 60)}...`);
-    
-    // Use cleaned connection string - pg.Pool handles parsing
-    poolInstance = new Pool({ 
+
+    poolInstance = new Pool({
       connectionString: cleanConnectionString,
-      // Optimized for serverless environments
       max: maxConnections,
-      idleTimeoutMillis: 30000, // 30 seconds for serverless
-      connectionTimeoutMillis: 10000, // 10 second timeout
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
       ssl: {
-        rejectUnauthorized: false // Required for Supabase - allows self-signed certs
+        rejectUnauthorized: false
       }
     });
 
-    // Handle pool errors with better logging
     poolInstance.on('error', (err: Error) => {
-      console.error('❌ Database pool error:', err.message);
-      console.error('   Error code:', (err as any).code);
-      // Don't exit - just log the error
+      console.error('❌ Database pool runtime error:', err.message);
     });
 
     dbInstance = drizzle({ client: poolInstance, schema });
-    console.log('✅ Database pool and drizzle instance created');
-    
-    // Test the connection asynchronously (don't block module loading)
-    // This is just for logging - don't fail if it doesn't work immediately
-    poolInstance.connect()
-      .then((client) => {
-        return client.query('SELECT NOW()')
-          .then(() => {
-            client.release();
-            console.log('✅ Database connection test successful');
-          })
-          .catch((testError) => {
-            client.release();
-            console.error('⚠️  Database connection test failed (non-blocking):', (testError as Error).message);
-            console.error('   Connection will be retried on first query');
-          });
-      })
-      .catch((connectError) => {
-        console.error('⚠️  Database connection test failed (non-blocking):', (connectError as Error).message);
-        console.error('   Connection will be retried on first query');
-      });
+    console.log('✅ LAZY INIT: Database pool and drizzle instance created.');
+    return dbInstance;
+
   } catch (error) {
-    console.error('❌ Failed to create database pool:', error);
+    console.error('❌ LAZY INIT FAILED: Failed to create database pool:', error);
     if (error instanceof Error) {
-      console.error('   Error message:', error.message);
-      console.error('   Error stack:', error.stack);
+        console.error('   Error message:', error.message);
     }
-    // Don't throw - allow module to load, error will be thrown when db is used
-  }
-} else {
-  console.warn('⚠️  No DATABASE_URL or POSTGRES_URL - database operations will fail');
-}
-
-// Export with proper initialization
-// In serverless, the pool is created at module load time
-// If it fails, we'll throw a clear error when it's used
-export const pool = poolInstance || (() => {
-  const error = new Error("Database pool not initialized. Check DATABASE_URL or POSTGRES_URL in Vercel environment variables.");
-  console.error("❌", error.message);
-  throw error;
-})();
-
-export const db = dbInstance || (() => {
-  if (!poolInstance) {
-    const error = new Error("Database not initialized. Check DATABASE_URL or POSTGRES_URL in Vercel environment variables.");
-    console.error("❌", error.message);
+    // Re-throw the error to be caught by the handler in api/index.ts
     throw error;
   }
-  dbInstance = drizzle({ client: poolInstance, schema });
-  return dbInstance;
-})();
+}
+
+// Use a proxy to lazily initialize the db connection on first access
+export const db = new Proxy({} as ReturnType<typeof drizzle>, {
+  get(_target, prop) {
+    return (getDbInstance() as any)[prop];
+  }
+});
+
+// Note: Direct export of the pool is removed as it's less safe.
+// If direct pool access is needed, a similar proxy could be created.
+// For now, all database access should go through the 'db' export.
