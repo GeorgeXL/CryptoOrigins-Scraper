@@ -5,13 +5,15 @@ import type { Express } from 'express';
 // @ts-ignore - Vercel will compile this, and the server code is built first
 import { createApp } from "../dist/index.js";
 
-// Store the app promise but don't create it until first request
-let appPromise: Promise<{ app: Express; server: any }> | null = null;
+type AppContainer = { app: Express; server: any };
 
-function getOrCreateApp() {
+// Store the app promise but don't create it until first request
+let appPromise: Promise<AppContainer> | null = null;
+
+function getOrCreateApp(): Promise<AppContainer> {
   if (!appPromise) {
     console.log('🔧 Initializing app on first request...');
-    appPromise = createApp().catch((error) => {
+    appPromise = createApp().catch((error: Error) => {
       console.error('❌ FATAL: Failed to create app:', error);
       // Reset promise so next request can retry
       appPromise = null;
