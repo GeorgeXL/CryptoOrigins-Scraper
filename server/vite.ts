@@ -1,12 +1,7 @@
 import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
-import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
-import viteConfig from "../vite.config";
-import { nanoid } from "nanoid";
-
-const viteLogger = createLogger();
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -20,6 +15,13 @@ export function log(message: string, source = "express") {
 }
 
 export async function setupVite(app: Express, server: Server) {
+  // Import Vite dependencies only when needed (development mode)
+  const { createServer as createViteServer, createLogger } = await import("vite");
+  const viteConfig = (await import("../vite.config.js")).default;
+  const { nanoid } = await import("nanoid");
+  
+  const viteLogger = createLogger();
+  
   const serverOptions = {
     middlewareMode: true,
     hmr: { server },
@@ -74,8 +76,6 @@ export async function setupVite(app: Express, server: Server) {
 
 export function serveStatic(app: Express) {
   // In production (Vercel), files are in dist/public relative to project root
-  // In built code, import.meta.dirname is dist/, so we need to go up and then to dist/public
-  // Or use process.cwd() which is the project root
   const distPath = process.env.VERCEL 
     ? path.resolve(process.cwd(), "dist", "public")
     : path.resolve(import.meta.dirname, "..", "dist", "public");
