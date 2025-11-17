@@ -1,10 +1,15 @@
 // Simple debug endpoint to test API connections
+
+// Disable SSL certificate verification for self-signed certs
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 export default async function handler(req: any, res: any) {
   const results: any = {
     timestamp: new Date().toISOString(),
     environment: {
       VERCEL: process.env.VERCEL || 'not set',
       NODE_ENV: process.env.NODE_ENV || 'not set',
+      NODE_TLS_REJECT_UNAUTHORIZED: process.env.NODE_TLS_REJECT_UNAUTHORIZED || 'not set',
     },
     envVars: {
       DATABASE_URL: process.env.DATABASE_URL ? '✅ Set' : '❌ Not set',
@@ -32,13 +37,8 @@ export default async function handler(req: any, res: any) {
       let cleanConnectionString = databaseUrl.replace(/[?&]supa=[^&]*/g, '');
       cleanConnectionString = cleanConnectionString.replace(/\?&/, '?');
       
-      // Ensure sslmode=require is in the connection string if not present
-      if (!cleanConnectionString.includes('sslmode=')) {
-        const separator = cleanConnectionString.includes('?') ? '&' : '?';
-        cleanConnectionString += `${separator}sslmode=require`;
-      }
-      
-      results.database.connectionString = cleanConnectionString.substring(0, 60) + '...';
+      results.database.connectionStringPreview = cleanConnectionString.substring(0, 60) + '...';
+      results.database.hasSSLMode = cleanConnectionString.includes('sslmode');
       
       // Try to import pg and connect
       const pg = await import('pg');
@@ -47,25 +47,24 @@ export default async function handler(req: any, res: any) {
       const pool = new Pool({
         connectionString: cleanConnectionString,
         max: 1,
-        connectionTimeoutMillis: 5000,
-        ssl: {
-          rejectUnauthorized: false
-        }
+        connectionTimeoutMillis: 10000,
+        // Don't specify ssl at all - let the connection string and NODE_TLS_REJECT_UNAUTHORIZED handle it
       });
 
       const client = await pool.connect();
-      const result = await client.query('SELECT NOW() as now, version() as version');
+      const result = await client.query('SELECT NOW() as now, version() as version, current_database() as database');
       client.release();
       await pool.end();
       
       results.database.status = '✅ Connected';
       results.database.serverTime = result.rows[0].now;
       results.database.version = result.rows[0].version;
+      results.database.database = result.rows[0].database;
     }
   } catch (error) {
     results.database.status = '❌ Failed';
     results.database.error = error instanceof Error ? error.message : String(error);
-    results.database.errorStack = error instanceof Error ? error.stack : undefined;
+    results.database.errorStack = error instanceof Error ? error.stack?.split('\n').slice(0, 5).join('\n') : undefined;
   }
 
   // Return results

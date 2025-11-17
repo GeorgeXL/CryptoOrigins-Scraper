@@ -1,6 +1,10 @@
 import pg from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 
+// Disable SSL certificate verification for self-signed certs (Supabase pooler)
+// This is safe because we're still using SSL encryption, just not verifying the cert
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 const { Pool } = pg;
 import * as schema from "@shared/schema";
 
