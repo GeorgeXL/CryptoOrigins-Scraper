@@ -28,9 +28,15 @@ export default async function handler(req: any, res: any) {
       results.database.status = '❌ Failed';
       results.database.error = 'No DATABASE_URL or POSTGRES_URL found';
     } else {
-      // Clean the connection string
+      // Clean the connection string - remove supa parameter
       let cleanConnectionString = databaseUrl.replace(/[?&]supa=[^&]*/g, '');
       cleanConnectionString = cleanConnectionString.replace(/\?&/, '?');
+      
+      // Ensure sslmode=require is in the connection string if not present
+      if (!cleanConnectionString.includes('sslmode=')) {
+        const separator = cleanConnectionString.includes('?') ? '&' : '?';
+        cleanConnectionString += `${separator}sslmode=require`;
+      }
       
       results.database.connectionString = cleanConnectionString.substring(0, 60) + '...';
       
@@ -66,4 +72,3 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Content-Type', 'application/json');
   res.status(200).json(results);
 }
-
