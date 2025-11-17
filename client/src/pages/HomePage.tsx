@@ -813,7 +813,7 @@ export default function HomePage() {
                       ) : (
                         <>
                           <Sparkles className="w-4 h-4 mr-2" />
-                          Clean Database
+                          Duplicate Clusters
                         </>
                       )}
                     </Button>

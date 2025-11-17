@@ -3,9 +3,19 @@ import { storage } from '../storage';
 import type { HistoricalNewsAnalysis } from '@shared/schema';
 import { apiMonitor } from './api-monitor';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy initialization to avoid reading env vars at module load time
+let _openaiInstance: OpenAI | null = null;
+
+function getOpenAIClient(): OpenAI {
+  if (!_openaiInstance) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY environment variable is required. Please set it in your Vercel environment variables.");
+    }
+    _openaiInstance = new OpenAI({ apiKey });
+  }
+  return _openaiInstance;
+}
 
 interface DuplicateDetectionResult {
   similar_dates: string[];
@@ -66,7 +76,7 @@ export class DuplicateDetectorService {
 
       const startTime = Date.now();
 
-      const completion = await openai.chat.completions.create({
+      const completion = await getOpenAIClient().chat.completions.create({
         model: 'gpt-4o-mini',
         response_format: { type: 'json_object' },
         messages: [

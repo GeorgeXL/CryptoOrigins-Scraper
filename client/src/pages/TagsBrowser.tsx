@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { 
   Dialog,
   DialogContent,
@@ -52,6 +54,7 @@ interface HistoricalNewsAnalysis {
   tier?: number;
   url?: string;
   source_url?: string;
+  isManualOverride?: boolean;
 }
 
 const ITEMS_PER_PAGE = 50;
@@ -66,6 +69,7 @@ export default function TagsBrowser() {
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
   const [showUntagged, setShowUntagged] = useState(false);
+  const [showManualOnly, setShowManualOnly] = useState(false);
   
   // Date list state
   const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
@@ -103,11 +107,21 @@ export default function TagsBrowser() {
     untaggedCount: number;
     totalAnalyses: number;
   }>({
-    queryKey: ['/api/tags/catalog'],
+    queryKey: ['/api/tags/catalog', showManualOnly],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (showManualOnly) {
+        params.set('manualOnly', 'true');
+      }
+      const url = `/api/tags/catalog${params.toString() ? `?${params}` : ''}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to fetch catalog');
+      return response.json();
+    },
   });
 
   // Fetch filtered analyses with server-side filtering and pagination
-  const { data: analysesData, isLoading } = useQuery<{
+  const { data: analysesData, isLoading, refetch } = useQuery<{
     analyses: HistoricalNewsAnalysis[];
     pagination: {
       currentPage: number;
@@ -116,7 +130,9 @@ export default function TagsBrowser() {
       totalPages: number;
     };
   }>({
-    queryKey: ['/api/tags/analyses', Array.from(selectedEntities).sort().join(','), showUntagged, debouncedSearchQuery, currentPage],
+    queryKey: ['/api/tags/analyses', Array.from(selectedEntities).sort().join(','), showUntagged, debouncedSearchQuery, currentPage, showManualOnly],
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       // Build query params inside queryFn to avoid closure issues
       const params = new URLSearchParams();
@@ -126,15 +142,22 @@ export default function TagsBrowser() {
       if (showUntagged) {
         params.set('untagged', 'true');
       }
+      if (showManualOnly) {
+        params.set('manualOnly', 'true');
+      }
       if (debouncedSearchQuery) {
         params.set('search', debouncedSearchQuery);
       }
       params.set('page', currentPage.toString());
       params.set('pageSize', ITEMS_PER_PAGE.toString());
       
-      const response = await fetch(`/api/tags/analyses?${params}`);
+      const url = `/api/tags/analyses?${params}`;
+      console.log('🌐 Fetching:', url);
+      const response = await fetch(url);
       if (!response.ok) throw new Error('Failed to fetch analyses');
-      return response.json();
+      const data = await response.json();
+      console.log('📦 Received:', data.analyses?.length || 0, 'analyses, total count:', data.pagination?.totalCount || 0);
+      return data;
     },
   });
 
@@ -453,7 +476,7 @@ export default function TagsBrowser() {
 
       {/* Search Bar */}
       <Card className="p-4">
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-3 mb-3">
           <Search className="w-5 h-5 text-slate-400" />
           <Input
             placeholder="Search by tag name, summary, or date..."
@@ -475,6 +498,25 @@ export default function TagsBrowser() {
               Clear
             </Button>
           )}
+        </div>
+        {/* Manual Import Filter Toggle */}
+        <div className="flex items-center space-x-2 pt-3 border-t border-slate-200">
+          <Switch
+            id="manual-only-filter"
+            checked={showManualOnly}
+            onCheckedChange={async (checked) => {
+              console.log('🔄 Toggle changed:', checked);
+              setShowManualOnly(checked);
+              setCurrentPage(1); // Reset to first page when filter changes
+            }}
+            data-testid="switch-manual-only"
+          />
+          <Label 
+            htmlFor="manual-only-filter" 
+            className="text-sm font-medium text-slate-700 cursor-pointer"
+          >
+            Show only manually imported events
+          </Label>
         </div>
       </Card>
 
@@ -584,13 +626,14 @@ export default function TagsBrowser() {
                 <Filter className="w-5 h-5 mr-2" />
                 {viewMode === 'keywords' ? 'Entities' : 'Topics'}
               </h2>
-              {(selectedEntities.size > 0 || showUntagged) && (
+              {(selectedEntities.size > 0 || showUntagged || showManualOnly) && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => {
                     setSelectedEntities(new Set());
                     setShowUntagged(false);
+                    setShowManualOnly(false);
                   }}
                   data-testid="button-clear-filters"
                 >
@@ -671,9 +714,14 @@ export default function TagsBrowser() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-slate-900 flex items-center">
                 <Calendar className="w-5 h-5 mr-2" />
-                {showUntagged ? "Untagged Analyses" : "Tagged Analyses"}
+                {showUntagged ? "Untagged Analyses" : showManualOnly ? "Manually Imported Events" : "Tagged Analyses"}
               </h2>
               <div className="flex items-center space-x-3">
+                {showManualOnly && (
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300">
+                    Manual Only
+                  </Badge>
+                )}
                 <span className="text-sm text-slate-600">
                   {totalCount} result{totalCount !== 1 ? 's' : ''}
                 </span>
@@ -721,6 +769,8 @@ export default function TagsBrowser() {
                   <p className="text-slate-500">
                     {showUntagged
                       ? "No untagged analyses found"
+                      : showManualOnly
+                      ? "No manually imported events found"
                       : selectedEntities.size > 0
                       ? "No analyses match the selected entities"
                       : debouncedSearchQuery

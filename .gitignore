@@ -3,8 +3,8 @@ dist
 .DS_Store
 server/public
 vite.config.ts.*
-*.tar.gzsupabase_data.sql
+*.tar.gz
 supabase_data.sql
 .env*
-.config/.semgrep/semgrep_rules.json
+attached_assets/
 .config/.semgrep/semgrep_rules.json

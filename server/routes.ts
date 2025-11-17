@@ -23,9 +23,19 @@ import { perplexityCleaner } from "./services/perplexity-cleaner";
 import { entityExtractor } from "./services/entity-extractor";
 import { sql } from "drizzle-orm";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy initialization to avoid reading env vars at module load time
+let _openaiInstance: OpenAI | null = null;
+
+function getOpenAIClient(): OpenAI {
+  if (!_openaiInstance) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY environment variable is required. Please set it in your Vercel environment variables.");
+    }
+    _openaiInstance = new OpenAI({ apiKey });
+  }
+  return _openaiInstance;
+}
 
 // Utility function to parse date strings from Perplexity
 // Note: All 1,025 existing Perplexity dates are already in YYYY-MM-DD format
@@ -63,31 +73,6 @@ let batchTaggingProcessed = 0;
 let batchTaggingTotal = 0;
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  console.log('LOG: registerRoutes() - Starting to register application routes.');
-
-  // New endpoint to dump environment variables
-  app.get("/api/debug/env", (req, res) => {
-    console.log('LOG: /api/debug/env endpoint hit.');
-    try {
-      // Sanitize sensitive values
-      const sanitizedEnv = { ...process.env };
-      for (const key in sanitizedEnv) {
-        if (key.includes('KEY') || key.includes('SECRET') || key.includes('PASSWORD') || key.includes('URL')) {
-          const value = sanitizedEnv[key];
-          sanitizedEnv[key] = value ? `${value.substring(0, 4)}... (hidden)` : value;
-        }
-      }
-      res.json({
-        message: "Server environment variables",
-        vercel: !!process.env.VERCEL,
-        node_env: process.env.NODE_ENV,
-        env: sanitizedEnv,
-      });
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to read environment variables' });
-    }
-  });
-
   // Simple test endpoint - no dependencies
   app.get("/api/test", (req, res) => {
     res.json({ 
@@ -2687,7 +2672,7 @@ Return a comprehensive analysis with:
 - Strategic reasoning about the cluster`;
 
       // Call OpenAI with structured output for holistic analysis
-      const openaiResponse = await openai.chat.completions.create({
+      const openaiResponse = await getOpenAIClient().chat.completions.create({
         messages: [
           { role: 'system', content: 'You are a Bitcoin news analyst performing strategic cluster analysis. Provide holistic recommendations.' },
           { role: 'user', content: prompt }
@@ -2798,7 +2783,7 @@ For example:
 
 Return groups of dates that overlap. Keep the first date in each group, mark others as duplicates.`;
 
-      const overlapResponse = await openai.chat.completions.create({
+      const overlapResponse = await getOpenAIClient().chat.completions.create({
         messages: [
           { role: 'system', content: 'You are a Bitcoin news analyst detecting duplicate coverage.' },
           { role: 'user', content: overlapPrompt }
@@ -2946,7 +2931,7 @@ TASK: Select the BEST article that:
 Return the article ID and explain why it doesn't overlap.`;
 
           try {
-            const suggestionResponse = await openai.chat.completions.create({
+            const suggestionResponse = await getOpenAIClient().chat.completions.create({
               messages: [
                 { role: 'system', content: 'You are a Bitcoin news analyst selecting non-overlapping coverage.' },
                 { role: 'user', content: suggestionPrompt }
@@ -3668,6 +3653,12 @@ Keep reasoning concise (10-30 words).`;
         if (failedDates.length > 0) {
           console.log(`❌ Failed dates: ${failedDates.join(', ')}`);
         }
+        
+        // Invalidate catalog cache since tags were updated (both regular and manual-only)
+        cacheManager.invalidate('tags:catalog');
+      cacheManager.invalidate('tags:catalog:manual');
+        cacheManager.invalidate('tags:catalog:manual');
+        
         isBatchTaggingRunning = false;
       })();
       
@@ -3717,61 +3708,128 @@ Keep reasoning concise (10-30 words).`;
     }
   });
 
-  // Get entity catalog with counts
+  // Get entity catalog with counts (OPTIMIZED: Uses PostgreSQL JSONB aggregation + caching)
   app.get("/api/tags/catalog", async (req, res) => {
     try {
-      console.log("📊 Fetching tag catalog");
+      const { manualOnly } = req.query;
+      const isManualOnly = manualOnly === 'true';
       
-      const allAnalyses = await storage.getAllAnalyses();
+      // Check cache first (5 minute TTL) - cache key includes manualOnly filter
+      const cacheKey = isManualOnly ? 'tags:catalog:manual' : 'tags:catalog';
+      const cached = cacheManager.get(cacheKey);
+      if (cached) {
+        console.log(`📊 Returning cached tag catalog${isManualOnly ? ' (manual only)' : ''}`);
+        return res.json(cached);
+      }
       
-      // Count entities
-      const entityCounts: Record<string, { category: string; name: string; count: number }> = {};
-      let taggedCount = 0;
-      let untaggedCount = 0;
+      console.log(`📊 Fetching tag catalog (optimized)${isManualOnly ? ' - manual only' : ''}`);
       
-      allAnalyses.forEach((analysis: HistoricalNewsAnalysis) => {
-        const hasTags = analysis.tags && Array.isArray(analysis.tags) && analysis.tags.length > 0;
-        
-        if (hasTags) {
-          taggedCount++;
-          analysis.tags.forEach(tag => {
-            const key = `${tag.category}::${tag.name}`;
-            if (!entityCounts[key]) {
-              entityCounts[key] = {
-                category: tag.category,
-                name: tag.name,
-                count: 0
-              };
-            }
-            entityCounts[key].count++;
-          });
-        } else {
-          untaggedCount++;
-        }
-      });
+      // Import db dynamically to avoid circular dependencies
+      const { db } = await import("./db.js");
       
-      // Group entities by category
-      const entitiesByCategory: Record<string, typeof entityCounts[string][]> = {};
-      Object.values(entityCounts).forEach(entity => {
-        if (!entitiesByCategory[entity.category]) {
-          entitiesByCategory[entity.category] = [];
-        }
-        entitiesByCategory[entity.category].push(entity);
-      });
+      // Use PostgreSQL JSONB functions to extract and count in database
+      // This is much faster than loading all records into memory
+      // Build SQL query conditionally based on manualOnly filter
+      let result;
+      if (isManualOnly) {
+        result = await db.execute(sql`
+          WITH tag_expanded AS (
+            SELECT 
+              jsonb_array_elements(tags) as tag
+            FROM historical_news_analyses
+            WHERE tags IS NOT NULL AND jsonb_typeof(tags) = 'array'
+              AND is_manual_override = true
+          ),
+          tag_counts AS (
+            SELECT 
+              tag->>'category' as category,
+              tag->>'name' as name,
+              COUNT(*)::integer as count
+            FROM tag_expanded
+            GROUP BY tag->>'category', tag->>'name'
+          ),
+          category_groups AS (
+            SELECT 
+              category,
+              jsonb_agg(
+                jsonb_build_object('category', category, 'name', name, 'count', count)
+                ORDER BY count DESC
+              ) as entities
+            FROM tag_counts
+            GROUP BY category
+          ),
+          counts AS (
+            SELECT 
+              COUNT(*)::integer as total_analyses,
+              COUNT(*) FILTER (WHERE tags IS NOT NULL AND jsonb_typeof(tags) = 'array')::integer as tagged_count,
+              COUNT(*) FILTER (WHERE tags IS NULL OR jsonb_typeof(tags) != 'array')::integer as untagged_count
+            FROM historical_news_analyses
+            WHERE is_manual_override = true
+          )
+          SELECT 
+            COALESCE(jsonb_object_agg(category, entities), '{}'::jsonb) as entities_by_category,
+            (SELECT tagged_count FROM counts) as tagged_count,
+            (SELECT untagged_count FROM counts) as untagged_count,
+            (SELECT total_analyses FROM counts) as total_analyses
+          FROM category_groups;
+        `);
+      } else {
+        result = await db.execute(sql`
+          WITH tag_expanded AS (
+            SELECT 
+              jsonb_array_elements(tags) as tag
+            FROM historical_news_analyses
+            WHERE tags IS NOT NULL AND jsonb_typeof(tags) = 'array'
+          ),
+          tag_counts AS (
+            SELECT 
+              tag->>'category' as category,
+              tag->>'name' as name,
+              COUNT(*)::integer as count
+            FROM tag_expanded
+            GROUP BY tag->>'category', tag->>'name'
+          ),
+          category_groups AS (
+            SELECT 
+              category,
+              jsonb_agg(
+                jsonb_build_object('category', category, 'name', name, 'count', count)
+                ORDER BY count DESC
+              ) as entities
+            FROM tag_counts
+            GROUP BY category
+          ),
+          counts AS (
+            SELECT 
+              COUNT(*)::integer as total_analyses,
+              COUNT(*) FILTER (WHERE tags IS NOT NULL AND jsonb_typeof(tags) = 'array')::integer as tagged_count,
+              COUNT(*) FILTER (WHERE tags IS NULL OR jsonb_typeof(tags) != 'array')::integer as untagged_count
+            FROM historical_news_analyses
+          )
+          SELECT 
+            COALESCE(jsonb_object_agg(category, entities), '{}'::jsonb) as entities_by_category,
+            (SELECT tagged_count FROM counts) as tagged_count,
+            (SELECT untagged_count FROM counts) as untagged_count,
+            (SELECT total_analyses FROM counts) as total_analyses
+          FROM category_groups;
+        `);
+      }
       
-      // Sort entities within each category by count (descending)
-      Object.keys(entitiesByCategory).forEach(category => {
-        entitiesByCategory[category].sort((a, b) => b.count - a.count);
-      });
+      const data = result.rows[0];
       
-      console.log(`✅ Catalog: ${taggedCount} tagged, ${untaggedCount} untagged, ${Object.keys(entityCounts).length} unique entities`);
+      const response = {
+        entitiesByCategory: data.entities_by_category || {},
+        taggedCount: parseInt(data.tagged_count) || 0,
+        untaggedCount: parseInt(data.untagged_count) || 0,
+        totalAnalyses: parseInt(data.total_analyses) || 0
+      };
       
-      res.json({
-        entitiesByCategory,
-        taggedCount,
-        untaggedCount,
-        totalAnalyses: allAnalyses.length
-      });
+      // Cache for 5 minutes (300 seconds)
+      cacheManager.set(cacheKey, response, 300000);
+      
+      console.log(`✅ Catalog: ${response.taggedCount} tagged, ${response.untaggedCount} untagged, ${Object.keys(response.entitiesByCategory).length} categories`);
+      
+      res.json(response);
     } catch (error) {
       console.error("❌ Error fetching tag catalog:", error);
       res.status(500).json({ error: (error as Error).message });
@@ -3787,12 +3845,53 @@ Keep reasoning concise (10-30 words).`;
         search, 
         page = '1', 
         pageSize = '50',
-        all 
+        all,
+        manualOnly 
       } = req.query;
       
-      console.log("🔍 Fetching filtered analyses:", { entities, untagged, search, page, pageSize, all });
+      console.log("🔍 Fetching filtered analyses:", { entities, untagged, search, page, pageSize, all, manualOnly });
+      if (manualOnly === 'true') {
+        console.log("📋 Filtering for manually imported events only");
+      }
       
-      const allAnalyses = await storage.getAllAnalyses();
+      // If manualOnly filter is active, use database-level filtering for better performance
+      let allAnalyses: HistoricalNewsAnalysis[];
+      if (manualOnly === 'true') {
+        // Use direct SQL query to filter at database level
+        const { db } = await import("./db.js");
+        const { historicalNewsAnalyses } = await import("@shared/schema");
+        const { eq, desc } = await import("drizzle-orm");
+        allAnalyses = await db
+          .select()
+          .from(historicalNewsAnalyses)
+          .where(eq(historicalNewsAnalyses.isManualOverride, true))
+          .orderBy(desc(historicalNewsAnalyses.date));
+        console.log(`📊 Database query returned ${allAnalyses.length} manually imported analyses`);
+      } else {
+        allAnalyses = await storage.getAllAnalyses();
+      }
+      
+      // Debug: Count manually imported events and check data types
+      if (manualOnly === 'true') {
+        const manualCount = allAnalyses.filter(a => a.isManualOverride === true || a.isManualOverride === 'true').length;
+        const totalCount = allAnalyses.length;
+        const nullCount = allAnalyses.filter(a => a.isManualOverride === null || a.isManualOverride === undefined).length;
+        const falseCount = allAnalyses.filter(a => a.isManualOverride === false).length;
+        const trueCount = allAnalyses.filter(a => a.isManualOverride === true).length;
+        console.log(`📊 Total analyses: ${totalCount}`);
+        console.log(`   - isManualOverride = true: ${trueCount}`);
+        console.log(`   - isManualOverride = false: ${falseCount}`);
+        console.log(`   - isManualOverride = null/undefined: ${nullCount}`);
+        console.log(`   - Manual override (true or 'true'): ${manualCount}`);
+        
+        // Sample a few to see actual values
+        const samples = allAnalyses.slice(0, 5).map(a => ({
+          date: a.date,
+          isManualOverride: a.isManualOverride,
+          type: typeof a.isManualOverride
+        }));
+        console.log(`📋 Sample values:`, JSON.stringify(samples, null, 2));
+      }
       const pageNum = parseInt(page as string);
       const pageSizeNum = parseInt(pageSize as string);
       const returnAll = all === 'true';
@@ -3803,7 +3902,11 @@ Keep reasoning concise (10-30 words).`;
         : [];
       
       // Filter analyses
+      // Note: manualOnly filtering is now done at database level, so we skip it here
       let filtered = allAnalyses.filter((analysis: HistoricalNewsAnalysis) => {
+        // Manual override filter is handled at database level when manualOnly=true
+        // No need to filter here since allAnalyses already contains only manual entries
+        
         // Handle untagged filter
         if (untagged === 'true') {
           const hasNoTags = !analysis.tags || 
@@ -3854,6 +3957,15 @@ Keep reasoning concise (10-30 words).`;
       // Sort by date descending
       filtered.sort((a, b) => b.date.localeCompare(a.date));
       
+      // Debug: Log filter results
+      if (manualOnly === 'true') {
+        console.log(`🔍 After manual filter: ${filtered.length} analyses remain (from ${allAnalyses.length} total)`);
+        if (filtered.length > 0) {
+          console.log(`📅 Sample dates: ${filtered.slice(0, 3).map(a => a.date).join(', ')}`);
+          console.log(`✅ Sample isManualOverride values: ${filtered.slice(0, 3).map(a => a.isManualOverride).join(', ')}`);
+        }
+      }
+      
       // If 'all' parameter is set, return all results without pagination
       if (returnAll) {
         console.log(`✅ Found ${filtered.length} results, returning all (no pagination)`);
@@ -3864,7 +3976,8 @@ Keep reasoning concise (10-30 words).`;
             summary: a.summary,
             winningTier: a.winningTier,
             tags: a.tags || [],
-            analyzedArticles: a.analyzedArticles || []
+            analyzedArticles: a.analyzedArticles || [],
+            isManualOverride: a.isManualOverride || false
           }))
         });
         return;
@@ -3877,7 +3990,10 @@ Keep reasoning concise (10-30 words).`;
       const endIndex = startIndex + pageSizeNum;
       const paginatedResults = filtered.slice(startIndex, endIndex);
       
-      console.log(`✅ Found ${totalCount} results, returning page ${pageNum} of ${totalPages}`);
+      console.log(`✅ Found ${totalCount} results, returning page ${pageNum} of ${totalPages}${manualOnly === 'true' ? ' (manual only)' : ''}`);
+      if (manualOnly === 'true' && totalCount === 0) {
+        console.log('⚠️ No manually imported events found in database');
+      }
       
       res.json({
         analyses: paginatedResults.map((a: HistoricalNewsAnalysis) => ({
@@ -3885,7 +4001,8 @@ Keep reasoning concise (10-30 words).`;
           summary: a.summary,
           winningTier: a.winningTier,
           tags: a.tags || [],
-          analyzedArticles: a.analyzedArticles || []
+          analyzedArticles: a.analyzedArticles || [],
+          isManualOverride: a.isManualOverride || false
         })),
         pagination: {
           currentPage: pageNum,
@@ -3945,6 +4062,11 @@ Keep reasoning concise (10-30 words).`;
       }
       
       console.log(`✅ Added tag to ${updated} analyses`);
+      
+      // Invalidate catalog cache since tags changed
+      cacheManager.invalidate('tags:catalog');
+      cacheManager.invalidate('tags:catalog:manual');
+      
       res.json({ 
         success: true, 
         updated,
@@ -4000,6 +4122,11 @@ Keep reasoning concise (10-30 words).`;
       }
       
       console.log(`✅ Removed tag from ${updated} analyses`);
+      
+      // Invalidate catalog cache since tags changed
+      cacheManager.invalidate('tags:catalog');
+      cacheManager.invalidate('tags:catalog:manual');
+      
       res.json({ 
         success: true, 
         updated,
@@ -4952,6 +5079,378 @@ Keep reasoning concise (10-30 words).`;
     }
   });
 
-  console.log('LOG: registerRoutes() - Finished registering application routes.');
+  // ==================== TAG MANAGEMENT ENDPOINTS ====================
+  
+  // Get all tags with hierarchy and similarity data
+  app.get("/api/tags/manage", async (req, res) => {
+    try {
+      const { db } = await import("./db.js");
+      const { tagMetadata } = await import("@shared/schema");
+      const { normalizeTagName, findSimilarTags } = await import("./services/tag-similarity.js");
+      
+      // Get all tags from metadata table
+      const { asc } = await import("drizzle-orm");
+      const allTags = await db.select().from(tagMetadata).orderBy(asc(tagMetadata.category), asc(tagMetadata.name));
+      
+      // Get all unique tags from analyses for similarity detection
+      const { historicalNewsAnalyses } = await import("@shared/schema");
+      const allAnalyses = await db.select({ tags: historicalNewsAnalyses.tags }).from(historicalNewsAnalyses);
+      
+      // Extract unique tags from analyses
+      const uniqueTagsFromAnalyses = new Set<string>();
+      const tagMap = new Map<string, { name: string; category: string }>();
+      
+      for (const analysis of allAnalyses) {
+        if (analysis.tags && Array.isArray(analysis.tags)) {
+          for (const tag of analysis.tags) {
+            if (tag.name && tag.category) {
+              const key = `${tag.category}::${tag.name}`;
+              if (!tagMap.has(key)) {
+                tagMap.set(key, { name: tag.name, category: tag.category });
+                uniqueTagsFromAnalyses.add(tag.name);
+              }
+            }
+          }
+        }
+      }
+      
+      // Build hierarchy structure
+      const tagById = new Map(allTags.map(t => [t.id, t]));
+      const childrenByParent = new Map<string, typeof allTags>();
+      
+      for (const tag of allTags) {
+        if (tag.parentTagId) {
+          const parentId = tag.parentTagId;
+          if (!childrenByParent.has(parentId)) {
+            childrenByParent.set(parentId, []);
+          }
+          childrenByParent.get(parentId)!.push(tag);
+        }
+      }
+      
+      // Find similar tags for each tag
+      const tagsWithSimilarity = allTags.map(tag => {
+        const candidateTags = Array.from(tagMap.values()).filter(t => t.name !== tag.name);
+        const similar = findSimilarTags(tag.name, candidateTags, 0.7);
+        
+        return {
+          ...tag,
+          children: childrenByParent.get(tag.id) || [],
+          similarTags: similar.slice(0, 5), // Top 5 similar tags
+        };
+      });
+      
+      // Group by category
+      const byCategory = new Map<string, typeof tagsWithSimilarity>();
+      for (const tag of tagsWithSimilarity) {
+        if (!tag.parentTagId) { // Only show top-level tags in category groups
+          if (!byCategory.has(tag.category)) {
+            byCategory.set(tag.category, []);
+          }
+          byCategory.get(tag.category)!.push(tag);
+        }
+      }
+      
+      // Return empty structure if no tags
+      if (allTags.length === 0) {
+        return res.json({
+          tags: [],
+          byCategory: {},
+          totalTags: 0,
+        });
+      }
+      
+      res.json({
+        tags: tagsWithSimilarity,
+        byCategory: Object.fromEntries(byCategory),
+        totalTags: allTags.length,
+      });
+    } catch (error) {
+      console.error("❌ Error fetching tag management data:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+  
+  // Move tag to different category
+  app.post("/api/tags/move", async (req, res) => {
+    try {
+      const { tagId, newCategory } = req.body;
+      if (!tagId || !newCategory) {
+        return res.status(400).json({ error: "tagId and newCategory are required" });
+      }
+      
+      const { db } = await import("./db.js");
+      const { tagMetadata, historicalNewsAnalyses } = await import("@shared/schema");
+      const { normalizeTagName } = await import("./services/tag-similarity.js");
+      const { eq, sql } = await import("drizzle-orm");
+      
+      // Get the tag
+      const [tag] = await db.select().from(tagMetadata).where(eq(tagMetadata.id, tagId));
+      if (!tag) {
+        return res.status(404).json({ error: "Tag not found" });
+      }
+      
+      // Update tag metadata
+      await db
+        .update(tagMetadata)
+        .set({
+          category: newCategory,
+          normalizedName: normalizeTagName(tag.name),
+          updatedAt: new Date(),
+        })
+        .where(eq(tagMetadata.id, tagId));
+      
+      // Update all analyses that use this tag
+      const allAnalyses = await db.select().from(historicalNewsAnalyses);
+      for (const analysis of allAnalyses) {
+        if (analysis.tags && Array.isArray(analysis.tags)) {
+          let updated = false;
+          const updatedTags = analysis.tags.map((t: any) => {
+            if (t.name === tag.name && t.category === tag.category) {
+              updated = true;
+              return { ...t, category: newCategory };
+            }
+            return t;
+          });
+          
+          if (updated) {
+            await db
+              .update(historicalNewsAnalyses)
+              .set({ tags: updatedTags })
+              .where(eq(historicalNewsAnalyses.date, analysis.date));
+          }
+        }
+      }
+      
+      // Invalidate caches
+      cacheManager.invalidate('tags:catalog');
+      cacheManager.invalidate('tags:catalog:manual');
+      
+      res.json({ success: true, message: `Tag moved to ${newCategory}` });
+    } catch (error) {
+      console.error("❌ Error moving tag:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+  
+  // Nest tag under parent tag (create hierarchy)
+  app.post("/api/tags/nest", async (req, res) => {
+    try {
+      const { tagId, parentTagId } = req.body;
+      if (!tagId) {
+        return res.status(400).json({ error: "tagId is required" });
+      }
+      
+      const { db } = await import("./db.js");
+      const { tagMetadata } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+      
+      // Prevent circular references
+      if (parentTagId) {
+        const [parent] = await db.select().from(tagMetadata).where(eq(tagMetadata.id, parentTagId));
+        if (!parent) {
+          return res.status(404).json({ error: "Parent tag not found" });
+        }
+        
+        // Check for circular reference
+        let currentParentId = parent.parentTagId;
+        while (currentParentId) {
+          if (currentParentId === tagId) {
+            return res.status(400).json({ error: "Cannot create circular reference" });
+          }
+          const [currentParent] = await db.select().from(tagMetadata).where(eq(tagMetadata.id, currentParentId));
+          currentParentId = currentParent?.parentTagId || null;
+        }
+      }
+      
+      // Update tag
+      await db
+        .update(tagMetadata)
+        .set({
+          parentTagId: parentTagId || null,
+          updatedAt: new Date(),
+        })
+        .where(eq(tagMetadata.id, tagId));
+      
+      res.json({ success: true, message: "Tag nested successfully" });
+    } catch (error) {
+      console.error("❌ Error nesting tag:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+  
+  // Merge similar tags
+  app.post("/api/tags/merge", async (req, res) => {
+    try {
+      const { sourceTagId, targetTagId } = req.body;
+      if (!sourceTagId || !targetTagId) {
+        return res.status(400).json({ error: "sourceTagId and targetTagId are required" });
+      }
+      
+      const { db } = await import("./db.js");
+      const { tagMetadata, historicalNewsAnalyses } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+      
+      // Get both tags
+      const [sourceTag] = await db.select().from(tagMetadata).where(eq(tagMetadata.id, sourceTagId));
+      const [targetTag] = await db.select().from(tagMetadata).where(eq(tagMetadata.id, targetTagId));
+      
+      if (!sourceTag || !targetTag) {
+        return res.status(404).json({ error: "One or both tags not found" });
+      }
+      
+      // Update all analyses: replace source tag with target tag
+      const allAnalyses = await db.select().from(historicalNewsAnalyses);
+      for (const analysis of allAnalyses) {
+        if (analysis.tags && Array.isArray(analysis.tags)) {
+          let updated = false;
+          const updatedTags = analysis.tags
+            .map((t: any) => {
+              if (t.name === sourceTag.name && t.category === sourceTag.category) {
+                updated = true;
+                return { name: targetTag.name, category: targetTag.category };
+              }
+              return t;
+            })
+            .filter((t: any, index: number, arr: any[]) => {
+              // Remove duplicates
+              return arr.findIndex((other: any) => other.name === t.name && other.category === t.category) === index;
+            });
+          
+          if (updated) {
+            await db
+              .update(historicalNewsAnalyses)
+              .set({ tags: updatedTags })
+              .where(eq(historicalNewsAnalyses.date, analysis.date));
+          }
+        }
+      }
+      
+      // Update usage count
+      await db
+        .update(tagMetadata)
+        .set({
+          usageCount: targetTag.usageCount + sourceTag.usageCount,
+          updatedAt: new Date(),
+        })
+        .where(eq(tagMetadata.id, targetTagId));
+      
+      // Delete source tag
+      await db.delete(tagMetadata).where(eq(tagMetadata.id, sourceTagId));
+      
+      // Invalidate caches
+      cacheManager.invalidate('tags:catalog');
+      cacheManager.invalidate('tags:catalog:manual');
+      
+      res.json({ success: true, message: "Tags merged successfully" });
+    } catch (error) {
+      console.error("❌ Error merging tags:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+  
+  // Find similar tags for a given tag
+  app.get("/api/tags/similarity", async (req, res) => {
+    try {
+      const { tagName, threshold = '0.7' } = req.query;
+      if (!tagName) {
+        return res.status(400).json({ error: "tagName is required" });
+      }
+      
+      const { db } = await import("./db.js");
+      const { historicalNewsAnalyses } = await import("@shared/schema");
+      const { findSimilarTags } = await import("./services/tag-similarity.js");
+      
+      // Get all unique tags from analyses
+      const allAnalyses = await db.select({ tags: historicalNewsAnalyses.tags }).from(historicalNewsAnalyses);
+      const tagMap = new Map<string, { name: string; category: string }>();
+      
+      for (const analysis of allAnalyses) {
+        if (analysis.tags && Array.isArray(analysis.tags)) {
+          for (const tag of analysis.tags) {
+            if (tag.name && tag.category) {
+              const key = `${tag.category}::${tag.name}`;
+              if (!tagMap.has(key)) {
+                tagMap.set(key, { name: tag.name, category: tag.category });
+              }
+            }
+          }
+        }
+      }
+      
+      const candidateTags = Array.from(tagMap.values());
+      const similar = findSimilarTags(tagName as string, candidateTags, parseFloat(threshold as string));
+      
+      res.json({ similarTags: similar });
+    } catch (error) {
+      console.error("❌ Error finding similar tags:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+  
+  // Initialize tag metadata from existing tags in analyses
+  app.post("/api/tags/initialize", async (req, res) => {
+    try {
+      const { db } = await import("./db.js");
+      const { tagMetadata, historicalNewsAnalyses } = await import("@shared/schema");
+      const { normalizeTagName } = await import("./services/tag-similarity.js");
+      const { sql: drizzleSql } = await import("drizzle-orm");
+      
+      // Get all unique tags from analyses
+      const result = await db.execute(drizzleSql`
+        WITH tag_expanded AS (
+          SELECT DISTINCT
+            tag->>'name' as name,
+            tag->>'category' as category,
+            COUNT(*)::integer as usage_count
+          FROM historical_news_analyses,
+            jsonb_array_elements(tags) as tag
+          WHERE tags IS NOT NULL AND jsonb_typeof(tags) = 'array'
+          GROUP BY tag->>'name', tag->>'category'
+        )
+        SELECT name, category, usage_count
+        FROM tag_expanded
+        ORDER BY category, name;
+      `);
+      
+      // Insert into tag_metadata (ignore duplicates)
+      let inserted = 0;
+      let skipped = 0;
+      
+      // Use raw SQL for better conflict handling
+      for (const row of result.rows) {
+        try {
+          const insertResult = await db.execute(drizzleSql`
+            INSERT INTO tag_metadata (name, category, normalized_name, usage_count)
+            VALUES (${row.name}, ${row.category}, ${normalizeTagName(row.name as string)}, ${parseInt(String(row.usage_count)) || 0})
+            ON CONFLICT (name, category) DO NOTHING
+            RETURNING id;
+          `);
+          
+          if (insertResult.rows && insertResult.rows.length > 0) {
+            inserted++;
+          } else {
+            skipped++;
+          }
+        } catch (error: any) {
+          // Ignore duplicates - check if it's a unique constraint violation
+          if (error?.code === '23505') {
+            skipped++;
+          } else {
+            console.error(`Error inserting tag ${row.name}:`, error);
+            // Continue with next tag
+          }
+        }
+      }
+      
+      console.log(`✅ Tag initialization: ${inserted} inserted, ${skipped} skipped (duplicates), ${result.rows.length} total`);
+      
+      res.json({ success: true, inserted, skipped, total: result.rows.length });
+    } catch (error) {
+      console.error("❌ Error initializing tag metadata:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
   return httpServer;
 }

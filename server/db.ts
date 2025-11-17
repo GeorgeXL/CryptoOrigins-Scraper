@@ -8,16 +8,19 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const { Pool } = pg;
 import * as schema from "@shared/schema";
 
-// Vercel provides POSTGRES_URL through Postgres Storage integration
-const databaseUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
-
-// Log database URL status (without exposing the full connection string)
-if (!databaseUrl) {
-  console.error("⚠️  WARNING: DATABASE_URL or POSTGRES_URL not set!");
-  console.error("   The server will start but database operations will fail.");
-  console.error("   Set DATABASE_URL in your .env file or Vercel environment variables.");
-} else {
-  // Log partial connection info for debugging (hide sensitive parts)
+// Function to get database URL lazily (not at module load time)
+// This ensures Vercel's environment variables are available when accessed
+function getDatabaseUrl(): string {
+  const databaseUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+  
+  if (!databaseUrl) {
+    console.error("⚠️  WARNING: DATABASE_URL or POSTGRES_URL not set!");
+    console.error("   The server will start but database operations will fail.");
+    console.error("   Set DATABASE_URL in your .env file or Vercel environment variables.");
+    throw new Error("FATAL: DATABASE_URL or POSTGRES_URL is not set in environment variables.");
+  }
+  
+  // Log partial connection info for debugging (hide sensitive parts) - only on first access
   try {
     const urlParts = new URL(databaseUrl);
     console.log(`✅ DATABASE_URL found: ${urlParts.protocol}//${urlParts.hostname}:${urlParts.port}/${urlParts.pathname.split('/').pop()}`);
@@ -25,6 +28,8 @@ if (!databaseUrl) {
     // If URL parsing fails, just confirm it's set
     console.log(`✅ DATABASE_URL found (format: ${databaseUrl.substring(0, 20)}...)`);
   }
+  
+  return databaseUrl;
 }
 
 // Create connection pool for Supabase PostgreSQL
@@ -36,9 +41,8 @@ function getDbInstance() {
     return dbInstance;
   }
 
-  if (!databaseUrl) {
-    throw new Error("FATAL: DATABASE_URL or POSTG-RES_URL is not set in Vercel environment variables.");
-  }
+  // Get database URL lazily (reads from process.env at runtime, not module load time)
+  const databaseUrl = getDatabaseUrl();
 
   try {
     const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;

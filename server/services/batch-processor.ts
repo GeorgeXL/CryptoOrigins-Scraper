@@ -2,9 +2,19 @@ import OpenAI from "openai";
 import { type BatchEvent } from "@shared/schema";
 import { apiMonitor } from './api-monitor';
 
-const openai = new OpenAI({ 
-  apiKey: process.env.OPENAI_API_KEY
-});
+// Lazy initialization to avoid reading env vars at module load time
+let _openaiInstance: OpenAI | null = null;
+
+function getOpenAIClient(): OpenAI {
+  if (!_openaiInstance) {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY environment variable is required. Please set it in your Vercel environment variables.");
+    }
+    _openaiInstance = new OpenAI({ apiKey });
+  }
+  return _openaiInstance;
+}
 
 export interface BatchEnhancementResult {
   success: boolean;
@@ -159,7 +169,7 @@ Context: These events are part of a curated collection focusing on ${groupName.t
     const startTime = Date.now();
 
     try {
-      const response = await openai.chat.completions.create({
+      const response = await getOpenAIClient().chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },

@@ -8,7 +8,8 @@ import {
   Bitcoin,
   Zap,
   Sparkles,
-  Tag
+  Tag,
+  Layers
 } from "lucide-react";
 import CSVImportDialog from './CSVImportDialog';
 import ApiMonitor from './ApiMonitor';
@@ -32,6 +33,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
     { path: "/event-cockpit", label: "Event Cockpit", icon: Zap, active: location === "/event-cockpit" },
     { path: "/cleaner", label: "Cleanerrr", icon: Sparkles, active: location === "/cleaner" },
     { path: "/tags-browser", label: "Tags Browser", icon: Tag, active: location === "/tags-browser" },
+    { path: "/tag-manager", label: "Tag Manager", icon: Layers, active: location === "/tag-manager" },
   ];
 
   return (
@@ -74,7 +76,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
               </nav>
               
               {/* Dynamic Breadcrumb Navigation - Only show on non-home pages */}
-              {location !== "/" && location !== "/event-cockpit" && location !== "/cleaner" && location !== "/tags-browser" && (
+              {location !== "/" && location !== "/event-cockpit" && location !== "/cleaner" && location !== "/tags-browser" && location !== "/tag-manager" && (
                 <div className="hidden md:block">
                   <Breadcrumb items={(() => {
                     // Settings page
