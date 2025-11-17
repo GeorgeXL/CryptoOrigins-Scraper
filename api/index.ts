@@ -5,6 +5,10 @@ import type { Express } from 'express';
 // @ts-ignore - Vercel will compile this, and the server code is built first
 import { createApp } from "../dist/index.js";
 
+// Initialize the app promise outside of the handler
+// This ensures it's only created once per serverless instance
+const appPromise = createApp();
+
 type AppContainer = { app: Express; server: any };
 
 let appPromise: Promise<AppContainer> | null = null;
@@ -18,8 +22,7 @@ const initializeApp = () => {
 
 export default async function handler(req: any, res: any) {
   try {
-    const promise = initializeApp();
-    const { app } = await promise;
+    const { app } = await appPromise;
 
     // Handle the request with Express
     return new Promise((resolve) => {
