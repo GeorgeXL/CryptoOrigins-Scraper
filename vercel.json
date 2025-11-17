@@ -1,11 +1,22 @@
 {
-  "version": 2,
   "buildCommand": "npm run build",
-  "installCommand": "npm install",
   "outputDirectory": "dist/public",
   "functions": {
     "api/*.ts": {
       "maxDuration": 60
     }
-  }
+  },
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
 }
