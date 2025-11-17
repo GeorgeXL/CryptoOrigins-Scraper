@@ -1612,16 +1612,22 @@ Count characters carefully to ensure 100-110 character length.`;
     }
   });
 
+  // Only create HTTP server and WebSocket in non-serverless environments
+  const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
   const httpServer = createServer(app);
 
-  // WebSocket for real-time API monitoring
-  const { WebSocketServer } = await import('ws');
-  const wss = new WebSocketServer({ server: httpServer, path: '/api/monitor/ws' });
+  // WebSocket for real-time API monitoring (disabled in serverless)
+  let wss: any = null;
+  if (!isServerless) {
+    const { WebSocketServer } = await import('ws');
+    wss = new WebSocketServer({ server: httpServer, path: '/api/monitor/ws' });
+  }
   
   // Store connected clients
   const monitoringClients = new Set<any>();
   
-  wss.on('connection', (ws) => {
+  if (wss) {
+    wss.on('connection', (ws) => {
     console.log('📡 API Monitor client connected');
     monitoringClients.add(ws);
     
@@ -1662,6 +1668,7 @@ Count characters carefully to ensure 100-110 character length.`;
       }
     }
   });
+  } // End of if (wss) block
   
   // API monitoring endpoints
   app.get('/api/monitor/stats', async (req, res) => {
