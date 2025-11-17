@@ -62,6 +62,16 @@ let batchTaggingProcessed = 0;
 let batchTaggingTotal = 0;
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Simple test endpoint - no dependencies
+  app.get("/api/test", (req, res) => {
+    res.json({ 
+      message: "API is running!", 
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || "production",
+      vercel: !!process.env.VERCEL 
+    });
+  });
+
   // Analysis routes
   app.get("/api/analysis/stats", async (req, res) => {
     try {
