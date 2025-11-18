@@ -7,7 +7,7 @@ import type { Express } from 'express';
 // Import from built server code (built during Vercel build step)
 // The build process creates dist/server/serverless.js from server/serverless.ts
 // @ts-ignore - Vercel will compile this, and the server code is built first
-import { createApp } from "../dist/server/serverless.js";
+// import { createApp } from "../dist/server/serverless.js"; // Changed to dynamic import below
 
 type AppContainer = { app: Express; server: any };
 
@@ -17,7 +17,18 @@ let appPromise: Promise<AppContainer> | null = null;
 function getOrCreateApp(): Promise<AppContainer> {
   if (!appPromise) {
     console.log('🔧 Initializing app on first request...');
-    appPromise = createApp().catch((error: Error) => {
+    appPromise = (async () => {
+      try {
+        // Dynamic import to catch module loading errors
+        console.log('📦 Dynamically importing server/serverless.js...');
+        const serverlessModule = await import("../dist/server/serverless.js");
+        console.log('✅ Module imported. Creating app...');
+        return serverlessModule.createApp();
+      } catch (err) {
+        console.error('❌ FATAL: Failed to load server module:', err);
+        throw err;
+      }
+    })().catch((error: Error) => {
       console.error('❌ FATAL: Failed to create app:', error);
       console.error('   Error message:', error.message);
       console.error('   Error stack:', error.stack);
