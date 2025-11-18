@@ -40,6 +40,7 @@ function getOrCreateApp(): Promise<AppContainer> {
         for (const importPath of importPaths) {
           try {
             console.log(`📦 Trying to import: ${importPath}...`);
+            // @ts-ignore - Dynamic import, type will be checked at runtime
             serverlessModule = await import(importPath);
             console.log(`✅ Successfully imported from: ${importPath}`);
             break;
