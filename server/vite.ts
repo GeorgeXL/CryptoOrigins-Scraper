@@ -86,9 +86,11 @@ export function serveStatic(app: Express) {
     : path.resolve(import.meta.dirname, "..", "dist");
 
   if (!fs.existsSync(distPath)) {
-    throw new Error(
-      `Could not find the build directory: ${distPath}, make sure to build the client first`,
-    );
+    // In Vercel serverless functions, we might be running in a different context
+    // where static files are handled differently or we only care about API routes.
+    // Don't crash the server if dist is missing, just log it.
+    console.warn(`⚠️ Could not find the build directory: ${distPath}. Static files will not be served.`);
+    return;
   }
 
   app.use(express.static(distPath));
