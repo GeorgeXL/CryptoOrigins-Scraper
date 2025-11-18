@@ -27,12 +27,33 @@ function getOrCreateApp(): Promise<AppContainer> {
     
     appPromise = (async () => {
       try {
-        // Dynamic import to catch module loading errors
-        const importPath = "../dist/server/serverless.js";
-        console.log(`📦 Dynamically importing: ${importPath}...`);
+        // Try multiple import paths - Vercel's file structure can vary
+        const importPaths = [
+          "../dist/server/serverless.js",
+          "./dist/server/serverless.js",
+          "../server/serverless.js",
+        ];
         
-        // Try to import the module
-        const serverlessModule = await import(importPath);
+        let serverlessModule: any = null;
+        let lastError: any = null;
+        
+        for (const importPath of importPaths) {
+          try {
+            console.log(`📦 Trying to import: ${importPath}...`);
+            serverlessModule = await import(importPath);
+            console.log(`✅ Successfully imported from: ${importPath}`);
+            break;
+          } catch (importErr: any) {
+            console.log(`❌ Failed to import from ${importPath}:`, importErr?.message);
+            lastError = importErr;
+            continue;
+          }
+        }
+        
+        if (!serverlessModule) {
+          throw new Error(`Failed to import serverless module from any path. Last error: ${lastError?.message}`);
+        }
+        
         console.log('✅ Module imported successfully');
         console.log('📋 Module exports:', Object.keys(serverlessModule));
         
