@@ -2,9 +2,14 @@ import OpenAI from "openai";
 import { periodDetector } from './period-detector';
 import { type ArticleData } from '@shared/schema';
 
-const openai = new OpenAI({ 
-  apiKey: process.env.OPENAI_API_KEY
-});
+export const getOpenAIClient = () => {
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn("⚠️ OPENAI_API_KEY is missing. OpenAI features will fail.");
+  }
+  return new OpenAI({ 
+    apiKey: process.env.OPENAI_API_KEY
+  });
+};
 
 // Error categorization function for better monitoring
 function getErrorCategory(errorMessage: string): 'validation' | 'network' | 'rate-limit' | 'parsing' | 'other' {
@@ -231,7 +236,7 @@ ${formatArticlesForPrompt(uniqueArticles, date)}
     });
     
     // Single attempt only - no retries to enforce API limit
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAIClient().chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system" as const, content: systemPrompt },
@@ -447,7 +452,7 @@ ${article.score ? `Relevance Score: ${article.score}` : ''}
     // Single attempt only - no retries to enforce API limit
     console.log('📞 Making OpenAI API call with gpt-4o-mini...');
     
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAIClient().chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system" as const, content: systemPrompt },
@@ -649,7 +654,7 @@ function getHistoricalPeriod(year: number): string {
 
 export async function testOpenAIConnection(): Promise<{ success: boolean; error?: string }> {
   try {
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAIClient().chat.completions.create({
       model: "gpt-4o-mini", // Using gpt-4o-mini for enhanced Bitcoin news analysis
       messages: [{ role: "user" as const, content: "Test connection. Respond with 'OK'." }],
       max_completion_tokens: 10,
@@ -667,7 +672,7 @@ export async function testOpenAIConnection(): Promise<{ success: boolean; error?
 // Export a simple service object for use in URL scraping
 export const openaiService = {
   createCompletion: async (messages: Array<{ role: string; content: string }>) => {
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAIClient().chat.completions.create({
       model: "gpt-4o-mini", // Using gpt-4o-mini for enhanced Bitcoin news analysis
       messages: messages as any,
       response_format: { type: "json_object" },
@@ -1040,7 +1045,7 @@ Be inclusive - if crypto enthusiasts would find value in the article, return tru
       }
     });
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAIClient().chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { 
@@ -1161,7 +1166,7 @@ Respond with JSON:
   "reasoning": "Brief explanation of decision"
 }`;
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAIClient().chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.1,
@@ -1229,7 +1234,7 @@ Respond with JSON:
   "reasoning": "brief explanation of improvements made"
 }`;
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAIClient().chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.2,
@@ -1399,7 +1404,7 @@ Return JSON only:
 Remember: Your recommendation directly impacts which date we keep in our historical database. Be thorough and precise.`;
 
   try {
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAIClient().chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.1,
@@ -1478,7 +1483,7 @@ Your summary (100-110 characters, NO period at end):`;
       }
     });
 
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAIClient().chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.3,
@@ -1554,7 +1559,7 @@ Return ONLY the summary text:`;
         }
       });
 
-      const retryResponse = await openai.chat.completions.create({
+      const retryResponse = await getOpenAIClient().chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: retryPrompt }],
         temperature: 0.3,
