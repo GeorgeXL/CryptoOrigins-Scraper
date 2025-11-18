@@ -17,15 +17,42 @@ let appPromise: Promise<AppContainer> | null = null;
 function getOrCreateApp(): Promise<AppContainer> {
   if (!appPromise) {
     console.log('🔧 Initializing app on first request...');
+    console.log('📂 Current working directory:', process.cwd());
+    console.log('📂 __dirname equivalent:', import.meta.url);
+    console.log('🔍 Environment check:');
+    console.log('   VERCEL:', process.env.VERCEL);
+    console.log('   NODE_ENV:', process.env.NODE_ENV);
+    console.log('   DATABASE_URL:', process.env.DATABASE_URL ? 'Set' : 'NOT SET');
+    console.log('   POSTGRES_URL:', process.env.POSTGRES_URL ? 'Set' : 'NOT SET');
+    
     appPromise = (async () => {
       try {
         // Dynamic import to catch module loading errors
-        console.log('📦 Dynamically importing server/serverless.js...');
-        const serverlessModule = await import("../dist/server/serverless.js");
-        console.log('✅ Module imported. Creating app...');
-        return serverlessModule.createApp();
-      } catch (err) {
-        console.error('❌ FATAL: Failed to load server module:', err);
+        const importPath = "../dist/server/serverless.js";
+        console.log(`📦 Dynamically importing: ${importPath}...`);
+        
+        // Try to import the module
+        const serverlessModule = await import(importPath);
+        console.log('✅ Module imported successfully');
+        console.log('📋 Module exports:', Object.keys(serverlessModule));
+        
+        if (!serverlessModule.createApp) {
+          throw new Error('createApp function not found in serverless module');
+        }
+        
+        console.log('🔧 Calling createApp()...');
+        const appContainer = await serverlessModule.createApp();
+        console.log('✅ App created successfully');
+        return appContainer;
+      } catch (err: any) {
+        console.error('❌ FATAL: Failed to load server module');
+        console.error('   Error type:', err?.constructor?.name);
+        console.error('   Error message:', err?.message);
+        console.error('   Error code:', err?.code);
+        console.error('   Error stack:', err?.stack);
+        if (err?.cause) {
+          console.error('   Error cause:', err.cause);
+        }
         throw err;
       }
     })().catch((error: Error) => {
