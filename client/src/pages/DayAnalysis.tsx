@@ -51,7 +51,15 @@ import {
   Shield,
   CheckCircle,
   XCircle,
-  Loader2
+  Loader2,
+  Globe,
+  Building,
+  User,
+  Building2,
+  Hash,
+  Sparkles,
+  Tag,
+  Minus
 } from "lucide-react";
 import { SiGoogle } from "react-icons/si";
 
@@ -68,6 +76,7 @@ interface DayAnalysisData {
     isManualOverride?: boolean;
     isFlagged?: boolean;
     flagReason?: string;
+    tags?: Array<{ name: string; category: string }>;
     articleTags?: {
       totalArticles: number;
       topSources: string[];
@@ -133,6 +142,56 @@ export default function DayAnalysis() {
   // Get the source parameter from URL to determine back button behavior
   const urlParams = new URLSearchParams(window.location.search);
   const source = urlParams.get('from') || 'month'; // default to month view
+
+  // Helper function to get category icon
+  const getCategoryIcon = (category: string) => {
+    switch (category.toLowerCase()) {
+      case 'country':
+        return Globe;
+      case 'company':
+        return Building;
+      case 'person':
+        return User;
+      case 'crypto':
+      case 'cryptocurrency':
+        return Coins;
+      case 'organization':
+        return Building2;
+      case 'protocol':
+        return Hash;
+      case 'topic':
+        return Sparkles;
+      case 'system':
+        return Minus;
+      default:
+        return Tag;
+    }
+  };
+
+  // Helper function to get category color
+  const getCategoryColor = (category: string) => {
+    switch (category.toLowerCase()) {
+      case 'country':
+        return 'bg-blue-100 text-blue-700 border-blue-300';
+      case 'company':
+        return 'bg-purple-100 text-purple-700 border-purple-300';
+      case 'person':
+        return 'bg-green-100 text-green-700 border-green-300';
+      case 'crypto':
+      case 'cryptocurrency':
+        return 'bg-orange-100 text-orange-700 border-orange-300';
+      case 'organization':
+        return 'bg-indigo-100 text-indigo-700 border-indigo-300';
+      case 'protocol':
+        return 'bg-cyan-100 text-cyan-700 border-cyan-300';
+      case 'topic':
+        return 'bg-pink-100 text-pink-700 border-pink-300';
+      case 'system':
+        return 'bg-gray-100 text-gray-500 border-gray-300 italic';
+      default:
+        return 'bg-slate-100 text-slate-700 border-slate-300';
+    }
+  };
 
   // Helper function to get AI provider badge
   const getAIProviderBadge = (provider: string) => {
@@ -883,6 +942,31 @@ export default function DayAnalysis() {
                       )}
                     </div>
                   )}
+                  
+                  {/* Tags */}
+                  {dayData.analysis.tags && dayData.analysis.tags.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-slate-200">
+                      <div className="flex items-center space-x-2 mb-2">
+                        <Tag className="w-4 h-4 text-slate-500" />
+                        <h5 className="text-sm font-medium text-slate-700">Tags</h5>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {dayData.analysis.tags.map((tag, idx) => {
+                          const Icon = getCategoryIcon(tag.category);
+                          return (
+                            <Badge
+                              key={`${tag.name}-${idx}`}
+                              variant="outline"
+                              className={`${getCategoryColor(tag.category)} flex items-center space-x-1`}
+                            >
+                              <Icon className="w-3 h-3" />
+                              <span>{tag.name}</span>
+                            </Badge>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 
 
@@ -1556,212 +1640,10 @@ export default function DayAnalysis() {
                 </TabsContent>
               </Tabs>
             ) : (
-              /* Legacy Article Display for Backward Compatibility */
-              <div className="space-y-4">
-                <div className="bg-slate-50 p-4 rounded-lg border">
-                  <h4 className="font-medium text-slate-900 mb-2 flex items-center">
-                    <BarChart3 className="w-4 h-4 mr-2" />
-                    Search Analysis (Legacy)
-                  </h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                    <div>
-                      <span className="text-slate-500">Tier Used:</span>
-                      <div className="font-medium text-slate-900 capitalize">{(dayData?.analysis as any)?.tierUsed || 'Unknown'}</div>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Total Searched:</span>
-                      <div className="font-medium text-slate-900">{analyzedArticles.length}</div>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Sources:</span>
-                      <div className="font-medium text-slate-900">EXA</div>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Data Version:</span>
-                      <div className="font-medium text-slate-900">v1-legacy</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Legacy Articles Display */}
-                {(() => {
-                  const startIndex = (currentPage - 1) * articlesPerPage;
-                const endIndex = startIndex + articlesPerPage;
-                const currentArticles = analyzedArticles.slice(startIndex, endIndex);
-                const totalPages = Math.ceil(analyzedArticles.length / articlesPerPage);
-
-                return (
-                  <>
-                    {currentArticles.map((article) => {
-                      const isSelectedArticle = dayData?.analysis.topArticleId === article.id;
-                      
-                      return (
-                        <div 
-                          key={article.id} 
-                          className={`border rounded-lg p-4 ${
-                            isSelectedArticle ? 'border-blue-300 bg-blue-50' : 'border-slate-200'
-                          }`}
-                        >
-                          {isSelectedArticle && (
-                            <div className="mb-3">
-                              <Badge className="bg-blue-600 text-white">
-                                <Star className="w-3 h-3 mr-1" />
-                                Selected for Analysis
-                              </Badge>
-                            </div>
-                          )}
-                          
-                          <div className="flex justify-between items-start">
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-slate-500 text-sm font-medium">
-                                    {new URL(article.url).hostname}
-                                  </span>
-                                  <span className="text-slate-400">•</span>
-                                  <span className="text-slate-500 text-sm">
-                                    {new Date(article.publishedDate).toLocaleTimeString('en-US', {
-                                      hour: 'numeric',
-                                      minute: '2-digit',
-                                      hour12: true
-                                    })}
-                                  </span>
-                                  {article.source && (
-                                    <>
-                                      <span className="text-slate-400">•</span>
-                                      <Badge 
-                                        variant="outline"
-                                        className={`text-xs ${
-                                          article.source === 'EXA' 
-                                            ? 'bg-green-100 text-green-800 border-green-200' 
-                                            : 'bg-amber-100 text-amber-800 border-amber-200'
-                                        }`}
-                                      >
-                                        {article.source}
-                                      </Badge>
-                                    </>
-                                  )}
-                                </div>
-                                
-                                {/* Article Selection Star */}
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0 hover:bg-slate-100"
-                                  onClick={() => handleArticleSelect(article.id)}
-                                  disabled={selectingArticleId === article.id || selectArticleMutation.isPending}
-                                  title={isSelectedArticle ? "Currently selected article" : "Select this article for analysis"}
-                                >
-                                  {selectingArticleId === article.id ? (
-                                    <RefreshCw className="w-4 h-4 animate-spin text-slate-600" />
-                                  ) : isSelectedArticle ? (
-                                    <Star className="w-4 h-4 fill-slate-600 text-slate-600" />
-                                  ) : (
-                                    <Star className="w-4 h-4 text-slate-400 hover:text-slate-600 transition-colors" />
-                                  )}
-                                </Button>
-                              </div>
-                              
-                              <h5 className="font-semibold text-slate-900 mb-2 leading-tight">
-                                <a 
-                                  href={article.url} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className="hover:text-blue-600 transition-colors"
-                                >
-                                  {article.title}
-                                </a>
-                              </h5>
-                              
-                              {/* EXA Rich Summary */}
-                              {article.summary && (
-                                <div className="mb-3">
-                                  <div className="text-xs text-slate-500 mb-1 uppercase tracking-wide">EXA AI Summary</div>
-                                  <p className="text-slate-700 text-sm leading-relaxed bg-white p-3 rounded border">
-                                    {article.summary}
-                                  </p>
-                                </div>
-                              )}
-                              
-                              {/* Final Analysis Summary Comparison */}
-                              {isSelectedArticle && dayData?.analysis.summary && (
-                                <div className="mb-3">
-                                  <div className="text-xs text-blue-600 mb-1 uppercase tracking-wide">Final Analysis (100-110 chars)</div>
-                                  <p className="text-blue-800 text-sm font-medium bg-blue-100 p-2 rounded border border-blue-200">
-                                    {dayData.analysis.summary}
-                                  </p>
-                                </div>
-                              )}
-                              
-                              <div className="flex items-center space-x-4 text-xs text-slate-500">
-                                {article.author && (
-                                  <span><Eye className="w-3 h-3 mr-1 inline" />By {article.author}</span>
-                                )}
-                                {article.score && (
-                                  <span><BarChart3 className="w-3 h-3 mr-1 inline" />Relevance: {(article.score * 100).toFixed(1)}%</span>
-                                )}
-                              </div>
-                            </div>
-                            
-                            <div className="text-right ml-4 space-y-2">
-                              {article.score && (
-                                <div className="text-emerald-600 text-sm font-medium">
-                                  {(article.score * 10).toFixed(1)}/10
-                                </div>
-                              )}
-                              <Button variant="outline" size="sm" asChild>
-                                <a href={article.url} target="_blank" rel="noopener noreferrer">
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
-                              </Button>
-                            </div>
-                          </div>
-                      </div>
-                    );
-                  })}
-                    
-                    {/* Pagination Controls */}
-                    {totalPages > 1 && (
-                      <div className="flex items-center justify-between border-t pt-4">
-                        <div className="text-sm text-slate-600">
-                          Showing {startIndex + 1}-{Math.min(endIndex, analyzedArticles.length)} of {analyzedArticles.length} articles
-                        </div>
-                      <div className="flex items-center space-x-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                          disabled={currentPage === 1}
-                        >
-                          Previous
-                        </Button>
-                        <div className="flex items-center space-x-1">
-                          {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => (
-                            <Button
-                              key={pageNum}
-                              variant={currentPage === pageNum ? "default" : "outline"}
-                              size="sm"
-                              onClick={() => setCurrentPage(pageNum)}
-                              className="w-8 h-8 p-0"
-                            >
-                              {pageNum}
-                            </Button>
-                          ))}
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                          disabled={currentPage === totalPages}
-                        >
-                          Next
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              );
-            })()}
+              <div className="text-center py-8 text-slate-500">
+                <BarChart3 className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+                <p>No tiered article data available for this date.</p>
+                <p className="text-sm mt-2">Please re-analyze this date to generate tiered article data.</p>
               </div>
             )}
           </CardContent>

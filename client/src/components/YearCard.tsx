@@ -2,12 +2,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PlayCircle, StopCircle, Sparkles } from "lucide-react";
+import { PlayCircle, StopCircle } from "lucide-react";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { useGlobalAnalysis } from "@/contexts/GlobalAnalysisContext";
 import MonthCard from "./MonthCard";
-import { apiRequest } from "@/lib/queryClient";
 import {
   Tooltip,
   TooltipContent,
@@ -206,27 +205,6 @@ export default function YearCard({ year }: YearCardProps) {
     return completed;
   };
 
-  // Start cleanup analysis for duplicates
-  const startCleanupAnalysis = async () => {
-    try {
-      const response = await apiRequest('POST', `/api/conflicts/analyze-year/${year}`);
-      const result = await response.json();
-
-      if (result.success) {
-        toast({
-          title: "Cleanup started",
-          description: `Analyzing ${year} for duplicate events...`,
-        });
-      }
-    } catch (error) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Failed to start cleanup analysis",
-      });
-    }
-  };
-  
   const getYearStatus = () => {
     if (isLoading) return { label: "Loading...", variant: "secondary" as const };
     if (!progress) return { label: "No Data", variant: "secondary" as const };
@@ -314,25 +292,6 @@ export default function YearCard({ year }: YearCardProps) {
                   </TooltipTrigger>
                   <TooltipContent>
                     <p>Fetch and analyze Bitcoin news for all 365 days in {year}</p>
-                  </TooltipContent>
-                </Tooltip>
-                
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      onClick={startCleanupAnalysis}
-                      variant="outline"
-                      size="sm"
-                      className="flex items-center space-x-2"
-                      disabled={!progress || progress.analyzedDays === 0}
-                      data-testid={`button-clean-year-${year}`}
-                    >
-                      <Sparkles className="h-4 w-4" />
-                      <span>Clean the Year</span>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Find and remove duplicate events in {year}</p>
                   </TooltipContent>
                 </Tooltip>
               </>

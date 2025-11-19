@@ -1,5 +1,5 @@
 import { exaService } from './exa';
-import type { ArticleData } from './openai';
+import { type ArticleData } from "@shared/schema";
 import { StrictDateFilter } from './date-filter';
 import { DateValidator } from './date-validator';
 import { PeriodDetector } from './period-detector';

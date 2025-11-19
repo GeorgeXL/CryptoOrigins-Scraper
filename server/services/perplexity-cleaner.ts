@@ -1,8 +1,7 @@
 import { storage } from '../storage';
 import { apiMonitor } from './api-monitor';
 import { type HistoricalNewsAnalysis, type TieredArticles, type ArticleData } from "@shared/schema";
-import { compareSummariesWithPerplexity, findReplacementArticleWithPerplexity, validateArticleIsDateSpecificEvent } from './perplexity';
-import { summarizeArticleWithOpenAI } from './openai';
+import { aiService } from './ai';
 import { hierarchicalSearch } from './hierarchical-search';
 
 class PerplexityCleanerService {
@@ -123,9 +122,10 @@ class PerplexityCleanerService {
         reVerificationReasoning: null,
         reVerificationStatus: null,
         reVerificationWinner: null,
+        tags: [],
       };
 
-      await storage.insertAnalysis(newAnalysisForCorrectDate);
+      await storage.createAnalysis(newAnalysisForCorrectDate);
       await this.findAndAssignNewEvent(contradictedAnalysis, 'Original summary moved to new correct date entry');
       return;
     }
@@ -133,7 +133,7 @@ class PerplexityCleanerService {
     // Both dates have analyses - compare summaries using Perplexity
     console.log(`[PerplexityCleaner] Comparing summaries between ${contradictedAnalysis.date} and ${correctDateAnalysis.date}`);
     
-    const comparison = await compareSummariesWithPerplexity(
+    const comparison = await aiService.getProvider('perplexity').compareSummaries(
       contradictedAnalysis.date,
       contradictedAnalysis.summary,
       correctDateText,
@@ -317,7 +317,7 @@ class PerplexityCleanerService {
     for (const article of availableArticles) {
       console.log(`[PerplexityCleaner] Validating ${tier} article: ${article.title.substring(0, 60)}...`);
       
-      const validation = await validateArticleIsDateSpecificEvent(article, targetDate);
+      const validation = await aiService.getProvider('perplexity').validateArticleIsDateSpecificEvent(article, targetDate);
       
       if (validation.isValid && validation.confidence >= 50) {
         console.log(`[PerplexityCleaner] ✅ Article validated: ${validation.reasoning}`);
@@ -343,17 +343,19 @@ class PerplexityCleanerService {
     validationReasoning: string
   ): Promise<void> {
     // Generate new summary using OpenAI
-    const newSummary = await summarizeArticleWithOpenAI(
-      article.title,
-      article.text || article.summary || ''
-    );
+    const newSummary = await aiService.getProvider('openai').generateCompletion({
+      prompt: `Summarize the following article text in one sentence for a historical timeline: Title: "${article.title}" Text: "${article.text || article.summary || ''}"`,
+      model: 'gpt-3.5-turbo',
+      maxTokens: 100,
+      temperature: 0.2
+    });
 
     await storage.updateAnalysis(analysis.date, {
-      summary: newSummary,
+      summary: newSummary.text,
       reasoning: `New event chosen by Perplexity/OpenAI after resolving contradiction. ${validationReasoning}. Original article URL: ${article.url}`,
       isManualOverride: false, // AI-driven automated cleanup, not manual entry
       perplexityVerdict: 'verified',
-      perplexityReasoning: `Original event was incorrect. New date-specific event selected from ${tier} tier: ${newSummary}`,
+      perplexityReasoning: `Original event was incorrect. New date-specific event selected from ${tier} tier: ${newSummary.text}`,
       perplexityCorrectDateText: null, // Clear the incorrect suggestion
       topArticleId: article.id,
       tierUsed: tier,

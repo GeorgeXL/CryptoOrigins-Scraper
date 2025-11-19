@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { 
   Dialog,
   DialogContent,
@@ -52,24 +54,28 @@ interface HistoricalNewsAnalysis {
   tier?: number;
   url?: string;
   source_url?: string;
+  isManualOverride?: boolean;
 }
 
-const ITEMS_PER_PAGE = 50;
+const PAGE_SIZE_OPTIONS = [50, 200, 500];
 
 export default function TagsBrowser() {
   const { toast } = useToast();
   
   // View mode state - toggle between Keywords and Topics
   const [viewMode, setViewMode] = useState<'keywords' | 'topics'>('keywords');
+  const [pageSize, setPageSize] = useState(50);
   
   // Category panel state
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
   const [showUntagged, setShowUntagged] = useState(false);
+  const [showManualOnly, setShowManualOnly] = useState(false);
   
   // Date list state
   const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  const [selectAllMatching, setSelectAllMatching] = useState(false);
   
   // Search and modal state
   const [searchQuery, setSearchQuery] = useState("");
@@ -103,11 +109,21 @@ export default function TagsBrowser() {
     untaggedCount: number;
     totalAnalyses: number;
   }>({
-    queryKey: ['/api/tags/catalog'],
+    queryKey: ['/api/tags/catalog', showManualOnly],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (showManualOnly) {
+        params.set('manualOnly', 'true');
+      }
+      const url = `/api/tags/catalog${params.toString() ? `?${params}` : ''}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to fetch catalog');
+      return response.json();
+    },
   });
 
   // Fetch filtered analyses with server-side filtering and pagination
-  const { data: analysesData, isLoading } = useQuery<{
+  const { data: analysesData, isLoading, refetch } = useQuery<{
     analyses: HistoricalNewsAnalysis[];
     pagination: {
       currentPage: number;
@@ -116,7 +132,9 @@ export default function TagsBrowser() {
       totalPages: number;
     };
   }>({
-    queryKey: ['/api/tags/analyses', Array.from(selectedEntities).sort().join(','), showUntagged, debouncedSearchQuery, currentPage],
+    queryKey: ['/api/tags/analyses', Array.from(selectedEntities).sort().join(','), showUntagged, debouncedSearchQuery, currentPage, showManualOnly, pageSize],
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
     queryFn: async () => {
       // Build query params inside queryFn to avoid closure issues
       const params = new URLSearchParams();
@@ -126,15 +144,22 @@ export default function TagsBrowser() {
       if (showUntagged) {
         params.set('untagged', 'true');
       }
+      if (showManualOnly) {
+        params.set('manualOnly', 'true');
+      }
       if (debouncedSearchQuery) {
         params.set('search', debouncedSearchQuery);
       }
       params.set('page', currentPage.toString());
-      params.set('pageSize', ITEMS_PER_PAGE.toString());
+      params.set('pageSize', pageSize.toString());
       
-      const response = await fetch(`/api/tags/analyses?${params}`);
+      const url = `/api/tags/analyses?${params}`;
+      console.log('🌐 Fetching:', url);
+      const response = await fetch(url);
       if (!response.ok) throw new Error('Failed to fetch analyses');
-      return response.json();
+      const data = await response.json();
+      console.log('📦 Received:', data.analyses?.length || 0, 'analyses, total count:', data.pagination?.totalCount || 0);
+      return data;
     },
   });
 
@@ -235,12 +260,20 @@ export default function TagsBrowser() {
     });
     setShowUntagged(false); // Clear untagged view when selecting entities
     setCurrentPage(1); // Reset to first page when filter changes
+    setSelectAllMatching(false); // Reset select all matching
   };
 
   // Select/deselect all on current page
   const toggleSelectAll = () => {
+    // If currently selecting all matching, clear everything
+    if (selectAllMatching) {
+      setSelectAllMatching(false);
+      setSelectedDates(new Set());
+      return;
+    }
+
     // Check if all items on current page are selected (ignore other pages)
-    const allPageSelected = paginatedAnalyses.every(a => selectedDates.has(a.date));
+    const allPageSelected = paginatedAnalyses.length > 0 && paginatedAnalyses.every(a => selectedDates.has(a.date));
     
     if (allPageSelected) {
       // Deselect all on current page
@@ -261,6 +294,9 @@ export default function TagsBrowser() {
 
   // Toggle individual date selection
   const toggleDateSelection = (date: string) => {
+    if (selectAllMatching) {
+      setSelectAllMatching(false);
+    }
     setSelectedDates(prev => {
       const next = new Set(prev);
       if (next.has(date)) {
@@ -272,21 +308,50 @@ export default function TagsBrowser() {
     });
   };
 
+  // Helper to fetch all matching dates based on current filters
+  const fetchAllMatchingDates = async (): Promise<string[]> => {
+    const allQueryParams = new URLSearchParams();
+    if (selectedEntities.size > 0) {
+      allQueryParams.set('entities', Array.from(selectedEntities).join(','));
+    }
+    if (showUntagged) {
+      allQueryParams.set('untagged', 'true');
+    }
+    if (showManualOnly) {
+      allQueryParams.set('manualOnly', 'true');
+    }
+    if (debouncedSearchQuery) {
+      allQueryParams.set('search', debouncedSearchQuery);
+    }
+    // Don't set page/pageSize to get all results
+    allQueryParams.set('all', 'true');
+
+    const response = await fetch(`/api/tags/analyses?${allQueryParams}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch analyses: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    const allAnalyses: HistoricalNewsAnalysis[] = data.analyses || [];
+    return allAnalyses.map(a => a.date);
+  };
+
   // Bulk add tags mutation
   const bulkAddMutation = useMutation({
     mutationFn: async ({ dates, tag }: { dates: string[]; tag: EntityTag }) => {
       return apiRequest('POST', '/api/tags/bulk-add', { dates, tag });
     },
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['/api/tags/catalog'] });
       queryClient.invalidateQueries({ queryKey: ['/api/tags/analyses'] });
       toast({
         title: "Tags Added",
-        description: `Successfully added tag to ${selectedDates.size} analyses`,
+        description: `Successfully added tag to ${variables.dates.length} analyses`,
       });
       setShowBulkAdd(false);
       setBulkTagName("");
       setSelectedDates(new Set());
+      setSelectAllMatching(false);
     },
     onError: (error: Error) => {
       toast({
@@ -302,13 +367,13 @@ export default function TagsBrowser() {
     mutationFn: async ({ dates, tag }: { dates: string[]; tag: EntityTag }) => {
       return apiRequest('POST', '/api/tags/bulk-remove', { dates, tag });
     },
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['/api/tags/catalog'] });
       queryClient.invalidateQueries({ queryKey: ['/api/tags/analyses'] });
       queryClient.invalidateQueries({ queryKey: ['/api/tags/selected-summaries-tags'] });
       toast({
         title: "Tag Removed",
-        description: `Successfully removed tag from ${selectedDates.size} analyses`,
+        description: `Successfully removed tag from ${variables.dates.length} analyses`,
       });
       // Don't close the dialog or clear selection - user might want to remove more tags
     },
@@ -321,7 +386,7 @@ export default function TagsBrowser() {
     }
   });
 
-  const handleBulkAdd = () => {
+  const handleBulkAdd = async () => {
     if (!bulkTagName.trim()) {
       toast({
         title: "Error",
@@ -330,26 +395,58 @@ export default function TagsBrowser() {
       });
       return;
     }
-    
-    bulkAddMutation.mutate({
-      dates: Array.from(selectedDates),
-      tag: {
-        name: bulkTagName.trim(),
-        category: bulkTagCategory
+
+    try {
+      let datesToUpdate: string[];
+      
+      if (selectAllMatching) {
+        datesToUpdate = await fetchAllMatchingDates();
+      } else {
+        datesToUpdate = Array.from(selectedDates);
       }
-    });
+      
+      bulkAddMutation.mutate({
+        dates: datesToUpdate,
+        tag: {
+          name: bulkTagName.trim(),
+          category: bulkTagCategory
+        }
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to prepare bulk operation",
+        variant: "destructive"
+      });
+    }
   };
 
   // Fetch unique tags from selected summaries for bulk remove
   const { data: selectedSummariesTags = [], isLoading: isLoadingTags } = useQuery<EntityTag[]>({
-    queryKey: ['/api/tags/selected-summaries-tags', Array.from(selectedDates).sort()],
+    queryKey: ['/api/tags/selected-summaries-tags', Array.from(selectedDates).sort(), selectAllMatching, debouncedSearchQuery, showManualOnly, showUntagged],
     queryFn: async () => {
-      if (selectedDates.size === 0) return [];
+      let datesToCheck: string[];
+      
+      if (selectAllMatching) {
+        // If selecting all matching, we need to fetch potentially ALL tags which might be too heavy
+        // For now, let's stick to fetching tags from the currently VISIBLE selection if possible, 
+        // or fetch IDs first then tags.
+        // Actually, fetching ALL tags for ALL matching records to show in the "Remove" dialog might be slow.
+        // Let's fetch IDs first.
+        try {
+          datesToCheck = await fetchAllMatchingDates();
+        } catch (e) {
+          return [];
+        }
+      } else {
+        if (selectedDates.size === 0) return [];
+        datesToCheck = Array.from(selectedDates);
+      }
       
       const response = await fetch('/api/tags/selected-summaries-tags', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dates: Array.from(selectedDates) })
+        body: JSON.stringify({ dates: datesToCheck })
       });
       
       if (!response.ok) {
@@ -359,52 +456,133 @@ export default function TagsBrowser() {
       const data = await response.json();
       return data.tags || [];
     },
-    enabled: showBulkRemove && selectedDates.size > 0,
+    enabled: showBulkRemove && (selectedDates.size > 0 || selectAllMatching),
   });
 
-  const handleBulkRemove = (tag: EntityTag) => {
-    bulkRemoveMutation.mutate({
-      dates: Array.from(selectedDates),
-      tag
-    });
+  const handleBulkRemove = async (tag: EntityTag) => {
+    try {
+      let datesToUpdate: string[];
+      
+      if (selectAllMatching) {
+        datesToUpdate = await fetchAllMatchingDates();
+      } else {
+        datesToUpdate = Array.from(selectedDates);
+      }
+
+      bulkRemoveMutation.mutate({
+        dates: datesToUpdate,
+        tag
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to prepare bulk operation",
+        variant: "destructive"
+      });
+    }
   };
 
   // Copy all filtered results to clipboard as TXT
   const handleCopyToClipboard = async () => {
     try {
-      // Fetch all results (without pagination) for the current filters
-      const allQueryParams = new URLSearchParams();
-      if (selectedEntities.size > 0) {
-        allQueryParams.set('entities', Array.from(selectedEntities).join(','));
-      }
-      if (showUntagged) {
-        allQueryParams.set('untagged', 'true');
-      }
-      if (debouncedSearchQuery) {
-        allQueryParams.set('search', debouncedSearchQuery);
-      }
-      // Don't set page/pageSize to get all results
-      allQueryParams.set('all', 'true');
-
-      const response = await fetch(`/api/tags/analyses?${allQueryParams}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch analyses: ${response.status} ${response.statusText}`);
+      // If selecting all matching (potentially huge), don't allow copy or warn
+      // But existing behavior was "Copy filtered results", which implies ALL results.
+      // The user requested limiting it to 50 entries or disabling if more.
+      
+      // Logic:
+      // 1. If selectAllMatching is true -> too many -> Disable/Warn
+      // 2. If !selectAllMatching but selectedDates.size > 50 -> Disable/Warn
+      // 3. Otherwise copy selectedDates only.
+      
+      // Wait, previously it copied ALL matching filters. Now we want to copy SELECTION.
+      // If nothing selected, previously it copied ALL matching.
+      // Let's assume we want to copy SELECTION now.
+      
+      let datesToCopy: string[];
+      
+      if (selectAllMatching) {
+         // User explicitly selected ALL matching items
+         toast({
+           title: "Too many items",
+           description: "Cannot copy more than 50 items at once. Please refine your selection.",
+           variant: "destructive"
+         });
+         return;
       }
       
-      const data = await response.json();
-      const allAnalyses: HistoricalNewsAnalysis[] = data.analyses || [];
+      if (selectedDates.size > 0) {
+        if (selectedDates.size > 50) {
+          toast({
+            title: "Too many items",
+            description: "Cannot copy more than 50 items at once.",
+            variant: "destructive"
+          });
+          return;
+        }
+        datesToCopy = Array.from(selectedDates);
+      } else {
+        // If nothing selected, maybe copy current page? 
+        // Or revert to old behavior but limited?
+        // "the copy TXT button can be limited to 50 entries"
+        // Let's default to copying the current page if nothing selected, 
+        // OR if the user wants "all matching" logic from before, we limit it.
+        
+        // Current implementation fetches ALL matching. Let's keep it but limit to 50?
+        // Actually, let's rely on explicit selection. If nothing selected, nothing to copy.
+        // Or copy visible page.
+        datesToCopy = paginatedAnalyses.map(a => a.date);
+      }
+      
+      // We need to fetch the summaries for these dates.
+      // We can use the existing paginatedAnalyses if they are all there, 
+      // but if selectedDates spans multiple pages we need to fetch.
+      // Simpler: just fetch by IDs.
+      
+      // Actually, we can reuse the fetchAll logic but filter by IDs on client or server.
+      // Let's filter on client since we have the IDs.
+      // But we need the SUMMARIES.
+      
+      // If we just want to copy what's on screen (paginatedAnalyses)
+      let analysesToCopy = paginatedAnalyses.filter(a => datesToCopy.includes(a.date));
+      
+      // If we have selected dates that are NOT in paginatedAnalyses (e.g. other pages),
+      // we would need to fetch them. 
+      // Given the constraint "limit to 50", we can assume they are likely on the current page 
+      // or the user manually selected < 50 across pages.
+      
+      if (analysesToCopy.length < datesToCopy.length) {
+         // We are missing some data. Need to fetch.
+         // Re-using fetchAllMatchingDates queries ALL, which is wasteful if we have IDs.
+         // Let's just use the endpoint with a special filter or multiple calls?
+         // Actually, the /api/tags/analyses endpoint doesn't support fetching by specific IDs list easily 
+         // (unless we abuse 'search' or add a new param).
+         
+         // Fallback: Fetch ALL matching (reusing logic) and filter in memory.
+         const allQueryParams = new URLSearchParams();
+         if (selectedEntities.size > 0) allQueryParams.set('entities', Array.from(selectedEntities).join(','));
+         if (showUntagged) allQueryParams.set('untagged', 'true');
+         if (showManualOnly) allQueryParams.set('manualOnly', 'true');
+         if (debouncedSearchQuery) allQueryParams.set('search', debouncedSearchQuery);
+         allQueryParams.set('all', 'true');
 
-      if (allAnalyses.length === 0) {
+         const response = await fetch(`/api/tags/analyses?${allQueryParams}`);
+         if (!response.ok) throw new Error('Failed to fetch data');
+         const data = await response.json();
+         const all = data.analyses || [];
+         analysesToCopy = all.filter((a: HistoricalNewsAnalysis) => datesToCopy.includes(a.date));
+      }
+      
+      if (analysesToCopy.length === 0) {
         toast({
           title: "Nothing to Copy",
-          description: "No analyses found to copy",
+          description: "No analyses selected",
           variant: "destructive"
         });
         return;
       }
 
       // Format all filtered analyses
-      const textOutput = allAnalyses
+      const textOutput = analysesToCopy
         .map((analysis: HistoricalNewsAnalysis) => {
           const date = new Date(analysis.date).toLocaleDateString('en-GB', {
             year: 'numeric',
@@ -453,7 +631,7 @@ export default function TagsBrowser() {
 
       {/* Search Bar */}
       <Card className="p-4">
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-3 mb-3">
           <Search className="w-5 h-5 text-slate-400" />
           <Input
             placeholder="Search by tag name, summary, or date..."
@@ -476,16 +654,37 @@ export default function TagsBrowser() {
             </Button>
           )}
         </div>
+        {/* Manual Import Filter Toggle */}
+        <div className="flex items-center space-x-2 pt-3 border-t border-slate-200">
+          <Switch
+            id="manual-only-filter"
+            checked={showManualOnly}
+            onCheckedChange={async (checked) => {
+              console.log('🔄 Toggle changed:', checked);
+              setShowManualOnly(checked);
+              setCurrentPage(1); // Reset to first page when filter changes
+            }}
+            data-testid="switch-manual-only"
+          />
+          <Label 
+            htmlFor="manual-only-filter" 
+            className="text-sm font-medium text-slate-700 cursor-pointer"
+          >
+            Show only manually imported events
+          </Label>
+        </div>
       </Card>
 
       {/* Bulk Operations Toolbar */}
-      {selectedDates.size > 0 && (
+      {(selectedDates.size > 0 || selectAllMatching) && (
         <Card className="p-4 bg-blue-50 border-blue-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
               <Check className="w-5 h-5 text-blue-600" />
               <span className="font-medium text-blue-900">
-                {selectedDates.size} date{selectedDates.size !== 1 ? 's' : ''} selected
+                {selectAllMatching 
+                  ? `All ${totalCount} dates selected` 
+                  : `${selectedDates.size} date${selectedDates.size !== 1 ? 's' : ''} selected`}
               </span>
             </div>
             <div className="flex items-center space-x-2">
@@ -510,7 +709,10 @@ export default function TagsBrowser() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setSelectedDates(new Set())}
+                onClick={() => {
+                  setSelectedDates(new Set());
+                  setSelectAllMatching(false);
+                }}
                 data-testid="button-clear-selection"
               >
                 <X className="w-4 h-4 mr-1" />
@@ -584,13 +786,14 @@ export default function TagsBrowser() {
                 <Filter className="w-5 h-5 mr-2" />
                 {viewMode === 'keywords' ? 'Entities' : 'Topics'}
               </h2>
-              {(selectedEntities.size > 0 || showUntagged) && (
+              {(selectedEntities.size > 0 || showUntagged || showManualOnly) && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => {
                     setSelectedEntities(new Set());
                     setShowUntagged(false);
+                    setShowManualOnly(false);
                   }}
                   data-testid="button-clear-filters"
                 >
@@ -671,9 +874,14 @@ export default function TagsBrowser() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-slate-900 flex items-center">
                 <Calendar className="w-5 h-5 mr-2" />
-                {showUntagged ? "Untagged Analyses" : "Tagged Analyses"}
+                {showUntagged ? "Untagged Analyses" : showManualOnly ? "Manually Imported Events" : "Tagged Analyses"}
               </h2>
               <div className="flex items-center space-x-3">
+                {showManualOnly && (
+                  <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300">
+                    Manual Only
+                  </Badge>
+                )}
                 <span className="text-sm text-slate-600">
                   {totalCount} result{totalCount !== 1 ? 's' : ''}
                 </span>
@@ -682,6 +890,7 @@ export default function TagsBrowser() {
                     variant="outline"
                     size="sm"
                     onClick={handleCopyToClipboard}
+                    disabled={selectAllMatching || selectedDates.size > 50}
                     className="flex items-center space-x-1"
                     data-testid="button-copy-txt"
                   >
@@ -692,17 +901,97 @@ export default function TagsBrowser() {
               </div>
             </div>
 
+            {/* Select All Banner */}
+            {allPageSelected && totalCount > paginatedAnalyses.length && (
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md flex items-center justify-center text-sm text-blue-900">
+                {selectAllMatching ? (
+                  <span>
+                    All <b>{totalCount}</b> items are selected.
+                    <button 
+                      className="ml-2 font-medium underline hover:text-blue-700"
+                      onClick={() => {
+                        setSelectAllMatching(false);
+                        setSelectedDates(new Set());
+                      }}
+                    >
+                      Clear selection
+                    </button>
+                  </span>
+                ) : (
+                  <span>
+                    All <b>{paginatedAnalyses.length}</b> items on this page are selected.
+                    <button 
+                      className="ml-2 font-medium underline hover:text-blue-700"
+                      onClick={() => setSelectAllMatching(true)}
+                    >
+                      Select all {totalCount} items matching current filter
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* Select All Checkbox */}
             {paginatedAnalyses.length > 0 && (
               <div className="flex items-center space-x-2 mb-4 pb-3 border-b">
                 <Checkbox
-                  checked={allPageSelected}
+                  checked={allPageSelected || selectAllMatching}
                   onCheckedChange={toggleSelectAll}
                   data-testid="checkbox-select-all"
                 />
                 <span className="text-sm text-slate-600">
                   Select all on this page
                 </span>
+              </div>
+            )}
+
+            {/* Pagination - Top */}
+            {totalCount > 0 && (
+              <div className="flex items-center justify-between mb-4 pb-4 border-b">
+                <div className="flex items-center space-x-4">
+                  <div className="text-sm text-slate-600">
+                    Page {currentPage} of {totalPages}
+                    <span className="mx-2">•</span>
+                    Showing {((currentPage - 1) * pageSize) + 1}-{Math.min(currentPage * pageSize, totalCount)} of {totalCount}
+                  </div>
+                  
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm text-slate-600">Per page:</span>
+                    <select 
+                      value={pageSize}
+                      onChange={(e) => {
+                        setPageSize(Number(e.target.value));
+                        setCurrentPage(1); // Reset to first page
+                      }}
+                      className="h-8 text-sm border border-slate-200 rounded-md px-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {PAGE_SIZE_OPTIONS.map(size => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    data-testid="button-prev-page-top"
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    data-testid="button-next-page-top"
+                  >
+                    Next
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -721,6 +1010,8 @@ export default function TagsBrowser() {
                   <p className="text-slate-500">
                     {showUntagged
                       ? "No untagged analyses found"
+                      : showManualOnly
+                      ? "No manually imported events found"
                       : selectedEntities.size > 0
                       ? "No analyses match the selected entities"
                       : debouncedSearchQuery
@@ -800,14 +1091,33 @@ export default function TagsBrowser() {
               )}
             </div>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
+            {/* Pagination - Bottom */}
+            {totalCount > 0 && (
               <div className="flex items-center justify-between mt-6 pt-4 border-t">
-                <div className="text-sm text-slate-600">
-                  Page {currentPage} of {totalPages}
-                  <span className="mx-2">•</span>
-                  Showing {((currentPage - 1) * ITEMS_PER_PAGE) + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, totalCount)} of {totalCount}
+                <div className="flex items-center space-x-4">
+                  <div className="text-sm text-slate-600">
+                    Page {currentPage} of {totalPages}
+                    <span className="mx-2">•</span>
+                    Showing {((currentPage - 1) * pageSize) + 1}-{Math.min(currentPage * pageSize, totalCount)} of {totalCount}
+                  </div>
+                  
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm text-slate-600">Per page:</span>
+                    <select 
+                      value={pageSize}
+                      onChange={(e) => {
+                        setPageSize(Number(e.target.value));
+                        setCurrentPage(1); // Reset to first page
+                      }}
+                      className="h-8 text-sm border border-slate-200 rounded-md px-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {PAGE_SIZE_OPTIONS.map(size => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+
                 <div className="flex items-center space-x-2">
                   <Button
                     variant="outline"
@@ -956,7 +1266,7 @@ export default function TagsBrowser() {
       <Dialog open={showBulkAdd} onOpenChange={setShowBulkAdd}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add Tag to {selectedDates.size} Analyses</DialogTitle>
+            <DialogTitle>Add Tag to {selectAllMatching ? totalCount : selectedDates.size} Analyses</DialogTitle>
           </DialogHeader>
           
           <div className="space-y-4">
@@ -1016,7 +1326,7 @@ export default function TagsBrowser() {
       <Dialog open={showBulkRemove} onOpenChange={setShowBulkRemove}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Remove Tags from {selectedDates.size} Analyses</DialogTitle>
+            <DialogTitle>Remove Tags from {selectAllMatching ? totalCount : selectedDates.size} Analyses</DialogTitle>
           </DialogHeader>
           
           <div className="space-y-4">

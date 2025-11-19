@@ -7,7 +7,7 @@ import type { Express } from 'express';
 // Import from built server code (built during Vercel build step)
 // The build process creates dist/server/serverless.js from server/serverless.ts
 // @ts-ignore - Vercel will compile this, and the server code is built first
-// import { createApp } from "../dist/server/serverless.js"; // Changed to dynamic import below
+import { createApp } from "../dist/server/serverless.js";
 
 type AppContainer = { app: Express; server: any };
 
@@ -17,67 +17,7 @@ let appPromise: Promise<AppContainer> | null = null;
 function getOrCreateApp(): Promise<AppContainer> {
   if (!appPromise) {
     console.log('🔧 Initializing app on first request...');
-    console.log('📂 Current working directory:', process.cwd());
-    console.log('📂 __dirname equivalent:', import.meta.url);
-    console.log('🔍 Environment check:');
-    console.log('   VERCEL:', process.env.VERCEL);
-    console.log('   NODE_ENV:', process.env.NODE_ENV);
-    console.log('   DATABASE_URL:', process.env.DATABASE_URL ? 'Set' : 'NOT SET');
-    console.log('   POSTGRES_URL:', process.env.POSTGRES_URL ? 'Set' : 'NOT SET');
-    
-    appPromise = (async () => {
-      try {
-        // Try multiple import paths - Vercel's file structure can vary
-        const importPaths = [
-          "../dist/server/serverless.js",
-          "./dist/server/serverless.js",
-          "../server/serverless.js",
-        ];
-        
-        let serverlessModule: any = null;
-        let lastError: any = null;
-        
-        for (const importPath of importPaths) {
-          try {
-            console.log(`📦 Trying to import: ${importPath}...`);
-            // @ts-ignore - Dynamic import, type will be checked at runtime
-            serverlessModule = await import(importPath);
-            console.log(`✅ Successfully imported from: ${importPath}`);
-            break;
-          } catch (importErr: any) {
-            console.log(`❌ Failed to import from ${importPath}:`, importErr?.message);
-            lastError = importErr;
-            continue;
-          }
-        }
-        
-        if (!serverlessModule) {
-          throw new Error(`Failed to import serverless module from any path. Last error: ${lastError?.message}`);
-        }
-        
-        console.log('✅ Module imported successfully');
-        console.log('📋 Module exports:', Object.keys(serverlessModule));
-        
-        if (!serverlessModule.createApp) {
-          throw new Error('createApp function not found in serverless module');
-        }
-        
-        console.log('🔧 Calling createApp()...');
-        const appContainer = await serverlessModule.createApp();
-        console.log('✅ App created successfully');
-        return appContainer;
-      } catch (err: any) {
-        console.error('❌ FATAL: Failed to load server module');
-        console.error('   Error type:', err?.constructor?.name);
-        console.error('   Error message:', err?.message);
-        console.error('   Error code:', err?.code);
-        console.error('   Error stack:', err?.stack);
-        if (err?.cause) {
-          console.error('   Error cause:', err.cause);
-        }
-        throw err;
-      }
-    })().catch((error: Error) => {
+    appPromise = createApp().catch((error: Error) => {
       console.error('❌ FATAL: Failed to create app:', error);
       console.error('   Error message:', error.message);
       console.error('   Error stack:', error.stack);

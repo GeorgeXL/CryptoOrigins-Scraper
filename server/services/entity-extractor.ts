@@ -1,4 +1,4 @@
-import { openaiService } from './openai';
+import { aiService } from './ai';
 import { apiMonitor } from './api-monitor';
 import type { EntityTag } from '@shared/schema';
 
@@ -57,16 +57,13 @@ Return ONLY a JSON array in this format:
         purpose: 'Extract entities from summary'
       });
 
-      const result = await openaiService.createCompletion([
-        {
-          role: 'system',
-          content: 'You are an expert at entity extraction. Always return valid JSON arrays only.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ]);
+      const openai = aiService.getProvider('openai');
+      const result = await openai.generateCompletion({
+        prompt,
+        systemPrompt: 'You are an expert at entity extraction. Always return valid JSON arrays only.',
+        model: 'gpt-4o-mini',
+        temperature: 0.1,
+      });
 
       apiMonitor.updateRequest(monitorId, {
         status: 'success'
@@ -75,7 +72,7 @@ Return ONLY a JSON array in this format:
       let entities: EntityTag[] = [];
       
       try {
-        const parsed = JSON.parse(result);
+        const parsed = JSON.parse(result.text);
         
         // Handle different response formats
         if (Array.isArray(parsed)) {

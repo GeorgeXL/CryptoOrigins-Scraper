@@ -1,5 +1,5 @@
 import { exaService } from "./exa";
-import { testOpenAIConnection } from "./openai";
+import { aiService } from "./ai";
 
 export interface ApiStatus {
   name: string;
@@ -30,9 +30,12 @@ class HealthMonitor {
 
     const apis: ApiStatus[] = [];
     
-    // Test OpenAI
-    const openaiResult = await this.testOpenAI();
-    apis.push(openaiResult);
+    // Test AI Providers
+    const providers = ['openai', 'gemini', 'perplexity'];
+    for (const provider of providers) {
+      const result = await this.testAiProvider(provider as any);
+      apis.push(result);
+    }
     
     // Test EXA
     const exaResult = await this.testExa();
@@ -60,32 +63,32 @@ class HealthMonitor {
     return this.cache;
   }
 
-  private async testOpenAI(): Promise<ApiStatus> {
+  private async testAiProvider(providerName: 'openai' | 'gemini' | 'perplexity'): Promise<ApiStatus> {
     const startTime = Date.now();
-    
     try {
-      const result = await testOpenAIConnection();
+      const provider = aiService.getProvider(providerName);
+      const isHealthy = await provider.healthCheck();
       const responseTime = Date.now() - startTime;
-      
-      if (result.success) {
+
+      if (isHealthy) {
         return {
-          name: 'OpenAI',
+          name: provider.getName(),
           status: responseTime > 10000 ? 'degraded' : 'operational',
           lastChecked: new Date().toISOString(),
           responseTime
         };
       } else {
         return {
-          name: 'OpenAI',
+          name: provider.getName(),
           status: 'outage',
           lastChecked: new Date().toISOString(),
-          error: result.error || 'Connection failed',
+          error: 'Health check failed',
           responseTime
         };
       }
     } catch (error: any) {
       return {
-        name: 'OpenAI',
+        name: providerName,
         status: 'outage',
         lastChecked: new Date().toISOString(),
         error: error.message || 'Unknown error',

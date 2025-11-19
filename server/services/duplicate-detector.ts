@@ -1,7 +1,11 @@
-import { getOpenAIClient } from './openai';
+import OpenAI from 'openai';
 import { storage } from '../storage';
 import type { HistoricalNewsAnalysis } from '@shared/schema';
 import { apiMonitor } from './api-monitor';
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 interface DuplicateDetectionResult {
   similar_dates: string[];
@@ -62,7 +66,7 @@ export class DuplicateDetectorService {
 
       const startTime = Date.now();
 
-      const completion = await getOpenAIClient().chat.completions.create({
+      const completion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         response_format: { type: 'json_object' },
         messages: [

@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
+import { type ApiRequest } from "@/hooks/useApiHealth";
 
 export interface ApiStatus {
   name: string;

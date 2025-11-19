@@ -1,7 +1,4 @@
-// Only load dotenv in non-Vercel environments (Vercel automatically injects env vars)
-if (!process.env.VERCEL) {
-  require("dotenv/config");
-}
+import "dotenv/config";
 import express, { type Request, Response, NextFunction, type Express } from "express";
 import { registerRoutes } from "./routes";
 import compression from "compression";

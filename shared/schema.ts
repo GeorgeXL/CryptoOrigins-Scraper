@@ -158,6 +158,23 @@ export const eventConflicts = pgTable("event_conflicts", {
   uniquePairIdx: uniqueIndex("idx_event_conflicts_unique_pair").on(table.sourceDate, table.relatedDate),
 }));
 
+// Tag metadata table for tag management, hierarchy, and similarity
+export const tagMetadata: any = pgTable("tag_metadata", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  parentTagId: uuid("parent_tag_id").references((): any => tagMetadata.id, { onDelete: "set null" }), // Self-referencing for hierarchy
+  normalizedName: text("normalized_name"), // For similarity matching (lowercase, normalized)
+  usageCount: integer("usage_count").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  nameCategoryIdx: uniqueIndex("idx_tag_metadata_name_category").on(table.name, table.category),
+  categoryIdx: index("idx_tag_metadata_category").on(table.category),
+  parentTagIdx: index("idx_tag_metadata_parent_tag").on(table.parentTagId),
+  normalizedNameIdx: index("idx_tag_metadata_normalized_name").on(table.normalizedName),
+}));
+
 // Relations
 export const historicalNewsAnalysesRelations = relations(historicalNewsAnalyses, ({ many }) => ({
   manualEntries: many(manualNewsEntries),
@@ -277,3 +294,12 @@ export const insertEventConflictSchema = createInsertSchema(eventConflicts).omit
 
 export type InsertEventConflict = z.infer<typeof insertEventConflictSchema>;
 export type EventConflict = typeof eventConflicts.$inferSelect;
+
+export const insertTagMetadataSchema = createInsertSchema(tagMetadata).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertTagMetadata = z.infer<typeof insertTagMetadataSchema>;
+export type TagMetadata = typeof tagMetadata.$inferSelect;

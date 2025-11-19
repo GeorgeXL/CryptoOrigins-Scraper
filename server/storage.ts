@@ -8,6 +8,7 @@ import {
   eventBatches,
   batchEvents,
   eventConflicts,
+  tagMetadata,
   type User, 
   type InsertUser,
   type HistoricalNewsAnalysis,
@@ -26,6 +27,8 @@ import {
   type InsertBatchEvent,
   type EventConflict,
   type InsertEventConflict,
+  type TagMetadata,
+  type InsertTagMetadata,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, asc, and, or, gte, lte, count, sql, inArray } from "drizzle-orm";

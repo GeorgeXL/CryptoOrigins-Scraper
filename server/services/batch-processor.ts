@@ -1,6 +1,10 @@
-import { getOpenAIClient } from './openai';
+import OpenAI from "openai";
 import { type BatchEvent } from "@shared/schema";
 import { apiMonitor } from './api-monitor';
+
+const openai = new OpenAI({ 
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 export interface BatchEnhancementResult {
   success: boolean;
@@ -155,7 +159,7 @@ Context: These events are part of a curated collection focusing on ${groupName.t
     const startTime = Date.now();
 
     try {
-      const response = await getOpenAIClient().chat.completions.create({
+      const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
