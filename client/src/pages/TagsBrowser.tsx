@@ -172,6 +172,13 @@ export default function TagsBrowser() {
         }));
       });
 
+      console.log('📊 Catalog Data:', {
+        totalAnalyses: allAnalyses.length,
+        taggedCount,
+        untaggedCount,
+        categories: Object.keys(entitiesByCategory).length
+      });
+
       return {
         entitiesByCategory,
         taggedCount,
@@ -200,7 +207,7 @@ export default function TagsBrowser() {
       // Build base query
       let query = supabase
         .from("historical_news_analyses")
-        .select("date, summary, tags, tier, url, source_url", { count: "exact" });
+        .select("date, summary, tags, tier_used, is_manual_override", { count: "exact" });
 
       // Apply filters
       if (showManualOnly) {
@@ -208,38 +215,57 @@ export default function TagsBrowser() {
       }
 
       if (showUntagged) {
-        query = query.or("tags.is.null,tags.eq.[]");
+        // Filter for untagged: tags is null or empty array
+        // Since Supabase doesn't have a good way to filter for empty JSONB arrays,
+        // we'll fetch all and filter client-side
+        // query = query.or(`tags.is.null,tags.eq.[]`);
       } else if (selectedEntities.size > 0) {
         // Filter by selected entities
-        const entityFilters = Array.from(selectedEntities).map(entityKey => {
-          const [category, name] = entityKey.split("::");
-          return `tags.cs.[{"category":"${category}","name":"${name}"}]`;
-        });
-        // For now, we'll fetch all and filter client-side since Supabase doesn't support complex JSONB array queries easily
+        // We'll fetch all and filter client-side since JSONB array filtering is complex
+        // Don't apply any server-side filter here
       }
 
       if (debouncedSearchQuery) {
-        // Search in summary or date
-        query = query.or(`summary.ilike.%${debouncedSearchQuery}%,date.ilike.%${debouncedSearchQuery}%`);
+        // Search in summary only (date is a date type, not text, so we can't use ilike on it directly)
+        // If you want to search by date, the user should type in YYYY-MM-DD format
+        query = query.ilike("summary", `%${debouncedSearchQuery}%`);
       }
 
-      // Get total count first
-      const { count: totalCount, error: countError } = await query;
-      if (countError) throw countError;
+      // Order by date
+      query = query.order("date", { ascending: false });
 
-      // Apply pagination
-      const from = (currentPage - 1) * pageSize;
-      const to = from + pageSize - 1;
+      // If we're doing client-side filtering (untagged or entity selection),
+      // we need to fetch more rows to ensure we have enough after filtering
+      // For now, let's fetch a larger batch
+      const batchSize = (showUntagged || selectedEntities.size > 0) ? 1000 : pageSize;
+      const from = (currentPage - 1) * batchSize;
+      const to = from + batchSize - 1;
       
-      query = query
-        .order("date", { ascending: false })
-        .range(from, to);
+      query = query.range(from, to);
 
-      const { data: analyses, error } = await query;
+      const { data: analyses, error, count: totalCount } = await query;
+      console.log('📊 Analyses Query Result:', JSON.stringify({
+        analysesCount: analyses?.length,
+        totalCount,
+        showUntagged,
+        selectedEntitiesCount: selectedEntities.size,
+        hasError: !!error,
+        errorMessage: error?.message,
+        firstAnalysisDate: analyses?.[0]?.date,
+        firstAnalysisTags: analyses?.[0]?.tags
+      }, null, 2));
       if (error) throw error;
 
-      // Client-side filtering for entity selection (since JSONB array filtering is complex)
+      // Client-side filtering for untagged and entity selection (since JSONB array filtering is complex)
       let filteredAnalyses = analyses || [];
+      
+      // Filter for untagged
+      if (showUntagged) {
+        filteredAnalyses = filteredAnalyses.filter(analysis => 
+          !analysis.tags || analysis.tags.length === 0
+        );
+      }
+      
       if (selectedEntities.size > 0 && !showUntagged) {
         filteredAnalyses = filteredAnalyses.filter(analysis => {
           if (!analysis.tags || !Array.isArray(analysis.tags)) return false;
@@ -252,16 +278,24 @@ export default function TagsBrowser() {
         });
       }
 
-      const totalPages = Math.ceil((totalCount || 0) / pageSize);
+      // Apply pagination after client-side filtering
+      const startIndex = (currentPage - 1) * pageSize;
+      const endIndex = startIndex + pageSize;
+      const paginatedAnalyses = filteredAnalyses.slice(startIndex, endIndex);
+      
+      // Use the totalCount from Supabase query (which includes count: "exact")
+      // This gives us the accurate total count before client-side filtering
+      const actualTotalCount = totalCount || filteredAnalyses.length;
+      const totalPages = Math.ceil(actualTotalCount / pageSize);
 
-      console.log('📦 Received:', filteredAnalyses.length, 'analyses, total count:', totalCount);
+      console.log('📦 Received:', paginatedAnalyses.length, 'analyses, filtered total:', actualTotalCount);
 
       return {
-        analyses: filteredAnalyses,
+        analyses: paginatedAnalyses,
         pagination: {
           currentPage,
           pageSize,
-          totalCount: totalCount || 0,
+          totalCount: actualTotalCount,
           totalPages
         }
       };
@@ -680,7 +714,7 @@ export default function TagsBrowser() {
 
          const { data: fetchedAnalyses, error } = await supabase
            .from("historical_news_analyses")
-           .select("date, summary")
+           .select("date, summary, tags")
            .in("date", datesToCopy);
 
          if (error) throw error;
