@@ -13,6 +13,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { supabase } from "@/lib/supabase";
 
 
 interface YearProgress {
@@ -27,8 +28,35 @@ interface YearCardProps {
 
 export default function YearCard({ year }: YearCardProps) {
   const { data: progress, isLoading } = useQuery<YearProgress>({
-    queryKey: [`/api/analysis/year/${year}`],
-    select: (data: any) => data.progress,
+    queryKey: [`supabase-year-${year}`],
+    queryFn: async () => {
+      if (!supabase) throw new Error("Supabase not configured");
+      
+      // Get total days in year
+      const isLeapYear = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+      const totalDays = isLeapYear ? 366 : 365;
+      
+      // Count analyzed days for this year
+      const startDate = `${year}-01-01`;
+      const endDate = `${year}-12-31`;
+      
+      const { count, error } = await supabase
+        .from("historical_news_analyses")
+        .select("*", { count: "exact", head: true })
+        .gte("date", startDate)
+        .lte("date", endDate);
+      
+      if (error) throw error;
+      
+      const analyzedDays = count || 0;
+      const percentage = totalDays > 0 ? Math.round((analyzedDays / totalDays) * 100) : 0;
+      
+      return {
+        totalDays,
+        analyzedDays,
+        percentage
+      };
+    },
   });
 
   const queryClient = useQueryClient();
@@ -78,7 +106,7 @@ export default function YearCard({ year }: YearCardProps) {
     });
 
     // Invalidate the year query immediately to trigger loading states
-    queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${year}`] });
+    queryClient.invalidateQueries({ queryKey: [`supabase-year-${year}`] });
 
     try {
       await processStreamingBatch(allDates, controller, (progress, currentDate) => {
@@ -97,7 +125,7 @@ export default function YearCard({ year }: YearCardProps) {
       }
     } finally {
       completeAnalysis(analysisId);
-      queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${year}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-year-${year}`] });
     }
   };
 

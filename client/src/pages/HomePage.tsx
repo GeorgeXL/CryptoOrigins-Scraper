@@ -53,6 +53,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { supabase } from "@/lib/supabase";
 
 interface AnalysisStats {
   totalDays: number;
@@ -68,7 +69,40 @@ interface QuickLookupData {
 
 export default function HomePage() {
   const { data: stats, isLoading: statsLoading } = useQuery<AnalysisStats>({
-    queryKey: ['/api/analysis/stats'],
+    queryKey: ['supabase-stats'],
+    queryFn: async () => {
+      if (!supabase) throw new Error("Supabase not configured");
+      
+      // Count total analyzed days
+      const { count: analyzedCount, error: analyzedError } = await supabase
+        .from("historical_news_analyses")
+        .select("*", { count: "exact", head: true });
+      
+      if (analyzedError) throw analyzedError;
+      
+      // Count manual entries
+      const { count: manualCount, error: manualError } = await supabase
+        .from("manual_news_entries")
+        .select("*", { count: "exact", head: true });
+      
+      if (manualError) throw manualError;
+      
+      // Calculate total days from 2009-01-03 to today
+      const startDate = new Date('2009-01-03');
+      const today = new Date();
+      const diffTime = Math.abs(today.getTime() - startDate.getTime());
+      const totalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      const analyzedDays = analyzedCount || 0;
+      const completionPercentage = totalDays > 0 ? Math.round((analyzedDays / totalDays) * 100) : 0;
+      
+      return {
+        totalDays,
+        analyzedDays,
+        completionPercentage,
+        manualEntries: manualCount || 0
+      };
+    },
   });
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -158,26 +192,50 @@ export default function HomePage() {
 
   // Quick lookup queries
   const { data: quickLookup1Data, isLoading: quickLookup1Loading } = useQuery<QuickLookupData>({
-    queryKey: [`/api/analysis/date/${quickLookupDate1}`],
-    enabled: !!quickLookupDate1,
-    select: (data: any) => ({
-      summary: data?.analysis?.summary,
-      date: data?.analysis?.date || quickLookupDate1
-    })
+    queryKey: [`supabase-date-${quickLookupDate1}`],
+    enabled: !!quickLookupDate1 && !!supabase,
+    queryFn: async () => {
+      if (!supabase) throw new Error("Supabase not configured");
+      
+      const { data, error } = await supabase
+        .from("historical_news_analyses")
+        .select("summary, date")
+        .eq("date", quickLookupDate1)
+        .single();
+      
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116 = not found
+      
+      return {
+        summary: data?.summary,
+        date: data?.date || quickLookupDate1
+      };
+    }
   });
 
   const { data: quickLookup2Data, isLoading: quickLookup2Loading } = useQuery<QuickLookupData>({
-    queryKey: [`/api/analysis/date/${quickLookupDate2}`],
-    enabled: !!quickLookupDate2,
-    select: (data: any) => ({
-      summary: data?.analysis?.summary,
-      date: data?.analysis?.date || quickLookupDate2
-    })
+    queryKey: [`supabase-date-${quickLookupDate2}`],
+    enabled: !!quickLookupDate2 && !!supabase,
+    queryFn: async () => {
+      if (!supabase) throw new Error("Supabase not configured");
+      
+      const { data, error } = await supabase
+        .from("historical_news_analyses")
+        .select("summary, date")
+        .eq("date", quickLookupDate2)
+        .single();
+      
+      if (error && error.code !== 'PGRST116') throw error;
+      
+      return {
+        summary: data?.summary,
+        date: data?.date || quickLookupDate2
+      };
+    }
   });
 
   const handleImportComplete = () => {
     // Invalidate stats query to refresh manual entries count
-    queryClient.invalidateQueries({ queryKey: ['/api/analysis/stats'] });
+    queryClient.invalidateQueries({ queryKey: ['supabase-stats'] });
     setShowImportDialog(false);
   };
 
@@ -584,7 +642,7 @@ export default function HomePage() {
               });
 
               // Refresh data
-              queryClient.invalidateQueries({ queryKey: ['/api/analysis/stats'] });
+              queryClient.invalidateQueries({ queryKey: ['supabase-stats'] });
             }
           }
         } catch (error) {
