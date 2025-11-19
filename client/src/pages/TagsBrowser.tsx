@@ -234,27 +234,54 @@ export default function TagsBrowser() {
       // Order by date
       query = query.order("date", { ascending: false });
 
-      // If we're doing client-side filtering (untagged or entity selection),
-      // we need to fetch more rows to ensure we have enough after filtering
-      // For now, let's fetch a larger batch
-      const batchSize = (showUntagged || selectedEntities.size > 0) ? 1000 : pageSize;
-      const from = (currentPage - 1) * batchSize;
-      const to = from + batchSize - 1;
-      
-      query = query.range(from, to);
+      let analyses: any[] = [];
+      let totalCount: number | null = null;
 
-      const { data: analyses, error, count: totalCount } = await query;
+      // If we're doing client-side filtering (untagged or entity selection),
+      // we need to fetch ALL results to properly filter
+      const needsClientSideFiltering = showUntagged || selectedEntities.size > 0;
+      
+      if (needsClientSideFiltering) {
+        // Fetch all results in batches
+        let allAnalyses: any[] = [];
+        let batchStart = 0;
+        const batchSize = 1000;
+        
+        while (true) {
+          const { data: batch, error } = await query.range(batchStart, batchStart + batchSize - 1);
+          if (error) throw error;
+          if (!batch || batch.length === 0) break;
+          
+          allAnalyses = allAnalyses.concat(batch);
+          if (batch.length < batchSize) break;
+          batchStart += batchSize;
+        }
+        
+        analyses = allAnalyses;
+        totalCount = allAnalyses.length;
+      } else {
+        // Apply pagination at the database level for non-filtered queries
+        const from = (currentPage - 1) * pageSize;
+        const to = from + pageSize - 1;
+        
+        query = query.range(from, to);
+        
+        const { data, error, count } = await query;
+        if (error) throw error;
+        
+        analyses = data || [];
+        totalCount = count;
+      }
+
       console.log('📊 Analyses Query Result:', JSON.stringify({
         analysesCount: analyses?.length,
         totalCount,
         showUntagged,
         selectedEntitiesCount: selectedEntities.size,
-        hasError: !!error,
-        errorMessage: error?.message,
+        needsClientSideFiltering,
         firstAnalysisDate: analyses?.[0]?.date,
         firstAnalysisTags: analyses?.[0]?.tags
       }, null, 2));
-      if (error) throw error;
 
       // Client-side filtering for untagged and entity selection (since JSONB array filtering is complex)
       let filteredAnalyses = analyses || [];
@@ -283,9 +310,9 @@ export default function TagsBrowser() {
       const endIndex = startIndex + pageSize;
       const paginatedAnalyses = filteredAnalyses.slice(startIndex, endIndex);
       
-      // Use the totalCount from Supabase query (which includes count: "exact")
-      // This gives us the accurate total count before client-side filtering
-      const actualTotalCount = totalCount || filteredAnalyses.length;
+      // If we did client-side filtering, use the filtered count
+      // Otherwise use the totalCount from Supabase query (which includes count: "exact")
+      const actualTotalCount = needsClientSideFiltering ? filteredAnalyses.length : (totalCount || filteredAnalyses.length);
       const totalPages = Math.ceil(actualTotalCount / pageSize);
 
       console.log('📦 Received:', paginatedAnalyses.length, 'analyses, filtered total:', actualTotalCount);
