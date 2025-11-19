@@ -21,7 +21,7 @@ import { entityExtractor } from "../services/entity-extractor";
 import { sql } from "drizzle-orm";
 import { aiService } from "../services/ai";
 import { db } from "../db";
-import { tagSimilarity } from "../services/tag-similarity";
+import { findSimilarTags, calculateSimilarity, normalizeTagName } from "../services/tag-similarity";
 
 // Utility function to parse date strings from Perplexity
 // Note: All 1,025 existing Perplexity dates are already in YYYY-MM-DD format
@@ -751,7 +751,7 @@ router.get("/api/tags/manage", async (req, res) => {
     // Find similar tags for each tag
     const tagsWithSimilarity = allTags.map((tag: any) => {
       const candidateTags = Array.from(tagMap.values()).filter(t => t.name !== tag.name);
-      const similar = tagSimilarity.findSimilarTags(tag.name, candidateTags, 0.7);
+      const similar = findSimilarTags(tag.name, candidateTags, 0.7);
       
       return {
         ...tag,
@@ -812,7 +812,7 @@ router.post("/api/tags/move", async (req, res) => {
       .update(tagMetadata)
       .set({
         category: newCategory,
-        normalizedName: tagSimilarity.normalizeTagName(tag.name),
+        normalizedName: normalizeTagName(tag.name),
         updatedAt: new Date(),
       })
       .where(eq(tagMetadata.id, tagId));
@@ -989,7 +989,7 @@ router.get("/api/tags/similarity", async (req, res) => {
     }
     
     const candidateTags = Array.from(tagMap.values());
-    const similar = tagSimilarity.findSimilarTags(tagName as string, candidateTags, parseFloat(threshold as string));
+    const similar = findSimilarTags(tagName as string, candidateTags, parseFloat(threshold as string));
     
     res.json({ similarTags: similar });
   } catch (error) {
@@ -1029,7 +1029,7 @@ router.post("/api/tags/initialize", async (req, res) => {
       try {
         const insertResult = await db.execute(drizzleSql`
           INSERT INTO tag_metadata (name, category, normalized_name, usage_count)
-          VALUES (${row.name}, ${row.category}, ${tagSimilarity.normalizeTagName(row.name as string)}, ${parseInt(String(row.usage_count)) || 0})
+          VALUES (${row.name}, ${row.category}, ${normalizeTagName(row.name as string)}, ${parseInt(String(row.usage_count)) || 0})
           ON CONFLICT (name, category) DO NOTHING
           RETURNING id;
         `);
