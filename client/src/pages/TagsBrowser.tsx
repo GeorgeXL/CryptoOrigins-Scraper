@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
 
 interface EntityTag {
   name: string;
@@ -109,16 +110,74 @@ export default function TagsBrowser() {
     untaggedCount: number;
     totalAnalyses: number;
   }>({
-    queryKey: ['/api/tags/catalog', showManualOnly],
+    queryKey: ['supabase-tags-catalog', showManualOnly],
     queryFn: async () => {
-      const params = new URLSearchParams();
-      if (showManualOnly) {
-        params.set('manualOnly', 'true');
+      if (!supabase) throw new Error("Supabase not configured");
+
+      // Fetch all analyses with tags in batches to avoid row limit
+      let allAnalyses: any[] = [];
+      let from = 0;
+      const batchSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        let query = supabase
+          .from("historical_news_analyses")
+          .select("tags, date")
+          .range(from, from + batchSize - 1);
+
+        if (showManualOnly) {
+          query = query.eq("is_manual_override", true);
+        }
+
+        const { data: batch, error } = await query;
+        if (error) throw error;
+
+        if (batch && batch.length > 0) {
+          allAnalyses = allAnalyses.concat(batch);
+          from += batchSize;
+          hasMore = batch.length === batchSize;
+        } else {
+          hasMore = false;
+        }
       }
-      const url = `/api/tags/catalog${params.toString() ? `?${params}` : ''}`;
-      const response = await fetch(url);
-      if (!response.ok) throw new Error('Failed to fetch catalog');
-      return response.json();
+
+      // Process tags to build catalog
+      const tagCounts = new Map<string, Map<string, number>>();
+      let taggedCount = 0;
+      let untaggedCount = 0;
+
+      allAnalyses.forEach((analysis) => {
+        if (analysis.tags && Array.isArray(analysis.tags) && analysis.tags.length > 0) {
+          taggedCount++;
+          analysis.tags.forEach((tag: EntityTag) => {
+            if (!tagCounts.has(tag.category)) {
+              tagCounts.set(tag.category, new Map());
+            }
+            const categoryMap = tagCounts.get(tag.category)!;
+            categoryMap.set(tag.name, (categoryMap.get(tag.name) || 0) + 1);
+          });
+        } else {
+          untaggedCount++;
+        }
+      });
+
+      // Convert to the expected format
+      const entitiesByCategory: Record<string, { category: string; name: string; count: number }[]> = {};
+      tagCounts.forEach((nameMap, category) => {
+        entitiesByCategory[category] = Array.from(nameMap.entries()).map(([name, count]) => ({
+          category,
+          name,
+          count
+        }));
+      });
+
+      return {
+        entitiesByCategory,
+        taggedCount,
+        untaggedCount,
+        totalAnalyses: allAnalyses.length
+      };
     },
   });
 
@@ -132,34 +191,80 @@ export default function TagsBrowser() {
       totalPages: number;
     };
   }>({
-    queryKey: ['/api/tags/analyses', Array.from(selectedEntities).sort().join(','), showUntagged, debouncedSearchQuery, currentPage, showManualOnly, pageSize],
+    queryKey: ['supabase-tags-analyses', Array.from(selectedEntities).sort().join(','), showUntagged, debouncedSearchQuery, currentPage, showManualOnly, pageSize],
     refetchOnMount: true,
     refetchOnWindowFocus: false,
     queryFn: async () => {
-      // Build query params inside queryFn to avoid closure issues
-      const params = new URLSearchParams();
-      if (selectedEntities.size > 0) {
-        params.set('entities', Array.from(selectedEntities).join(','));
-      }
-      if (showUntagged) {
-        params.set('untagged', 'true');
-      }
+      if (!supabase) throw new Error("Supabase not configured");
+
+      // Build base query
+      let query = supabase
+        .from("historical_news_analyses")
+        .select("date, summary, tags, tier, url, source_url", { count: "exact" });
+
+      // Apply filters
       if (showManualOnly) {
-        params.set('manualOnly', 'true');
+        query = query.eq("is_manual_override", true);
       }
+
+      if (showUntagged) {
+        query = query.or("tags.is.null,tags.eq.[]");
+      } else if (selectedEntities.size > 0) {
+        // Filter by selected entities
+        const entityFilters = Array.from(selectedEntities).map(entityKey => {
+          const [category, name] = entityKey.split("::");
+          return `tags.cs.[{"category":"${category}","name":"${name}"}]`;
+        });
+        // For now, we'll fetch all and filter client-side since Supabase doesn't support complex JSONB array queries easily
+      }
+
       if (debouncedSearchQuery) {
-        params.set('search', debouncedSearchQuery);
+        // Search in summary or date
+        query = query.or(`summary.ilike.%${debouncedSearchQuery}%,date.ilike.%${debouncedSearchQuery}%`);
       }
-      params.set('page', currentPage.toString());
-      params.set('pageSize', pageSize.toString());
+
+      // Get total count first
+      const { count: totalCount, error: countError } = await query;
+      if (countError) throw countError;
+
+      // Apply pagination
+      const from = (currentPage - 1) * pageSize;
+      const to = from + pageSize - 1;
       
-      const url = `/api/tags/analyses?${params}`;
-      console.log('🌐 Fetching:', url);
-      const response = await fetch(url);
-      if (!response.ok) throw new Error('Failed to fetch analyses');
-      const data = await response.json();
-      console.log('📦 Received:', data.analyses?.length || 0, 'analyses, total count:', data.pagination?.totalCount || 0);
-      return data;
+      query = query
+        .order("date", { ascending: false })
+        .range(from, to);
+
+      const { data: analyses, error } = await query;
+      if (error) throw error;
+
+      // Client-side filtering for entity selection (since JSONB array filtering is complex)
+      let filteredAnalyses = analyses || [];
+      if (selectedEntities.size > 0 && !showUntagged) {
+        filteredAnalyses = filteredAnalyses.filter(analysis => {
+          if (!analysis.tags || !Array.isArray(analysis.tags)) return false;
+          return Array.from(selectedEntities).some(entityKey => {
+            const [category, name] = entityKey.split("::");
+            return analysis.tags.some((tag: EntityTag) => 
+              tag.category === category && tag.name === name
+            );
+          });
+        });
+      }
+
+      const totalPages = Math.ceil((totalCount || 0) / pageSize);
+
+      console.log('📦 Received:', filteredAnalyses.length, 'analyses, total count:', totalCount);
+
+      return {
+        analyses: filteredAnalyses,
+        pagination: {
+          currentPage,
+          pageSize,
+          totalCount: totalCount || 0,
+          totalPages
+        }
+      };
     },
   });
 
@@ -310,30 +415,42 @@ export default function TagsBrowser() {
 
   // Helper to fetch all matching dates based on current filters
   const fetchAllMatchingDates = async (): Promise<string[]> => {
-    const allQueryParams = new URLSearchParams();
-    if (selectedEntities.size > 0) {
-      allQueryParams.set('entities', Array.from(selectedEntities).join(','));
-    }
-    if (showUntagged) {
-      allQueryParams.set('untagged', 'true');
-    }
-    if (showManualOnly) {
-      allQueryParams.set('manualOnly', 'true');
-    }
-    if (debouncedSearchQuery) {
-      allQueryParams.set('search', debouncedSearchQuery);
-    }
-    // Don't set page/pageSize to get all results
-    allQueryParams.set('all', 'true');
+    if (!supabase) throw new Error("Supabase not configured");
 
-    const response = await fetch(`/api/tags/analyses?${allQueryParams}`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch analyses: ${response.status} ${response.statusText}`);
+    let query = supabase
+      .from("historical_news_analyses")
+      .select("date, tags, summary");
+
+    if (showManualOnly) {
+      query = query.eq("is_manual_override", true);
     }
-    
-    const data = await response.json();
-    const allAnalyses: HistoricalNewsAnalysis[] = data.analyses || [];
-    return allAnalyses.map(a => a.date);
+
+    if (showUntagged) {
+      query = query.or("tags.is.null,tags.eq.[]");
+    }
+
+    if (debouncedSearchQuery) {
+      query = query.or(`summary.ilike.%${debouncedSearchQuery}%,date.ilike.%${debouncedSearchQuery}%`);
+    }
+
+    const { data: analyses, error } = await query;
+    if (error) throw error;
+
+    // Client-side filtering for entity selection
+    let filteredAnalyses = analyses || [];
+    if (selectedEntities.size > 0 && !showUntagged) {
+      filteredAnalyses = filteredAnalyses.filter(analysis => {
+        if (!analysis.tags || !Array.isArray(analysis.tags)) return false;
+        return Array.from(selectedEntities).some(entityKey => {
+          const [category, name] = entityKey.split("::");
+          return analysis.tags.some((tag: EntityTag) => 
+            tag.category === category && tag.name === name
+          );
+        });
+      });
+    }
+
+    return filteredAnalyses.map(a => a.date);
   };
 
   // Bulk add tags mutation
@@ -342,8 +459,8 @@ export default function TagsBrowser() {
       return apiRequest('POST', '/api/tags/bulk-add', { dates, tag });
     },
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/tags/catalog'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/tags/analyses'] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
       toast({
         title: "Tags Added",
         description: `Successfully added tag to ${variables.dates.length} analyses`,
@@ -368,9 +485,9 @@ export default function TagsBrowser() {
       return apiRequest('POST', '/api/tags/bulk-remove', { dates, tag });
     },
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['/api/tags/catalog'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/tags/analyses'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/tags/selected-summaries-tags'] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-tags-selected-summaries'] });
       toast({
         title: "Tag Removed",
         description: `Successfully removed tag from ${variables.dates.length} analyses`,
@@ -423,16 +540,13 @@ export default function TagsBrowser() {
 
   // Fetch unique tags from selected summaries for bulk remove
   const { data: selectedSummariesTags = [], isLoading: isLoadingTags } = useQuery<EntityTag[]>({
-    queryKey: ['/api/tags/selected-summaries-tags', Array.from(selectedDates).sort(), selectAllMatching, debouncedSearchQuery, showManualOnly, showUntagged],
+    queryKey: ['supabase-tags-selected-summaries', Array.from(selectedDates).sort(), selectAllMatching, debouncedSearchQuery, showManualOnly, showUntagged],
     queryFn: async () => {
+      if (!supabase) throw new Error("Supabase not configured");
+
       let datesToCheck: string[];
       
       if (selectAllMatching) {
-        // If selecting all matching, we need to fetch potentially ALL tags which might be too heavy
-        // For now, let's stick to fetching tags from the currently VISIBLE selection if possible, 
-        // or fetch IDs first then tags.
-        // Actually, fetching ALL tags for ALL matching records to show in the "Remove" dialog might be slow.
-        // Let's fetch IDs first.
         try {
           datesToCheck = await fetchAllMatchingDates();
         } catch (e) {
@@ -443,18 +557,28 @@ export default function TagsBrowser() {
         datesToCheck = Array.from(selectedDates);
       }
       
-      const response = await fetch('/api/tags/selected-summaries-tags', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dates: datesToCheck })
+      // Fetch analyses for the selected dates
+      const { data: analyses, error } = await supabase
+        .from("historical_news_analyses")
+        .select("tags")
+        .in("date", datesToCheck);
+
+      if (error) throw error;
+
+      // Extract unique tags
+      const uniqueTags = new Map<string, EntityTag>();
+      analyses?.forEach(analysis => {
+        if (analysis.tags && Array.isArray(analysis.tags)) {
+          analysis.tags.forEach((tag: EntityTag) => {
+            const key = `${tag.category}::${tag.name}`;
+            if (!uniqueTags.has(key)) {
+              uniqueTags.set(key, tag);
+            }
+          });
+        }
       });
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch tags');
-      }
-      
-      const data = await response.json();
-      return data.tags || [];
+
+      return Array.from(uniqueTags.values());
     },
     enabled: showBulkRemove && (selectedDates.size > 0 || selectAllMatching),
   });
@@ -551,25 +675,16 @@ export default function TagsBrowser() {
       // or the user manually selected < 50 across pages.
       
       if (analysesToCopy.length < datesToCopy.length) {
-         // We are missing some data. Need to fetch.
-         // Re-using fetchAllMatchingDates queries ALL, which is wasteful if we have IDs.
-         // Let's just use the endpoint with a special filter or multiple calls?
-         // Actually, the /api/tags/analyses endpoint doesn't support fetching by specific IDs list easily 
-         // (unless we abuse 'search' or add a new param).
-         
-         // Fallback: Fetch ALL matching (reusing logic) and filter in memory.
-         const allQueryParams = new URLSearchParams();
-         if (selectedEntities.size > 0) allQueryParams.set('entities', Array.from(selectedEntities).join(','));
-         if (showUntagged) allQueryParams.set('untagged', 'true');
-         if (showManualOnly) allQueryParams.set('manualOnly', 'true');
-         if (debouncedSearchQuery) allQueryParams.set('search', debouncedSearchQuery);
-         allQueryParams.set('all', 'true');
+         // We are missing some data. Need to fetch from Supabase.
+         if (!supabase) throw new Error("Supabase not configured");
 
-         const response = await fetch(`/api/tags/analyses?${allQueryParams}`);
-         if (!response.ok) throw new Error('Failed to fetch data');
-         const data = await response.json();
-         const all = data.analyses || [];
-         analysesToCopy = all.filter((a: HistoricalNewsAnalysis) => datesToCopy.includes(a.date));
+         const { data: fetchedAnalyses, error } = await supabase
+           .from("historical_news_analyses")
+           .select("date, summary")
+           .in("date", datesToCopy);
+
+         if (error) throw error;
+         analysesToCopy = fetchedAnalyses || [];
       }
       
       if (analysesToCopy.length === 0) {
