@@ -291,7 +291,7 @@ export default function DayAnalysis() {
           id: analysis.id,
           date: analysis.date,
           summary: analysis.summary,
-          topArticleId: '',
+          topArticleId: analysis.top_article_id || '',
           reasoning: analysis.reasoning || '',
           confidenceScore: analysis.confidence_score || '0',
           aiProvider: analysis.ai_provider || 'unknown',
