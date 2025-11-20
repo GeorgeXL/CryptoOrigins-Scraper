@@ -304,16 +304,17 @@ export default function DayAnalysis() {
           summary: entry.summary || '',
           description: entry.description || ''
         })) || [],
-        tieredArticles: {
+        tieredArticles: analysis.tiered_articles || {
           bitcoin: [],
           crypto: [],
           macro: []
         },
+        analyzedArticles: analysis.analyzed_articles || [],
         winningTier: analysis.tier_used || null,
         meta: {
-          hasLegacyData: false,
-          hasTieredData: false,
-          dataVersion: 'v2-tiered' as const
+          hasLegacyData: analysis.data_version === 'v1-legacy',
+          hasTieredData: analysis.data_version === 'v2-tiered',
+          dataVersion: (analysis.data_version || 'v2-tiered') as const
         }
       };
     },
