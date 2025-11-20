@@ -278,6 +278,14 @@ export default function DayAnalysis() {
         .select("*")
         .eq("date", date);
 
+      // Check if tiered_articles has actual data
+      const tieredArticles = analysis.tiered_articles || { bitcoin: [], crypto: [], macro: [] };
+      const hasTieredData = !!(
+        (tieredArticles.bitcoin && tieredArticles.bitcoin.length > 0) ||
+        (tieredArticles.crypto && tieredArticles.crypto.length > 0) ||
+        (tieredArticles.macro && tieredArticles.macro.length > 0)
+      );
+
       return {
         analysis: {
           id: analysis.id,
@@ -304,17 +312,13 @@ export default function DayAnalysis() {
           summary: entry.summary || '',
           description: entry.description || ''
         })) || [],
-        tieredArticles: analysis.tiered_articles || {
-          bitcoin: [],
-          crypto: [],
-          macro: []
-        },
+        tieredArticles,
         analyzedArticles: analysis.analyzed_articles || [],
-        winningTier: analysis.tier_used || null,
+        winningTier: analysis.tier_used || analysis.winning_tier || null,
         meta: {
-          hasLegacyData: analysis.data_version === 'v1-legacy',
-          hasTieredData: analysis.data_version === 'v2-tiered',
-          dataVersion: (analysis.data_version || 'v2-tiered') as const
+          hasLegacyData: !hasTieredData && (analysis.analyzed_articles && analysis.analyzed_articles.length > 0),
+          hasTieredData,
+          dataVersion: hasTieredData ? 'v2-tiered' : 'v1-legacy'
         }
       };
     },
