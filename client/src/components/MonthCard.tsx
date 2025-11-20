@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { supabase } from "@/lib/supabase";
 
 interface MonthData {
   progress: {
@@ -30,8 +31,44 @@ interface MonthCardProps {
 }
 
 export default function MonthCard({ year, month }: MonthCardProps) {
-  const { data: yearData } = useQuery<MonthData>({
-    queryKey: [`/api/analysis/year/${year}`],
+  // Fetch data for THIS specific month only
+  const { data: monthData, isLoading, error } = useQuery({
+    queryKey: [`supabase-month-${year}-${month}`],
+    queryFn: async () => {
+      if (!supabase) {
+        console.error(`MonthCard ${year}-${month}: Supabase not configured`);
+        throw new Error("Supabase not configured");
+      }
+      
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
+      const endDate = `${year}-${month.toString().padStart(2, '0')}-${daysInMonth.toString().padStart(2, '0')}`;
+      
+      console.log(`MonthCard ${year}-${month}: Querying from ${startDate} to ${endDate}`);
+      
+      const { count, error } = await supabase
+        .from("historical_news_analyses")
+        .select("*", { count: "exact", head: true })
+        .gte("date", startDate)
+        .lte("date", endDate);
+      
+      if (error) {
+        console.error(`MonthCard ${year}-${month}: Query error:`, error);
+        throw error;
+      }
+      
+      const analyzedDays = count || 0;
+      const percentage = daysInMonth > 0 ? Math.round((analyzedDays / daysInMonth) * 100) : 0;
+      
+      console.log(`MonthCard ${year}-${month}: Result - ${analyzedDays}/${daysInMonth} days (${percentage}%)`);
+      
+      return {
+        month,
+        analyzedDays,
+        totalDays: daysInMonth,
+        percentage
+      };
+    },
   });
 
   const getMonthName = (monthNum: number) => {
@@ -42,7 +79,6 @@ export default function MonthCard({ year, month }: MonthCardProps) {
     return months[monthNum - 1];
   };
 
-  const currentMonth = yearData?.monthlyBreakdown[month - 1];
   const currentDate = new Date();
   const isCurrentMonth = year === currentDate.getFullYear() && month === currentDate.getMonth() + 1;
   const isFutureMonth = year > currentDate.getFullYear() || 
@@ -50,18 +86,21 @@ export default function MonthCard({ year, month }: MonthCardProps) {
 
   const getStatusVariant = () => {
     if (isFutureMonth) return "outline" as const;
-    if (!currentMonth) return "secondary" as const;
-    if (currentMonth.percentage === 100) return "default" as const;
-    if (currentMonth.percentage >= 80) return "secondary" as const;
+    if (isLoading) return "secondary" as const;
+    if (error || !monthData) return "secondary" as const;
+    if (monthData.percentage === 100) return "default" as const;
+    if (monthData.percentage >= 80) return "secondary" as const;
     return "destructive" as const;
   };
 
   const getStatusLabel = () => {
     if (isFutureMonth) return "Future";
-    if (!currentMonth) return "No Data";
+    if (isLoading) return "Loading...";
+    if (error) return "Error";
+    if (!monthData) return "No Data";
     if (isCurrentMonth) return "Current";
-    if (currentMonth.percentage === 100) return "Complete";
-    return `${currentMonth.percentage}%`;
+    if (monthData.percentage === 100) return "Complete";
+    return `${monthData.percentage}%`;
   };
 
   return (
@@ -86,21 +125,21 @@ export default function MonthCard({ year, month }: MonthCardProps) {
           </div>
           
           {/* Month Statistics */}
-          {!isFutureMonth && currentMonth ? (
+          {!isFutureMonth && monthData ? (
             <div className="space-y-3">
               <div className="text-center">
                 <span className="text-sm text-slate-500">
-                  {currentMonth.analyzedDays} / {currentMonth.totalDays} days
+                  {monthData.analyzedDays} / {monthData.totalDays} days
                 </span>
               </div>
               
               <div className="w-full bg-slate-200 rounded-full h-2">
                 <div 
                   className={`h-2 rounded-full transition-all duration-300 ${
-                    currentMonth.percentage === 100 ? 'bg-emerald-500' :
-                    currentMonth.percentage >= 50 ? 'bg-blue-500' : 'bg-amber-500'
+                    monthData.percentage === 100 ? 'bg-emerald-500' :
+                    monthData.percentage >= 50 ? 'bg-blue-500' : 'bg-amber-500'
                   }`}
-                  style={{ width: `${currentMonth.percentage}%` }}
+                  style={{ width: `${monthData.percentage}%` }}
                 />
               </div>
             </div>

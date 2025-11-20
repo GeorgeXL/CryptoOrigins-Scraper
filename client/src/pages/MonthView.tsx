@@ -20,7 +20,7 @@ import { FlagButton } from "@/components/FlagButton";
 import { useToast } from "@/hooks/use-toast";
 import { useAiProvider } from "@/hooks/useAiProvider";
 import { useGlobalAnalysis } from "@/contexts/GlobalAnalysisContext";
-
+import { supabase } from "@/lib/supabase";
 
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { 
@@ -134,7 +134,55 @@ export default function MonthView() {
   const [showEarlyYearWarning, setShowEarlyYearWarning] = useState(false);
   
   const { data: monthData, isLoading } = useQuery<MonthData>({
-    queryKey: [`/api/analysis/year/${year}`],
+    queryKey: [`supabase-month-view-${year}-${month}`],
+    queryFn: async () => {
+      if (!supabase) throw new Error("Supabase not configured");
+
+      const daysInMonth = new Date(yearNum, monthNum, 0).getDate();
+      const startDate = `${year}-${month.toString().padStart(2, '0')}-01`;
+      const endDate = `${year}-${month.toString().padStart(2, '0')}-${daysInMonth.toString().padStart(2, '0')}`;
+
+      // Fetch all analyses for the current month
+      const { data: analyses, error: analysesError } = await supabase
+        .from("historical_news_analyses")
+        .select("date, summary, is_manual_override, confidence_score, is_flagged, flag_reason, tiered_articles, analyzed_articles")
+        .gte("date", startDate)
+        .lte("date", endDate)
+        .order("date", { ascending: true });
+
+      if (analysesError) throw analysesError;
+
+      const analyzedDays = analyses?.length || 0;
+      const percentage = daysInMonth > 0 ? Math.round((analyzedDays / daysInMonth) * 100) : 0;
+
+      // Construct monthlyBreakdown for this specific month
+      const monthlyBreakdown = [{
+        month: monthNum,
+        analyzedDays,
+        totalDays: daysInMonth,
+        percentage
+      }];
+
+      return {
+        progress: {
+          totalDays: daysInMonth,
+          analyzedDays,
+          percentage
+        },
+        analyses: analyses?.map(a => ({
+          date: a.date,
+          summary: a.summary,
+          hasManualEntry: a.is_manual_override,
+          confidenceScore: parseFloat(a.confidence_score || '0'),
+          isFlagged: a.is_flagged,
+          flagReason: a.flag_reason,
+          tieredArticles: a.tiered_articles,
+          analyzedArticles: a.analyzed_articles,
+          isManualOverride: a.is_manual_override,
+        })) || [],
+        monthlyBreakdown
+      };
+    },
   });
 
   // Auto fetch mutation
@@ -167,7 +215,9 @@ export default function MonthView() {
         title: "Analysis completed",
         description: `Bitcoin news analysis for ${formattedDate} has been generated successfully.`,
       });
-      queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${year}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-month-view-${year}-${month}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-year-${year}`] }); // Invalidate YearCard data
+      queryClient.invalidateQueries({ queryKey: ['supabase-stats'] }); // Invalidate HomePage stats
     },
     onError: (error: any) => {
       toast({
@@ -208,7 +258,9 @@ export default function MonthView() {
     onSuccess: () => {
       toast({ title: "Success", description: "Selected analyses deleted successfully." });
       setSelectedDates(new Set());
-      queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${year}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-month-view-${year}-${month}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-year-${year}`] }); // Invalidate YearCard data
+      queryClient.invalidateQueries({ queryKey: ['supabase-stats'] }); // Invalidate HomePage stats
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to delete some analyses.", variant: "destructive" });
@@ -230,7 +282,9 @@ export default function MonthView() {
     onSuccess: () => {
       toast({ title: "Success", description: "Selected analyses recreated successfully." });
       setSelectedDates(new Set());
-      queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${year}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-month-view-${year}-${month}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-year-${year}`] }); // Invalidate YearCard data
+      queryClient.invalidateQueries({ queryKey: ['supabase-stats'] }); // Invalidate HomePage stats
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to recreate some analyses.", variant: "destructive" });
@@ -347,7 +401,9 @@ export default function MonthView() {
               
               // Update cache every few completions for better UX
               if (completed > 0 && completed % 3 === 0) {
-                queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${year}`] });
+                queryClient.invalidateQueries({ queryKey: [`supabase-month-view-${year}-${month}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-year-${year}`] }); // Invalidate YearCard data
+      queryClient.invalidateQueries({ queryKey: ['supabase-stats'] }); // Invalidate HomePage stats
               }
             }
           } catch (parseError) {
@@ -512,7 +568,9 @@ export default function MonthView() {
     } finally {
       completeAnalysis(analysisId);
       setCurrentAnalyzingDates(new Set());
-      queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${year}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-month-view-${year}-${month}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-year-${year}`] }); // Invalidate YearCard data
+      queryClient.invalidateQueries({ queryKey: ['supabase-stats'] }); // Invalidate HomePage stats
     }
   };
 

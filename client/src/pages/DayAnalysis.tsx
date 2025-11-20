@@ -15,6 +15,7 @@ import { debounce } from "@/lib/debounce";
 import { useApiHealthCheck } from "@/hooks/useApiHealthCheck";
 import { useAiProvider } from "@/hooks/useAiProvider";
 import { NewsArticle } from "@/types/api-types";
+import { supabase } from "@/lib/supabase";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -222,7 +223,100 @@ export default function DayAnalysis() {
   const { data: dayData, isLoading } = useQuery<DayAnalysisData & {
     analyzedArticles?: NewsArticle[];
   }>({
-    queryKey: [`/api/analysis/date/${date}`],
+    queryKey: [`supabase-date-${date}`],
+    queryFn: async () => {
+      if (!supabase || !date) throw new Error("Supabase not configured or date missing");
+
+      // Fetch analysis for the specific date
+      const { data: analysis, error } = await supabase
+        .from("historical_news_analyses")
+        .select("*")
+        .eq("date", date)
+        .single();
+
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows returned
+      if (!analysis) {
+        // Return empty structure if no analysis exists
+        return {
+          analysis: {
+            id: '',
+            date: date,
+            summary: '',
+            topArticleId: '',
+            reasoning: '',
+            confidenceScore: '0',
+            aiProvider: 'unknown',
+            isManualOverride: false,
+            isFlagged: false,
+            tags: [],
+            articleTags: {
+              totalArticles: 0,
+              topSources: [],
+              duplicatesFound: 0,
+              sourcesUsed: [],
+              totalFetched: 0,
+            }
+          },
+          manualEntries: [],
+          tieredArticles: {
+            bitcoin: [],
+            crypto: [],
+            macro: []
+          },
+          winningTier: null,
+          meta: {
+            hasLegacyData: false,
+            hasTieredData: false,
+            dataVersion: 'v2-tiered' as const
+          }
+        };
+      }
+
+      // Fetch manual entries for this date (if any)
+      const { data: manualEntries } = await supabase
+        .from("manual_news_entries")
+        .select("*")
+        .eq("date", date);
+
+      return {
+        analysis: {
+          id: analysis.id,
+          date: analysis.date,
+          summary: analysis.summary,
+          topArticleId: '',
+          reasoning: analysis.reasoning || '',
+          confidenceScore: analysis.confidence_score || '0',
+          aiProvider: analysis.ai_provider || 'unknown',
+          isManualOverride: analysis.is_manual_override || false,
+          isFlagged: false,
+          tags: analysis.tags || [],
+          articleTags: {
+            totalArticles: analysis.total_articles_fetched || 0,
+            topSources: [],
+            duplicatesFound: 0,
+            sourcesUsed: [],
+            totalFetched: analysis.total_articles_fetched || 0,
+          }
+        },
+        manualEntries: manualEntries?.map(entry => ({
+          id: entry.id,
+          title: entry.title || '',
+          summary: entry.summary || '',
+          description: entry.description || ''
+        })) || [],
+        tieredArticles: {
+          bitcoin: [],
+          crypto: [],
+          macro: []
+        },
+        winningTier: analysis.tier_used || null,
+        meta: {
+          hasLegacyData: false,
+          hasTieredData: false,
+          dataVersion: 'v2-tiered' as const
+        }
+      };
+    },
   });
 
   const reanalyzeMutation = useMutation({
@@ -258,12 +352,12 @@ export default function DayAnalysis() {
     onSuccess: () => {
       // DON'T invalidate current date query to prevent re-triggering useEffect
       // Instead, refetch it explicitly to get fresh data without making dayData undefined
-      queryClient.refetchQueries({ queryKey: [`/api/analysis/date/${date}`] });
+      queryClient.refetchQueries({ queryKey: [`supabase-date-${date}`] });
       
       // Also invalidate year data for calendar updates
       const dateYear = date?.substring(0, 4);
       if (dateYear) {
-        queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${dateYear}`] });
+        queryClient.invalidateQueries({ queryKey: [`supabase-year-${dateYear}`] });
       }
       
       // Invalidate stats for homepage
@@ -402,12 +496,12 @@ export default function DayAnalysis() {
     },
     onSuccess: () => {
       // Invalidate multiple related queries to ensure UI updates
-      queryClient.invalidateQueries({ queryKey: [`/api/analysis/date/${date}`] });
+      queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
       
       // Get year from date to invalidate year data (for calendar updates)
       const dateYear = date?.substring(0, 4);
       if (dateYear) {
-        queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${dateYear}`] });
+        queryClient.invalidateQueries({ queryKey: [`supabase-year-${dateYear}`] });
       }
       
       // Invalidate stats for homepage
@@ -458,7 +552,7 @@ export default function DayAnalysis() {
       queryClient.invalidateQueries({ queryKey: ['/api/analysis/stats'] });
       
       // Force immediate refetch of the current analysis
-      queryClient.refetchQueries({ queryKey: [`/api/analysis/date/${date}`] });
+      queryClient.refetchQueries({ queryKey: [`supabase-date-${date}`] });
       
       // CRITICAL FIX: Clear sticky edited state to show fresh AI-generated summary
       setEditedSummary('');
@@ -516,8 +610,7 @@ export default function DayAnalysis() {
     
     // Prefetch the previous day's data for instant loading
     await queryClient.prefetchQuery({
-      queryKey: [`/api/analysis/date/${prevDate}`],
-      queryFn: () => fetch(`/api/analysis/date/${prevDate}`).then(res => res.json()),
+      queryKey: [`supabase-date-${prevDate}`],
       staleTime: 5 * 60 * 1000, // Cache for 5 minutes
     });
     
@@ -533,8 +626,7 @@ export default function DayAnalysis() {
     
     // Prefetch the next day's data for instant loading
     await queryClient.prefetchQuery({
-      queryKey: [`/api/analysis/date/${nextDate}`],
-      queryFn: () => fetch(`/api/analysis/date/${nextDate}`).then(res => res.json()),
+      queryKey: [`supabase-date-${nextDate}`],
       staleTime: 5 * 60 * 1000, // Cache for 5 minutes
     });
     
