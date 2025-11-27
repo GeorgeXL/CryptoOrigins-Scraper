@@ -55,6 +55,11 @@ export const historicalNewsAnalyses = pgTable("historical_news_analyses", {
   reVerificationStatus: text("re_verification_status"), // 'success', 'problem' - tracks if re-verification found good coverage
   reVerificationWinner: text("re_verification_winner"), // 'original', 'corrected' - which date had better coverage
   tags: jsonb("tags"), // Array of extracted entities: [{name: "Bitcoin", category: "crypto"}, {name: "Tesla", category: "company"}]
+  tagNames: text("tag_names").array(), // Array of tag names without categories: ["Bitcoin", "Ethereum", "Tesla"] - used for frontend-only grouping
+  // Final Analysis verification fields
+  geminiApproved: boolean("gemini_approved"), // Gemini verification result (true = approved, false = rejected)
+  perplexityApproved: boolean("perplexity_approved"), // Perplexity verification result (true = approved, false = rejected)
+  finalAnalysisCheckedAt: timestamp("final_analysis_checked_at"), // When final analysis verification was performed
 }, (table) => ({
   // Critical indexes for performance
   dateIdx: index("idx_historical_news_date").on(table.date),

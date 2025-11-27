@@ -47,7 +47,9 @@ function getDbInstance() {
     console.log(`🔧 LAZY INIT: Creating database pool (serverless: ${isServerless}, max: ${maxConnections})...`);
 
     // Clean the connection string - remove supa parameter
-    let cleanConnectionString = databaseUrl.replace(/[?&]supa=[^&]*/g, '');
+    // Also handle malformed connection strings that might contain duplicate definitions or spaces
+    let cleanConnectionString = databaseUrl.split(/\s+/)[0].replace(/"/g, '');
+    cleanConnectionString = cleanConnectionString.replace(/[?&]supa=[^&]*/g, '');
     cleanConnectionString = cleanConnectionString.replace(/\?&/, '?');
     
     // Ensure sslmode=require is in the connection string

@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { 
@@ -8,7 +8,8 @@ import {
   Bitcoin,
   Zap,
   Sparkles,
-  Tag
+  Tag,
+  FolderKanban
 } from "lucide-react";
 import CSVImportDialog from './CSVImportDialog';
 import ApiMonitor from './ApiMonitor';
@@ -26,12 +27,14 @@ interface AppLayoutProps {
 
 export default function AppLayout({ children }: AppLayoutProps) {
   const [location] = useLocation();
+  const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
   const navItems = [
     { path: "/", label: "History View", icon: History, active: location === "/" },
     { path: "/event-cockpit", label: "Event Cockpit", icon: Zap, active: location === "/event-cockpit" },
     { path: "/cleaner", label: "Cleanerrr", icon: Sparkles, active: location === "/cleaner" },
     { path: "/tags-browser", label: "Tags Browser", icon: Tag, active: location === "/tags-browser" },
+    { path: "/tags-manager", label: "Tags Manager", icon: FolderKanban, active: location === "/tags-manager" },
   ];
 
   return (
@@ -55,18 +58,30 @@ export default function AppLayout({ children }: AppLayoutProps) {
               </Link>
               
               {/* Main Navigation */}
-              <nav className="hidden md:flex items-center space-x-4">
+              <nav className="hidden md:flex items-center space-x-1">
                 {navItems.map((item) => {
                   const IconComponent = item.icon;
+                  const showText = item.active || hoveredItem === item.path;
+                  
                   return (
-                    <Link key={item.path} href={item.path}>
+                    <Link 
+                      key={item.path} 
+                      href={item.path}
+                      onMouseEnter={() => setHoveredItem(item.path)}
+                      onMouseLeave={() => setHoveredItem(null)}
+                    >
                       <Button
                         variant={item.active ? "default" : "ghost"}
                         size="sm"
-                        className="flex items-center space-x-2"
+                        className={`flex items-center transition-all duration-200 ${
+                          showText ? "space-x-2 px-3" : "px-2"
+                        }`}
+                        title={!showText ? item.label : undefined}
                       >
-                        <IconComponent className="w-4 h-4" />
-                        <span>{item.label}</span>
+                        <IconComponent className="w-4 h-4 flex-shrink-0" />
+                        {showText && (
+                          <span className="whitespace-nowrap">{item.label}</span>
+                        )}
                       </Button>
                     </Link>
                   );
@@ -74,7 +89,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
               </nav>
               
               {/* Dynamic Breadcrumb Navigation - Only show on non-home pages */}
-              {location !== "/" && location !== "/event-cockpit" && location !== "/cleaner" && location !== "/tags-browser" && (
+              {location !== "/" && location !== "/event-cockpit" && location !== "/cleaner" && location !== "/tags-browser" && location !== "/tags-manager" && (
                 <div className="hidden md:block">
                   <Breadcrumb items={(() => {
                     // Settings page

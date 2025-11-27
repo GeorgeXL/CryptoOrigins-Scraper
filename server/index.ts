@@ -5,35 +5,35 @@ import compression from "compression";
 import { createServer, type Server } from "http";
 
 export async function createApp(): Promise<{ app: Express; server: Server }> {
-const app = express();
+  const app = express();
 
-// Enable compression for all responses - 60-80% size reduction
-app.use(compression({
-  level: 6, // Good balance between compression and speed
-  threshold: 1024, // Only compress responses larger than 1KB
-  filter: (req, res) => {
-    // Don't compress already compressed content
-    if (req.headers['x-no-compression']) {
-      return false;
+  // Enable compression for all responses - 60-80% size reduction
+  app.use(compression({
+    level: 6, // Good balance between compression and speed
+    threshold: 1024, // Only compress responses larger than 1KB
+    filter: (req, res) => {
+      // Don't compress already compressed content
+      if (req.headers['x-no-compression']) {
+        return false;
+      }
+      // Use compression for all other responses
+      return compression.filter(req, res);
     }
-    // Use compression for all other responses
-    return compression.filter(req, res);
-  }
-}));
+  }));
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: false, limit: '50mb' }));
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 
-app.use((req, res, next) => {
-  const start = Date.now();
-  const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+  app.use((req, res, next) => {
+    const start = Date.now();
+    const path = req.path;
+    let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
+    const originalResJson = res.json;
+    res.json = function (bodyJson, ...args) {
+      capturedJsonResponse = bodyJson;
+      return originalResJson.apply(res, [bodyJson, ...args]);
+    };
 
     res.on("finish", () => {
       const duration = Date.now() - start;
@@ -51,8 +51,8 @@ app.use((req, res, next) => {
       }
     });
 
-  next();
-});
+    next();
+  });
 
   const server = await registerRoutes(app);
 
@@ -60,8 +60,9 @@ app.use((req, res, next) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
+    console.error("Error handler:", err);
     res.status(status).json({ message });
-    throw err;
+    // Don't throw - error already handled
   });
 
   // importantly only setup vite in development and after
@@ -103,8 +104,8 @@ if (!isServerless) {
       
       server.listen(port, "0.0.0.0", () => {
         console.log(`✅ Server is running on http://localhost:${port}`);
-      console.log(`serving on port ${port}`);
-  });
+        console.log(`serving on port ${port}`);
+      });
       
       server.on('error', (err: any) => {
         console.error("❌ Server error:", err);

@@ -9,7 +9,7 @@ import { formatDistanceToNow } from 'date-fns';
 
 interface ApiRequest {
   id: string;
-  service: 'exa' | 'openai' | 'health' | 'perplexity' | 'perplexity-cleaner';
+  service: 'exa' | 'openai' | 'health' | 'perplexity' | 'perplexity-cleaner' | 'gemini';
   endpoint: string;
   method: string;
   timestamp: number;
@@ -50,7 +50,8 @@ const serviceColors = {
   openai: 'bg-purple-100 text-purple-800 border-purple-200',
   health: 'bg-gray-100 text-gray-800 border-gray-200',
   perplexity: 'bg-orange-100 text-orange-800 border-orange-200',
-  'perplexity-cleaner': 'bg-indigo-100 text-indigo-800 border-indigo-200'
+  'perplexity-cleaner': 'bg-indigo-100 text-indigo-800 border-indigo-200',
+  gemini: 'bg-green-100 text-green-800 border-green-200'
 };
 
 const statusIcons = {
@@ -502,9 +503,46 @@ export default function ApiMonitor() {
     }
   };
 
+  // Fallback: Fetch requests via HTTP if WebSocket fails
+  const fetchRequests = async () => {
+    try {
+      const response = await fetch('/api/monitor/requests?limit=50');
+      if (response.ok) {
+        const data = await response.json();
+        setRequests(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch API requests:', error);
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
+      // Try WebSocket first
       connectWebSocket();
+      
+      // Also set up HTTP polling as fallback
+      const pollInterval = setInterval(() => {
+        fetchRequests();
+        fetchStats();
+      }, 2000); // Poll every 2 seconds
+      
+      // Initial fetch
+      fetchRequests();
+      fetchStats();
+      
+      return () => {
+        clearInterval(pollInterval);
+        if (wsRef.current) {
+          wsRef.current.close();
+        }
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+        if (fetchStatsTimeoutRef.current) {
+          clearTimeout(fetchStatsTimeoutRef.current);
+        }
+      };
     }
     
     return () => {

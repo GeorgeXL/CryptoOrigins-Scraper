@@ -33,6 +33,9 @@ export interface IAiProvider {
   // Perplexity specific helpers
   compareSummaries?(originalDate: string, originalSummary: string, newDate: string, newSummary: string, articles: any): Promise<{ winner: 'original' | 'new'; reasoning: string }>;
   validateArticleIsDateSpecificEvent?(article: ArticleData, date: string): Promise<{ isValid: boolean; reasoning: string; confidence: number }>;
+  
+  // Final Analysis verification (Gemini and Perplexity)
+  verifyEventDate?(summary: string, date: string): Promise<{ approved: boolean; reasoning: string }>;
 }
 
 export interface CompletionOptions {

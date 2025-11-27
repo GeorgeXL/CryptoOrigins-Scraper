@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 
 export interface ApiRequest {
   id: string;
-  service: 'exa' | 'openai' | 'perplexity' | 'perplexity-cleaner' | 'health';
+  service: 'exa' | 'openai' | 'perplexity' | 'perplexity-cleaner' | 'health' | 'gemini';
   endpoint: string;
   method: string;
   timestamp: number;

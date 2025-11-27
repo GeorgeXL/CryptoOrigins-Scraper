@@ -15,8 +15,10 @@ import { batchProcessor } from "../services/batch-processor";
 import { conflictClusterer } from "../services/conflict-clusterer";
 import { perplexityCleaner } from "../services/perplexity-cleaner";
 import { entityExtractor } from "../services/entity-extractor";
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
 import { aiService } from "../services/ai";
+import { db } from "../db";
+import { historicalNewsAnalyses } from "@shared/schema";
 
 const router = Router();
 
@@ -242,6 +244,174 @@ function parsePerplexityDate(dateText: string | null): string | null {
       
       res.json(result);
     } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post("/api/final-analysis/verify", async (req, res) => {
+    console.log('🔵 Final Analysis endpoint called');
+    console.log('📥 Request body:', JSON.stringify(req.body));
+    
+    const batchStartTime = Date.now();
+    const batchRequestId = apiMonitor.logRequest({
+      service: 'health',
+      endpoint: '/api/final-analysis/verify',
+      method: 'POST',
+      status: 'pending',
+      context: 'final-analysis-batch',
+      purpose: 'Batch verify dates',
+      requestData: { dateCount: req.body?.dates?.length || 0 }
+    });
+    console.log('📊 API Monitor request logged with ID:', batchRequestId);
+    console.log('📊 Total requests in monitor:', apiMonitor.getRecentRequests(100).length);
+
+    try {
+      const { dates } = req.body;
+      console.log('📅 Received dates for verification:', dates?.length || 0);
+      
+      if (!Array.isArray(dates) || dates.length === 0) {
+        return res.status(400).json({ error: "Dates array is required and must not be empty" });
+      }
+
+      apiMonitor.updateRequest(batchRequestId, {
+        requestData: { dateCount: dates.length }
+      });
+
+      const results = [];
+      const totalDates = dates.length;
+      let processedCount = 0;
+      
+      console.log(`📊 Processing ${totalDates} dates. This will make ${totalDates * 2} API calls (${totalDates} × Gemini + ${totalDates} × Perplexity)`);
+      
+      for (const date of dates) {
+        processedCount++;
+        console.log(`⏳ Processing date ${processedCount}/${totalDates}: ${date}`);
+        try {
+          // Fetch analysis for this date
+          const analysis = await storage.getAnalysisByDate(date);
+          
+          if (!analysis) {
+            results.push({
+              date,
+              error: "Analysis not found",
+              geminiApproved: null,
+              perplexityApproved: null
+            });
+            continue;
+          }
+
+          // Verify with Gemini
+          let geminiResult = { approved: false, reasoning: "" };
+          try {
+            let geminiProvider;
+            try {
+              geminiProvider = aiService.getProvider('gemini');
+            } catch (error) {
+              console.log(`Gemini provider not available: ${(error as Error).message}`);
+              geminiProvider = null;
+            }
+            
+            if (geminiProvider && 'verifyEventDate' in geminiProvider) {
+              geminiResult = await (geminiProvider as any).verifyEventDate(analysis.summary, date);
+            } else {
+              geminiResult = { approved: false, reasoning: "Gemini provider not available or not configured" };
+            }
+          } catch (error) {
+            console.error(`Error verifying with Gemini for ${date}:`, error);
+            geminiResult = { approved: false, reasoning: `Error: ${(error as Error).message}` };
+          }
+
+          // Verify with Perplexity
+          let perplexityResult = { approved: false, reasoning: "" };
+          try {
+            let perplexityProvider;
+            try {
+              perplexityProvider = aiService.getProvider('perplexity');
+            } catch (error) {
+              console.log(`Perplexity provider not available: ${(error as Error).message}`);
+              perplexityProvider = null;
+            }
+            
+            if (perplexityProvider && 'verifyEventDate' in perplexityProvider) {
+              perplexityResult = await (perplexityProvider as any).verifyEventDate(analysis.summary, date);
+            } else {
+              perplexityResult = { approved: false, reasoning: "Perplexity provider not available or not configured" };
+            }
+          } catch (error) {
+            console.error(`Error verifying with Perplexity for ${date}:`, error);
+            perplexityResult = { approved: false, reasoning: `Error: ${(error as Error).message}` };
+          }
+
+          // Update database with results
+          // Note: This will fail if migration hasn't been run, so we catch and continue
+          try {
+            await db.update(historicalNewsAnalyses)
+              .set({
+                geminiApproved: geminiResult.approved,
+                perplexityApproved: perplexityResult.approved,
+                finalAnalysisCheckedAt: new Date()
+              })
+              .where(eq(historicalNewsAnalyses.date, date));
+          } catch (dbError: any) {
+            // If columns don't exist yet (migration not run), log but continue
+            if (dbError.message?.includes('column') || dbError.message?.includes('does not exist')) {
+              console.warn(`Database columns not found for ${date}. Migration may need to be run. Error: ${dbError.message}`);
+            } else {
+              throw dbError; // Re-throw if it's a different error
+            }
+          }
+
+          results.push({
+            date,
+            geminiApproved: geminiResult.approved,
+            perplexityApproved: perplexityResult.approved,
+            geminiReasoning: geminiResult.reasoning,
+            perplexityReasoning: perplexityResult.reasoning
+          });
+        } catch (error) {
+          console.error(`Error processing date ${date}:`, error);
+          results.push({
+            date,
+            error: (error as Error).message,
+            geminiApproved: null,
+            perplexityApproved: null
+          });
+        }
+      }
+
+      const totalDuration = Date.now() - batchStartTime;
+      
+      // Check if any providers were unavailable
+      const unavailableProviders = [];
+      if (results.length > 0) {
+        const firstResult = results[0];
+        if (firstResult.geminiReasoning?.includes('not available')) {
+          unavailableProviders.push('Gemini');
+        }
+        if (firstResult.perplexityReasoning?.includes('not available')) {
+          unavailableProviders.push('Perplexity');
+        }
+      }
+      
+      apiMonitor.updateRequest(batchRequestId, {
+        status: 'success',
+        duration: totalDuration,
+        responseSize: results.length
+      });
+
+      res.json({ 
+        results,
+        warnings: unavailableProviders.length > 0 
+          ? `${unavailableProviders.join(' and ')} ${unavailableProviders.length === 1 ? 'is' : 'are'} not configured or available`
+          : undefined
+      });
+    } catch (error) {
+      const totalDuration = Date.now() - batchStartTime;
+      apiMonitor.updateRequest(batchRequestId, {
+        status: 'error',
+        duration: totalDuration,
+        error: (error as Error).message
+      });
       res.status(500).json({ error: (error as Error).message });
     }
   });

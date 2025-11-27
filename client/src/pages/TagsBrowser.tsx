@@ -20,6 +20,12 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { 
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { 
   Tag, 
   Search, 
   Filter,
@@ -37,11 +43,30 @@ import {
   Building2,
   Sparkles,
   Hash,
-  Copy
+  Copy,
+  ExternalLink,
+  Pencil,
+  Trash2
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
+import { Link } from "wouter";
+import { RenameDialog } from "@/components/TagsManager/RenameDialog";
+import { DeleteDialog } from "@/components/TagsManager/DeleteDialog";
+
+// Main category type definition
+export type MainCategory = 
+  | 'bitcoin'
+  | 'money-economics'
+  | 'technology'
+  | 'organizations'
+  | 'people'
+  | 'regulation-law'
+  | 'markets-geography'
+  | 'education-community'
+  | 'crime-security'
+  | 'miscellaneous';
 
 interface EntityTag {
   name: string;
@@ -87,6 +112,11 @@ export default function TagsBrowser() {
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [textToCopy, setTextToCopy] = useState("");
 
+  // State for edit/delete tag dialogs
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [tagToEdit, setTagToEdit] = useState<{ name: string; category: string; count: number } | null>(null);
+
   // Debounce search query - only update after user stops typing for 300ms
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -103,90 +133,226 @@ export default function TagsBrowser() {
   const [bulkTagName, setBulkTagName] = useState("");
   const [bulkTagCategory, setBulkTagCategory] = useState("crypto");
 
-  // Fetch catalog data for sidebar
-  const { data: catalogData } = useQuery<{
-    entitiesByCategory: Record<string, { category: string; name: string; count: number }[]>;
+  // Fetch flat tags from new v2 endpoint for frontend grouping
+  const { data: catalogV2Data, error: catalogError } = useQuery<{
+    tags: { name: string; count: number }[];
     taggedCount: number;
     untaggedCount: number;
     totalAnalyses: number;
   }>({
-    queryKey: ['supabase-tags-catalog', showManualOnly],
+    queryKey: ['tags-catalog-v2', showManualOnly],
     queryFn: async () => {
-      if (!supabase) throw new Error("Supabase not configured");
+      const response = await fetch(`/api/tags/catalog-v2${showManualOnly ? '?manualOnly=true' : ''}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Catalog v2 API error:', response.status, errorText);
+        throw new Error(`Failed to fetch catalog: ${response.statusText}`);
+      }
+      const data = await response.json();
+      console.log('Catalog v2 data received:', {
+        tagCount: data.tags?.length || 0,
+        taggedCount: data.taggedCount
+      });
+      return data;
+    },
+    retry: 1,
+  });
 
-      // Fetch all analyses with tags in batches to avoid row limit
-      let allAnalyses: any[] = [];
-      let from = 0;
-      const batchSize = 1000;
-      let hasMore = true;
+  // Fetch tag hierarchy from database
+  const { data: hierarchyData } = useQuery<{
+    categories: any[];
+    totalTags: number;
+  }>({
+    queryKey: ['tags-hierarchy'],
+    queryFn: async () => {
+      const response = await fetch('/api/tags/hierarchy');
+      if (!response.ok) {
+        throw new Error('Failed to fetch hierarchy');
+      }
+      return response.json();
+    },
+    staleTime: 1000 * 60 * 60, // Cache for 1 hour (hierarchy rarely changes)
+  });
 
-      while (hasMore) {
-        let query = supabase
-          .from("historical_news_analyses")
-          .select("tags, date")
-          .range(from, from + batchSize - 1);
+  // Map main category names to display names (New 9-Category Taxonomy)
+  const categoryDisplayNames: Record<MainCategory, string> = {
+    'bitcoin': 'Bitcoin',
+    'money-economics': 'Money & Economics',
+    'technology': 'Technology Concepts',
+    'organizations': 'Organizations & Companies',
+    'people': 'People',
+    'regulation-law': 'Regulation & Government',
+    'markets-geography': 'Geography & Markets',
+    'education-community': 'Education & Community',
+    'crime-security': 'Crime & Security',
+    'miscellaneous': 'Miscellaneous'
+  };
 
-        if (showManualOnly) {
-          query = query.eq("is_manual_override", true);
-        }
+  // Frontend grouping logic - Uses hierarchy from database
+  const catalogData = useMemo(() => {
+    if (!catalogV2Data?.tags || !hierarchyData?.categories) return null;
 
-        const { data: batch, error } = await query;
-        if (error) throw error;
-
-        if (batch && batch.length > 0) {
-          allAnalyses = allAnalyses.concat(batch);
-          from += batchSize;
-          hasMore = batch.length === batchSize;
-        } else {
-          hasMore = false;
+    const tags = catalogV2Data.tags;
+    const entitiesByCategory: Record<string, any[]> = {};
+    
+    // Build lookup map: tagName (lowercase) -> { categoryKey, subcategoryId, subcategoryName, parentChain }
+    const tagLookup = new Map<string, { categoryKey: string; subcategoryPath: string[] }>();
+    
+    const buildLookup = (node: any, categoryKey: string, path: string[] = []) => {
+      const currentPath = [...path, node.name];
+      
+      // If this node has no children or only has tags as children (leaf subcategory)
+      if (node.children && node.children.length > 0) {
+        // Check if children are tags (no further children) or subcategories
+        const hasSubcategories = node.children.some((child: any) => child.children && child.children.length > 0);
+        
+        if (hasSubcategories) {
+          // Recurse into subcategories
+          node.children.forEach((child: any) => buildLookup(child, categoryKey, currentPath));
+      } else {
+          // Children are tags - register them
+          node.children.forEach((child: any) => {
+            const normalizedName = (child.normalizedName || child.name.toLowerCase()).trim();
+            tagLookup.set(normalizedName, { categoryKey, subcategoryPath: currentPath });
+          });
         }
       }
-
-      // Process tags to build catalog
-      const tagCounts = new Map<string, Map<string, number>>();
-      let taggedCount = 0;
-      let untaggedCount = 0;
-
-      allAnalyses.forEach((analysis) => {
-        if (analysis.tags && Array.isArray(analysis.tags) && analysis.tags.length > 0) {
-          taggedCount++;
-          analysis.tags.forEach((tag: EntityTag) => {
-            if (!tagCounts.has(tag.category)) {
-              tagCounts.set(tag.category, new Map());
-            }
-            const categoryMap = tagCounts.get(tag.category)!;
-            categoryMap.set(tag.name, (categoryMap.get(tag.name) || 0) + 1);
-          });
-        } else {
-          untaggedCount++;
+    };
+    
+    // Process each main category from hierarchy
+    hierarchyData.categories.forEach((category: any) => {
+      const categoryKey = category.category; // e.g., 'bitcoin', 'money-economics'
+      
+      if (category.children && category.children.length > 0) {
+        category.children.forEach((subcategory: any) => {
+          buildLookup(subcategory, categoryKey, []);
+        });
+      }
+    });
+    
+    console.log(`Built tag lookup with ${tagLookup.size} entries from hierarchy`);
+    
+    // Group tags by their category using the lookup
+    const tagsByCategory = new Map<string, Map<string, { tag: typeof tags[0]; path: string[] }>>();
+    const unmatchedTags: typeof tags = [];
+    
+    tags.forEach(tag => {
+      const normalizedName = tag.name.toLowerCase().trim();
+      const lookup = tagLookup.get(normalizedName);
+      
+      if (lookup) {
+        if (!tagsByCategory.has(lookup.categoryKey)) {
+          tagsByCategory.set(lookup.categoryKey, new Map());
         }
-      });
-
-      // Convert to the expected format
-      const entitiesByCategory: Record<string, { category: string; name: string; count: number }[]> = {};
-      tagCounts.forEach((nameMap, category) => {
-        entitiesByCategory[category] = Array.from(nameMap.entries()).map(([name, count]) => ({
-          category,
-          name,
-          count
-        }));
-      });
-
-      console.log('📊 Catalog Data:', {
-        totalAnalyses: allAnalyses.length,
-        taggedCount,
-        untaggedCount,
-        categories: Object.keys(entitiesByCategory).length
-      });
-
-      return {
-        entitiesByCategory,
-        taggedCount,
-        untaggedCount,
-        totalAnalyses: allAnalyses.length
+        const categoryTags = tagsByCategory.get(lookup.categoryKey)!;
+        const pathKey = lookup.subcategoryPath.join(' > ');
+        categoryTags.set(tag.name, { tag, path: lookup.subcategoryPath });
+      } else {
+        unmatchedTags.push(tag);
+      }
+    });
+    
+    // Build the display structure for each category
+    hierarchyData.categories.forEach((category: any) => {
+      const categoryKey = category.category;
+      const categoryTags = tagsByCategory.get(categoryKey);
+      
+      if (!categoryTags || categoryTags.size === 0) return;
+      
+      // Build subcategory structure with counts
+      const buildSubcategoryDisplay = (node: any, depth: number = 0): any => {
+        const children: any[] = [];
+        let totalCount = 0;
+        
+        if (node.children && node.children.length > 0) {
+          const hasSubcategories = node.children.some((child: any) => 
+            child.children && child.children.length > 0
+          );
+          
+          if (hasSubcategories) {
+            // Process nested subcategories
+            node.children.forEach((child: any) => {
+              const childResult = buildSubcategoryDisplay(child, depth + 1);
+              if (childResult && childResult.count > 0) {
+                children.push(childResult);
+                totalCount += childResult.count;
+              }
+            });
+          } else {
+            // Process tags (leaf level)
+            node.children.forEach((child: any) => {
+              const normalizedName = (child.normalizedName || child.name.toLowerCase()).trim();
+              // Find matching tag from catalogV2Data
+              const matchingTag = tags.find(t => t.name.toLowerCase().trim() === normalizedName);
+              if (matchingTag) {
+                children.push({
+                  name: matchingTag.name,
+                  category: categoryKey,
+                  count: matchingTag.count
+                });
+                totalCount += matchingTag.count;
+              }
+            });
+            
+            // Sort tags by count
+            children.sort((a, b) => b.count - a.count);
+          }
+        }
+        
+        if (totalCount === 0) return null;
+        
+        return {
+          category: categoryKey,
+          name: node.name,
+        count: totalCount,
+        isParent: true,
+          children
+        };
       };
-    },
-  });
+      
+      // Build category items from subcategories
+      const categoryItems: any[] = [];
+      if (category.children) {
+        category.children.forEach((subcategory: any) => {
+          const result = buildSubcategoryDisplay(subcategory);
+          if (result && result.count > 0) {
+            categoryItems.push(result);
+          }
+        });
+      }
+      
+      if (categoryItems.length > 0) {
+        entitiesByCategory[categoryKey] = categoryItems;
+      }
+    });
+    
+    // Add miscellaneous category for unmatched tags
+    if (unmatchedTags.length > 0) {
+      const miscItems = unmatchedTags
+      .map(tag => ({
+        name: tag.name,
+        category: 'miscellaneous',
+        count: tag.count
+      }))
+      .sort((a, b) => b.count - a.count);
+    
+      entitiesByCategory['miscellaneous'] = [{
+        category: 'miscellaneous',
+        name: 'Unmatched Tags',
+        count: miscItems.reduce((sum, t) => sum + t.count, 0),
+        isParent: true,
+        children: miscItems
+      }];
+    }
+    
+    return {
+      entitiesByCategory,
+      taggedCount: catalogV2Data.taggedCount,
+      untaggedCount: catalogV2Data.untaggedCount,
+      totalAnalyses: catalogV2Data.totalAnalyses
+    };
+  }, [catalogV2Data, hierarchyData]);
+
 
   // Fetch filtered analyses with server-side filtering and pagination
   const { data: analysesData, isLoading, refetch } = useQuery<{
@@ -265,7 +431,7 @@ export default function TagsBrowser() {
         const to = from + pageSize - 1;
         
         query = query.range(from, to);
-        
+      
         const { data, error, count } = await query;
         if (error) throw error;
         
@@ -298,8 +464,10 @@ export default function TagsBrowser() {
           if (!analysis.tags || !Array.isArray(analysis.tags)) return false;
           return Array.from(selectedEntities).some(entityKey => {
             const [category, name] = entityKey.split("::");
+            // Match by tag name only, since taxonomy categories are for display only
+            // Database tags may have different category names (e.g., "crypto" vs "digital-assets")
             return analysis.tags.some((tag: EntityTag) => 
-              tag.category === category && tag.name === name
+              tag.name === name
             );
           });
         });
@@ -340,61 +508,124 @@ export default function TagsBrowser() {
         .sort((a, b) => b.totalCount - a.totalCount)
     : [];
   
+  // Debug: log available categories
+  if (catalogData && allCategoryData.length > 0) {
+    console.log('📊 Available categories:', allCategoryData.map(c => c.category));
+  }
+  
   // Filter categories based on view mode
-  const ENTITY_CATEGORIES = ['country', 'company', 'person', 'crypto', 'cryptocurrency', 'organization', 'protocol'];
-  const categoryData = viewMode === 'keywords'
-    ? allCategoryData.filter(({ category }) => ENTITY_CATEGORIES.includes(category.toLowerCase()))
-    : allCategoryData.filter(({ category }) => category.toLowerCase() === 'topic');
+  // Define category order (Bitcoin first, then others)
+  const CATEGORY_ORDER: MainCategory[] = [
+    'bitcoin',
+    'money-economics', 
+    'technology', 
+    'organizations', 
+    'people', 
+    'regulation-law', 
+    'markets-geography', 
+    'education-community',
+    'crime-security', 
+    'miscellaneous'
+  ];
+  
+  const ENTITY_CATEGORIES: MainCategory[] = CATEGORY_ORDER;
+  let categoryData = viewMode === 'keywords'
+    ? allCategoryData.filter(({ category }) => ENTITY_CATEGORIES.includes(category as MainCategory))
+    : allCategoryData.filter(({ category }) => category.toLowerCase() === 'topics');
+  
+  // Fallback: if filtering results in empty array but we have data, show all categories
+  if (categoryData.length === 0 && allCategoryData.length > 0) {
+    console.warn('⚠️ Filtering removed all categories, showing all categories instead');
+    categoryData = allCategoryData;
+  }
+  
+  // Debug: log filtered categories
+  if (catalogData) {
+    console.log('🔍 Filtered categories:', categoryData.map(c => c.category), 'viewMode:', viewMode);
+    console.log('📋 All categories:', allCategoryData.map(c => ({ cat: c.category, count: c.entities.length })));
+  }
   
   const paginatedAnalyses = analysesData?.analyses || [];
   const totalPages = analysesData?.pagination.totalPages || 1;
   const totalCount = analysesData?.pagination.totalCount || 0;
 
-  // Get icon for category
+  // Get icon for category (using new taxonomy)
   const getCategoryIcon = (category: string) => {
     switch (category.toLowerCase()) {
+      case 'countries':
       case 'country':
         return Globe;
+      case 'companies':
       case 'company':
         return Building;
+      case 'people':
       case 'person':
         return User;
+      case 'digital-assets':
       case 'crypto':
       case 'cryptocurrency':
         return Coins;
+      case 'bitcoin-orgs':
+      case 'regulatory':
       case 'organization':
         return Building2;
+      case 'protocols':
       case 'protocol':
         return Hash;
+      case 'topics':
       case 'topic':
         return Sparkles;
-      case 'system':
-        return Minus;
+      case 'currencies':
+      case 'currency':
+        return Coins;
+      case 'crime':
+        return Building2;
+      case 'events':
+        return Calendar;
+      case 'miscellaneous':
+      case 'other':
+        return Tag;
       default:
         return Tag;
     }
   };
 
-  // Get color for category
+  // Get color for category (using new taxonomy)
   const getCategoryColor = (category: string) => {
     switch (category.toLowerCase()) {
+      case 'countries':
       case 'country':
         return 'bg-blue-100 text-blue-700 border-blue-300';
+      case 'companies':
       case 'company':
         return 'bg-purple-100 text-purple-700 border-purple-300';
+      case 'people':
       case 'person':
         return 'bg-green-100 text-green-700 border-green-300';
+      case 'digital-assets':
       case 'crypto':
       case 'cryptocurrency':
         return 'bg-orange-100 text-orange-700 border-orange-300';
+      case 'bitcoin-orgs':
+      case 'regulatory':
       case 'organization':
         return 'bg-indigo-100 text-indigo-700 border-indigo-300';
+      case 'protocols':
       case 'protocol':
         return 'bg-cyan-100 text-cyan-700 border-cyan-300';
+      case 'topics':
       case 'topic':
         return 'bg-pink-100 text-pink-700 border-pink-300';
-      case 'system':
-        return 'bg-gray-100 text-gray-500 border-gray-300 italic';
+      case 'currencies':
+      case 'currency':
+        return 'bg-yellow-100 text-yellow-700 border-yellow-300';
+      case 'crime':
+        return 'bg-red-100 text-red-700 border-red-300';
+      case 'events':
+        return 'bg-violet-100 text-violet-700 border-violet-300';
+      case 'miscellaneous':
+      case 'other':
+        return 'bg-slate-100 text-slate-700 border-slate-300';
       default:
         return 'bg-slate-100 text-slate-700 border-slate-300';
     }
@@ -504,8 +735,10 @@ export default function TagsBrowser() {
         if (!analysis.tags || !Array.isArray(analysis.tags)) return false;
         return Array.from(selectedEntities).some(entityKey => {
           const [category, name] = entityKey.split("::");
+          // Match by tag name only, since taxonomy categories are for display only
+          // Database tags may have different category names (e.g., "crypto" vs "digital-assets")
           return analysis.tags.some((tag: EntityTag) => 
-            tag.category === category && tag.name === name
+            tag.name === name
           );
         });
       });
@@ -562,6 +795,94 @@ export default function TagsBrowser() {
         variant: "destructive"
       });
     }
+  });
+
+  // Rename tag mutation
+  const renameTagMutation = useMutation({
+    mutationFn: async ({ tagName, newName, category }: { tagName: string; newName: string; category: string }) => {
+      const response = await fetch('/api/tags-manager/rename', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tagName, newName, category }),
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to rename tag';
+        try {
+          const error = await response.json();
+          errorMessage = error.error || errorMessage;
+        } catch (e) {
+          errorMessage = `Error ${response.status}: ${response.statusText || 'Unknown error'}`;
+        }
+        throw new Error(errorMessage);
+      }
+
+      return await response.json();
+    },
+    onSuccess: async (data) => {
+      toast({
+        title: 'Tag Renamed',
+        description: `Tag has been renamed in ${data.updated} analyses`,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
+      await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
+      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      setShowRenameDialog(false);
+      setTagToEdit(null);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Rename Failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
+  // Delete tag mutation
+  const deleteTagMutation = useMutation({
+    mutationFn: async ({ tagName, category }: { tagName: string; category: string }) => {
+      const response = await fetch('/api/tags-manager/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ tagName, category }),
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to delete tag';
+        try {
+          const error = await response.json();
+          errorMessage = error.error || errorMessage;
+        } catch (e) {
+          errorMessage = `Error ${response.status}: ${response.statusText || 'Unknown error'}`;
+        }
+        throw new Error(errorMessage);
+      }
+
+      return await response.json();
+    },
+    onSuccess: async (data) => {
+      toast({
+        title: 'Tag Deleted',
+        description: `Tag has been deleted from ${data.updated} analyses`,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
+      await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
+      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      setShowDeleteDialog(false);
+      setTagToEdit(null);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Delete Failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
   });
 
   const handleBulkAdd = async () => {
@@ -623,7 +944,7 @@ export default function TagsBrowser() {
         .from("historical_news_analyses")
         .select("tags")
         .in("date", datesToCheck);
-
+      
       if (error) throw error;
 
       // Extract unique tags
@@ -756,7 +1077,7 @@ export default function TagsBrowser() {
         });
         return;
       }
-
+      
       // Format all filtered analyses
       const textOutput = analysesToCopy
         .map((analysis: HistoricalNewsAnalysis) => {
@@ -1002,24 +1323,236 @@ export default function TagsBrowser() {
                           <ChevronRight className="w-4 h-4 mr-1" />
                         )}
                         <Icon className="w-4 h-4 mr-2" />
-                        {category.charAt(0).toUpperCase() + category.slice(1)}
+                          {categoryDisplayNames[category as MainCategory] || category.charAt(0).toUpperCase() + category.slice(1)}
                         <Badge variant="secondary" className="ml-auto">
                           {entities.length}
                         </Badge>
                       </Button>
                     </CollapsibleTrigger>
                     <CollapsibleContent className="pl-6 space-y-1 mt-1">
-                      {entities.map(({ name, count }) => {
-                        const entityKey = `${category}::${name}`;
+                      {entities.map((entity: any) => {
+                        const { name, count, category: entityCategory, isParent, children } = entity;
+                        // Use entity's original category for filtering
+                        const filterCategory = entityCategory || category;
+                        const entityKey = `${filterCategory}::${name}`;
                         const isSelected = selectedEntities.has(entityKey);
                         
+                        // Handle subcategories (nested structure)
+                        if (isParent && children && Array.isArray(children) && children.length > 0) {
+                          const nestedKey = `${name.toLowerCase().replace(/\s+/g, '-')}-${category}`;
+                          const isNestedExpanded = expandedCategories.has(nestedKey);
+                          return (
+                            <div key={entityKey} className="space-y-1">
+                              <Button
+                                variant={isSelected ? "secondary" : "ghost"}
+                                size="sm"
+                                className="w-full justify-start text-sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedCategories(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(nestedKey)) {
+                                      next.delete(nestedKey);
+                                    } else {
+                                      next.add(nestedKey);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                                data-testid={`entity-${entityKey}`}
+                              >
+                                {isSelected && <Check className="w-3 h-3 mr-1" />}
+                                {isNestedExpanded ? (
+                                  <ChevronDown className="w-3 h-3 mr-1" />
+                                ) : (
+                                  <ChevronRight className="w-3 h-3 mr-1" />
+                                )}
+                                <span className="flex-1 text-left truncate">{name}</span>
+                                <Badge variant="outline" className="ml-2 text-xs">
+                                  {count}
+                                </Badge>
+                              </Button>
+                              {isNestedExpanded && (
+                                <div className="pl-6 space-y-1">
+                                  {children.map((child: any) => {
+                                    const childFilterCategory = child.category || filterCategory;
+                                    const childEntityKey = `${childFilterCategory}::${child.name}`;
+                                    const isChildSelected = selectedEntities.has(childEntityKey);
+                                    
+                                    // Handle 3rd level nesting (sub-subcategory)
+                                    if (child.isParent && child.children && Array.isArray(child.children) && child.children.length > 0) {
+                                      const subNestedKey = `${child.name.toLowerCase().replace(/\s+/g, '-')}-${nestedKey}`;
+                                      const isSubNestedExpanded = expandedCategories.has(subNestedKey);
+                                      return (
+                                        <div key={childEntityKey} className="space-y-1">
+                                          <Button
+                                            variant={isChildSelected ? "secondary" : "ghost"}
+                                            size="sm"
+                                            className="w-full justify-start text-xs"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setExpandedCategories(prev => {
+                                                const next = new Set(prev);
+                                                if (next.has(subNestedKey)) {
+                                                  next.delete(subNestedKey);
+                                                } else {
+                                                  next.add(subNestedKey);
+                                                }
+                                                return next;
+                                              });
+                                            }}
+                                            data-testid={`entity-${childEntityKey}`}
+                                          >
+                                            {isChildSelected && <Check className="w-2 h-2 mr-1" />}
+                                            {isSubNestedExpanded ? (
+                                              <ChevronDown className="w-2 h-2 mr-1" />
+                                            ) : (
+                                              <ChevronRight className="w-2 h-2 mr-1" />
+                                            )}
+                                            <span className="flex-1 text-left truncate">{child.name}</span>
+                                            <Badge variant="outline" className="ml-2 text-xs">
+                                              {child.count}
+                                            </Badge>
+                                          </Button>
+                                          {isSubNestedExpanded && (
+                                            <div className="pl-6 space-y-1">
+                                              {child.children.map((grandchild: any) => {
+                                                const grandchildFilterCategory = grandchild.category || childFilterCategory;
+                                                const grandchildEntityKey = `${grandchildFilterCategory}::${grandchild.name}`;
+                                                const isGrandchildSelected = selectedEntities.has(grandchildEntityKey);
+                                                return (
+                                                  <div key={grandchildEntityKey} className="flex items-center group">
+                                                  <Button
+                                                    variant={isGrandchildSelected ? "secondary" : "ghost"}
+                                                    size="sm"
+                                                      className="flex-1 justify-start text-xs"
+                                                    onClick={() => toggleEntity(grandchildFilterCategory, grandchild.name)}
+                                                    data-testid={`entity-${grandchildEntityKey}`}
+                                                  >
+                                                    {isGrandchildSelected && <Check className="w-2 h-2 mr-1" />}
+                                                    <span className="flex-1 text-left truncate">{grandchild.name}</span>
+                                                    <Badge variant="outline" className="ml-2 text-xs">
+                                                      {grandchild.count}
+                                                    </Badge>
+                                                  </Button>
+                                                    <DropdownMenu>
+                                                      <DropdownMenuTrigger asChild>
+                                                        <Button
+                                                          variant="ghost"
+                                                          size="sm"
+                                                          className="p-1 h-5 w-5 ml-1 opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-slate-600"
+                                                          onClick={(e) => {
+                                                            e.stopPropagation();
+                                                          }}
+                                                          title="Edit or delete tag"
+                                                        >
+                                                          <Pencil className="w-2.5 h-2.5" />
+                                                        </Button>
+                                                      </DropdownMenuTrigger>
+                                                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                                                        <DropdownMenuItem
+                                                          onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setTagToEdit({ name: grandchild.name, category: grandchildFilterCategory, count: grandchild.count });
+                                                            setShowRenameDialog(true);
+                                                          }}
+                                                        >
+                                                          <Pencil className="w-3 h-3 mr-2" />
+                                                          Rename
+                                                        </DropdownMenuItem>
+                                                        <DropdownMenuItem
+                                                          onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setTagToEdit({ name: grandchild.name, category: grandchildFilterCategory, count: grandchild.count });
+                                                            setShowDeleteDialog(true);
+                                                          }}
+                                                          className="text-red-600 focus:text-red-600"
+                                                        >
+                                                          <Trash2 className="w-3 h-3 mr-2" />
+                                                          Delete
+                                                        </DropdownMenuItem>
+                                                      </DropdownMenuContent>
+                                                    </DropdownMenu>
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    }
+                                    
+                                    // Regular child (no further nesting)
+                                    return (
+                                      <div key={childEntityKey} className="flex items-center group">
+                                      <Button
+                                        variant={isChildSelected ? "secondary" : "ghost"}
+                                        size="sm"
+                                          className="flex-1 justify-start text-xs"
+                                        onClick={() => toggleEntity(childFilterCategory, child.name)}
+                                        data-testid={`entity-${childEntityKey}`}
+                                      >
+                                        {isChildSelected && <Check className="w-2 h-2 mr-1" />}
+                                        <span className="flex-1 text-left truncate">{child.name}</span>
+                                        <Badge variant="outline" className="ml-2 text-xs">
+                                          {child.count}
+                                        </Badge>
+                                      </Button>
+                                        <DropdownMenu>
+                                          <DropdownMenuTrigger asChild>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              className="p-1 h-5 w-5 ml-1 opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-slate-600"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                              }}
+                                              title="Edit or delete tag"
+                                            >
+                                              <Pencil className="w-2.5 h-2.5" />
+                                            </Button>
+                                          </DropdownMenuTrigger>
+                                          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                                            <DropdownMenuItem
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setTagToEdit({ name: child.name, category: childFilterCategory, count: child.count });
+                                                setShowRenameDialog(true);
+                                              }}
+                                            >
+                                              <Pencil className="w-3 h-3 mr-2" />
+                                              Rename
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setTagToEdit({ name: child.name, category: childFilterCategory, count: child.count });
+                                                setShowDeleteDialog(true);
+                                              }}
+                                              className="text-red-600 focus:text-red-600"
+                                            >
+                                              <Trash2 className="w-3 h-3 mr-2" />
+                                              Delete
+                                            </DropdownMenuItem>
+                                          </DropdownMenuContent>
+                                        </DropdownMenu>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+                        
+                        // Regular entity (no nesting)
                         return (
+                          <div key={entityKey} className="flex items-center group">
                           <Button
-                            key={entityKey}
                             variant={isSelected ? "secondary" : "ghost"}
                             size="sm"
-                            className="w-full justify-start text-sm"
-                            onClick={() => toggleEntity(category, name)}
+                              className="flex-1 justify-start text-sm"
+                            onClick={() => toggleEntity(filterCategory, name)}
                             data-testid={`entity-${entityKey}`}
                           >
                             {isSelected && <Check className="w-3 h-3 mr-1" />}
@@ -1028,6 +1561,45 @@ export default function TagsBrowser() {
                               {count}
                             </Badge>
                           </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="p-1 h-6 w-6 ml-1 opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-slate-600"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                  }}
+                                  title="Edit or delete tag"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                                <DropdownMenuItem
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setTagToEdit({ name, category: filterCategory, count });
+                                    setShowRenameDialog(true);
+                                  }}
+                                >
+                                  <Pencil className="w-3 h-3 mr-2" />
+                                  Rename
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setTagToEdit({ name, category: filterCategory, count });
+                                    setShowDeleteDialog(true);
+                                  }}
+                                  className="text-red-600 focus:text-red-600"
+                                >
+                                  <Trash2 className="w-3 h-3 mr-2" />
+                                  Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         );
                       })}
                     </CollapsibleContent>
@@ -1036,7 +1608,22 @@ export default function TagsBrowser() {
               })}
             </div>
 
-            {categoryData.length === 0 && (
+            {catalogError && (
+              <p className="text-sm text-red-500 text-center py-4">
+                Error loading tags: {catalogError.message}
+              </p>
+            )}
+            {!catalogError && categoryData.length === 0 && catalogData && (
+              <p className="text-sm text-slate-500 text-center py-4">
+                No tags found in selected categories. Found {Object.keys(catalogData.entitiesByCategory || {}).length} total categories.
+              </p>
+            )}
+            {!catalogError && !catalogData && (
+              <p className="text-sm text-slate-500 text-center py-4">
+                Loading tags...
+              </p>
+            )}
+            {!catalogError && !catalogData && categoryData.length === 0 && (
               <p className="text-sm text-slate-500 text-center py-4">
                 No tags found. Run "Tag All Database" to extract entities.
               </p>
@@ -1062,17 +1649,17 @@ export default function TagsBrowser() {
                   {totalCount} result{totalCount !== 1 ? 's' : ''}
                 </span>
                 {totalCount > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCopyToClipboard}
-                    disabled={selectAllMatching || selectedDates.size > 50}
-                    className="flex items-center space-x-1"
-                    data-testid="button-copy-txt"
-                  >
-                    <Copy className="w-4 h-4" />
-                    <span>Copy TXT</span>
-                  </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCopyToClipboard}
+                      disabled={selectAllMatching || selectedDates.size > 50}
+                      className="flex items-center space-x-1"
+                      data-testid="button-copy-txt"
+                    >
+                      <Copy className="w-4 h-4" />
+                      <span>Copy TXT</span>
+                    </Button>
                 )}
               </div>
             </div>
@@ -1202,14 +1789,29 @@ export default function TagsBrowser() {
                   return (
                     <div
                       key={analysis.date}
-                      className={`border rounded-lg p-4 transition-colors ${
+                      className={`border rounded-lg p-4 transition-colors relative ${
                         isSelected 
                           ? 'border-blue-400 bg-blue-50' 
                           : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/30'
                       }`}
                       data-testid={`analysis-${analysis.date}`}
                     >
-                      <div className="flex items-start space-x-3">
+                      {/* Link icon in top right */}
+                      <div className="absolute top-4 right-4">
+                        <Link href={`/day/${analysis.date}?from=tags`}>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="p-1 h-6 w-6 hover:bg-orange-100 hover:text-orange-600"
+                            title="View day details"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                          </Button>
+                        </Link>
+                      </div>
+
+                      <div className="flex items-start space-x-3 pr-8">
                         {/* Checkbox */}
                         <div onClick={(e) => e.stopPropagation()}>
                           <Checkbox
@@ -1226,14 +1828,14 @@ export default function TagsBrowser() {
                           onClick={() => setDetailDate(analysis.date)}
                         >
                           <div className="flex items-center space-x-2 mb-2">
-                            <Calendar className="w-4 h-4 text-slate-400" />
-                            <span className="font-medium text-slate-900">
-                              {new Date(analysis.date).toLocaleDateString('en-US', {
-                                year: 'numeric',
-                                month: 'long',
-                                day: 'numeric'
-                              })}
-                            </span>
+                              <Calendar className="w-4 h-4 text-slate-400" />
+                              <span className="font-medium text-slate-900">
+                                {new Date(analysis.date).toLocaleDateString('en-US', {
+                                  year: 'numeric',
+                                  month: 'long',
+                                  day: 'numeric'
+                                })}
+                              </span>
                           </div>
                           
                           <p className="text-sm text-slate-700 mb-3">
@@ -1249,8 +1851,13 @@ export default function TagsBrowser() {
                                   <Badge
                                     key={`${tag.name}-${idx}`}
                                     variant="outline"
-                                    className={`${getCategoryColor(tag.category)} flex items-center space-x-1`}
+                                    className={`${getCategoryColor(tag.category)} flex items-center space-x-1 cursor-pointer hover:bg-slate-100 transition-colors`}
                                     data-testid={`tag-${tag.name}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSearchQuery(tag.name);
+                                    }}
+                                    title={`Click to filter by ${tag.name}`}
                                   >
                                     <Icon className="w-3 h-3" />
                                     <span>{tag.name}</span>
@@ -1551,6 +2158,134 @@ export default function TagsBrowser() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Rename Tag Dialog */}
+      <RenameDialog
+        open={showRenameDialog}
+        onOpenChange={setShowRenameDialog}
+        tag={tagToEdit}
+        onConfirm={async (newName) => {
+          if (tagToEdit) {
+            // First, find the actual category from the database
+            try {
+              const response = await fetch(`/api/tags-manager/find-categories?tagName=${encodeURIComponent(tagToEdit.name)}`);
+              if (response.ok) {
+                const data = await response.json();
+                if (data.categories && data.categories.length > 0) {
+                  // Use the most common category (first in the sorted list)
+                  const actualCategory = data.categories[0].category;
+                  console.log(`Found actual category for "${tagToEdit.name}": ${actualCategory} (was using: ${tagToEdit.category})`);
+                  
+                  // Rename using the actual category
+                  renameTagMutation.mutate({
+                    tagName: tagToEdit.name,
+                    newName,
+                    category: actualCategory,
+                  });
+                } else {
+                  // No categories found - try with the provided category anyway
+                  renameTagMutation.mutate({
+                    tagName: tagToEdit.name,
+                    newName,
+                    category: tagToEdit.category,
+                  });
+                }
+              } else {
+                // If lookup fails, try with provided category
+                renameTagMutation.mutate({
+                  tagName: tagToEdit.name,
+                  newName,
+                  category: tagToEdit.category,
+                });
+              }
+            } catch (error) {
+              // If lookup fails, try with provided category
+              console.error(`Error finding categories for "${tagToEdit.name}":`, error);
+              renameTagMutation.mutate({
+                tagName: tagToEdit.name,
+                newName,
+                category: tagToEdit.category,
+              });
+            }
+          }
+        }}
+        isLoading={renameTagMutation.isPending}
+      />
+
+      {/* Delete Tag Dialog */}
+      <DeleteDialog
+        open={showDeleteDialog}
+        onOpenChange={setShowDeleteDialog}
+        tag={tagToEdit}
+        onConfirm={async () => {
+          if (tagToEdit) {
+            // First, find the actual category from the database
+            // This handles cases where tag appears in Miscellaneous but has a different category in DB
+            try {
+              const response = await fetch(`/api/tags-manager/find-categories?tagName=${encodeURIComponent(tagToEdit.name)}`);
+              if (response.ok) {
+                const data = await response.json();
+                if (data.categories && data.categories.length > 0) {
+                  // Delete from all categories the tag exists in
+                  // This handles cases where the same tag name might exist in multiple categories
+                  const deletePromises = data.categories.map((cat: { category: string }) => 
+                    fetch('/api/tags-manager/delete', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ tagName: tagToEdit.name, category: cat.category }),
+                    })
+                  );
+                  
+                  const results = await Promise.all(deletePromises);
+                  const allOk = results.every(r => r.ok);
+                  
+                  if (allOk) {
+                    const totalUpdated = await Promise.all(
+                      results.map(r => r.json().then((d: any) => d.updated || 0))
+                    );
+                    const sum = totalUpdated.reduce((a, b) => a + b, 0);
+                    
+                    toast({
+                      title: 'Tag Deleted',
+                      description: `Tag has been deleted from ${sum} analyses across ${data.categories.length} category(ies)`,
+                    });
+                    
+                    await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
+                    await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
+                    await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+                    setShowDeleteDialog(false);
+                    setTagToEdit(null);
+                  } else {
+                    throw new Error('Some deletions failed');
+                  }
+                } else {
+                  // No categories found - try with the provided category anyway
+                  console.warn(`No categories found for "${tagToEdit.name}", using provided category: ${tagToEdit.category}`);
+                  deleteTagMutation.mutate({
+                    tagName: tagToEdit.name,
+                    category: tagToEdit.category,
+                  });
+                }
+              } else {
+                // If lookup fails, try with provided category
+                console.warn(`Failed to find categories for "${tagToEdit.name}", using provided category: ${tagToEdit.category}`);
+                deleteTagMutation.mutate({
+                  tagName: tagToEdit.name,
+                  category: tagToEdit.category,
+                });
+              }
+            } catch (error) {
+              // If lookup fails, try with provided category
+              console.error(`Error finding categories for "${tagToEdit.name}":`, error);
+              deleteTagMutation.mutate({
+                tagName: tagToEdit.name,
+                category: tagToEdit.category,
+              });
+            }
+          }
+        }}
+        isLoading={deleteTagMutation.isPending}
+      />
     </div>
   );
 }

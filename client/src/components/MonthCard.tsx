@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Spinner } from "@/components/ui/spinner";
 import { supabase } from "@/lib/supabase";
 
 interface MonthData {
@@ -125,7 +126,16 @@ export default function MonthCard({ year, month }: MonthCardProps) {
           </div>
           
           {/* Month Statistics */}
-          {!isFutureMonth && monthData ? (
+          {!isFutureMonth && isLoading ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-center gap-2">
+                <Spinner />
+                <span className="text-sm text-slate-500">
+                  Loading...
+                </span>
+              </div>
+            </div>
+          ) : !isFutureMonth && monthData ? (
             <div className="space-y-3">
               <div className="text-center">
                 <span className="text-sm text-slate-500">
