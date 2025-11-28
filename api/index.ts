@@ -49,6 +49,17 @@ async function getOrCreateApp(): Promise<AppContainer> {
 
 export default async function handler(req: any, res: any) {
   try {
+    if (req?.query?.ping === "1") {
+      return res.status(200).json({
+        ok: true,
+        message: "Serverless handler reachable",
+        env: {
+          NODE_ENV: process.env.NODE_ENV,
+          VERCEL: process.env.VERCEL,
+        }
+      });
+    }
+
     const { app } = await getOrCreateApp();
 
     // Handle the request with Express. Cast to any so TypeScript doesn't complain
