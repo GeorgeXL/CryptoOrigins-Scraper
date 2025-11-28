@@ -193,12 +193,73 @@ function AiCategorizationPanel() {
   // Initial status fetch
   useEffect(() => {
     fetch('/api/tags/ai-categorize/status')
-      .then(res => res.json())
-      .then(data => setStatus(data))
-      .catch(err => console.error('Error fetching initial status:', err));
+      .then(res => {
+        if (!res.ok) {
+          // If endpoint doesn't exist or returns error, set default status
+          setStatus({
+            isRunning: false,
+            processed: 0,
+            total: 0,
+            currentTag: '',
+            progress: 0
+          });
+          return;
+        }
+        return res.json();
+      })
+      .then(data => {
+        if (data) {
+          setStatus(data);
+        }
+      })
+      .catch(err => {
+        console.error('Error fetching initial status:', err);
+        // Set default status on error so component still renders
+        setStatus({
+          isRunning: false,
+          processed: 0,
+          total: 0,
+          currentTag: '',
+          progress: 0
+        });
+      });
   }, []);
 
-  if (!status) return null;
+  // Always render, even if status is not loaded yet
+  if (!status) {
+    return (
+      <Card className="p-4 bg-gradient-to-r from-purple-50 to-blue-50 border-purple-200">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <Bot className="w-5 h-5 text-purple-600" />
+            <div>
+              <h3 className="font-semibold text-slate-900">AI Tag Categorization</h3>
+              <p className="text-sm text-slate-600">
+                Automatically categorize all tags into the new taxonomy structure using AI
+              </p>
+            </div>
+          </div>
+          <Button
+            onClick={() => startCategorization.mutate()}
+            disabled={startCategorization.isPending}
+            className="bg-purple-600 hover:bg-purple-700"
+          >
+            {startCategorization.isPending ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Starting...
+              </>
+            ) : (
+              <>
+                <Bot className="w-4 h-4 mr-2" />
+                Categorize All Tags with AI
+              </>
+            )}
+          </Button>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card className="p-4 bg-gradient-to-r from-purple-50 to-blue-50 border-purple-200">
