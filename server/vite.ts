@@ -86,9 +86,10 @@ export function serveStatic(app: Express) {
     : path.resolve(import.meta.dirname, "..", "dist");
 
   if (!fs.existsSync(distPath)) {
-    throw new Error(
-      `Could not find the build directory: ${distPath}, make sure to build the client first`,
+    console.warn(
+      `⚠️ serveStatic: build directory not found at ${distPath}. Skipping static middleware (Vercel should serve static assets).`,
     );
+    return;
   }
 
   app.use(express.static(distPath));
