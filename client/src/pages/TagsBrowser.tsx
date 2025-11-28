@@ -778,11 +778,16 @@ export default function TagsBrowser() {
   
   const ENTITY_CATEGORIES: MainCategory[] = CATEGORY_ORDER;
   let categoryData = viewMode === 'keywords'
-    ? allCategoryData.filter(({ category }) => ENTITY_CATEGORIES.includes(category as MainCategory))
-    : allCategoryData.filter(({ category }) => category.toLowerCase() === 'topics');
+    ? (allCategoryData || []).filter(({ category }) => ENTITY_CATEGORIES.includes(category as MainCategory))
+    : (allCategoryData || []).filter(({ category }) => category.toLowerCase() === 'topics');
+  
+  // Ensure categoryData is always an array
+  if (!Array.isArray(categoryData)) {
+    categoryData = [];
+  }
   
   // Fallback: if filtering results in empty array but we have data, show all categories
-  if (categoryData.length === 0 && allCategoryData.length > 0) {
+  if (categoryData.length === 0 && allCategoryData && allCategoryData.length > 0) {
     console.warn('⚠️ Filtering removed all categories, showing all categories instead');
     categoryData = allCategoryData;
   }
@@ -1552,7 +1557,8 @@ export default function TagsBrowser() {
             
             {/* Category Tree */}
             <div className="space-y-1">
-              {categoryData.map(({ category, entities, totalCount }) => {
+              {categoryData && Array.isArray(categoryData) && categoryData.length > 0 ? (
+                categoryData.map(({ category, entities, totalCount }) => {
                 const Icon = getCategoryIcon(category);
                 const isExpanded = expandedCategories.has(category);
                 
@@ -1856,7 +1862,12 @@ export default function TagsBrowser() {
                     </CollapsibleContent>
                   </Collapsible>
                 );
-              })}
+              })
+              ) : (
+                <p className="text-sm text-slate-500 text-center py-4">
+                  No categories available
+                </p>
+              )}
             </div>
 
             {catalogError && (
