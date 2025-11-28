@@ -22,6 +22,7 @@ import { sql } from "drizzle-orm";
 import { aiService } from "../services/ai";
 import { db } from "../db";
 import { findSimilarTags, calculateSimilarity, normalizeTagName } from "../services/tag-similarity";
+import { categorizeTag, categorizeTags } from "../services/tag-categorizer";
 
 // Utility function to parse date strings from Perplexity
 // Note: All 1,025 existing Perplexity dates are already in YYYY-MM-DD format
@@ -57,6 +58,13 @@ let shouldStopBatchTagging = false;
 let isBatchTaggingRunning = false;
 let batchTaggingProcessed = 0;
 let batchTaggingTotal = 0;
+
+// Global state to control AI categorization process
+let shouldStopAiCategorization = false;
+let isAiCategorizationRunning = false;
+let aiCategorizationProcessed = 0;
+let aiCategorizationTotal = 0;
+let aiCategorizationCurrentTag = '';
 
 const router = Router();
 
@@ -2804,6 +2812,769 @@ router.post("/api/tags-manager/validate-crypto-tags", async (req, res) => {
     }
   } catch (error) {
     console.error("❌ Error validating crypto tags:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// ============================================
+// TAG CLEANUP TOOL ENDPOINTS
+// ============================================
+
+// Get all unmatched tags (tags in analyses but not in tag_metadata)
+router.get("/api/tags-manager/unmatched", async (req, res) => {
+  try {
+    console.log("🔍 Finding unmatched tags...");
+    
+    // Get all tags from analyses
+    const allTagsFromAnalyses = await db.execute(sql`
+      WITH tag_expanded AS (
+        SELECT DISTINCT
+          tag->>'name' as name,
+          tag->>'category' as category,
+          COUNT(*)::integer as usage_count
+        FROM historical_news_analyses,
+          jsonb_array_elements(tags) as tag
+        WHERE tags IS NOT NULL AND jsonb_typeof(tags) = 'array'
+        GROUP BY tag->>'name', tag->>'category'
+      )
+      SELECT name, category, usage_count
+      FROM tag_expanded
+      ORDER BY usage_count DESC, name;
+    `);
+
+    // Get all tags from tag_metadata
+    const { tagMetadata } = await import("@shared/schema");
+    const metadataTags = await db.select({
+      name: tagMetadata.name,
+      category: tagMetadata.category,
+      normalizedName: tagMetadata.normalizedName
+    }).from(tagMetadata);
+
+    // Build lookup map by normalized name and category
+    const metadataMap = new Map<string, Set<string>>();
+    metadataTags.forEach(tag => {
+      const normalized = normalizeTagName(tag.name);
+      const key = `${normalized}::${tag.category}`;
+      if (!metadataMap.has(key)) {
+        metadataMap.set(key, new Set());
+      }
+      metadataMap.get(key)!.add(`${tag.category}::${tag.name}`);
+    });
+
+    // Find unmatched tags
+    const unmatched: Array<{
+      name: string;
+      category: string;
+      usageCount: number;
+      suggestedMatches?: Array<{ name: string; category: string; similarity: number }>;
+    }> = [];
+
+    for (const row of allTagsFromAnalyses.rows) {
+      const tagName = row.name as string;
+      const tagCategory = row.category as string;
+      const normalized = normalizeTagName(tagName);
+      const key = `${normalized}::${tagCategory}`;
+
+      // Check if exists in metadata
+      const metadataEntry = metadataMap.get(key);
+      if (!metadataEntry || !metadataEntry.has(`${tagCategory}::${tagName}`)) {
+        // Find similar tags for merge suggestions
+        const candidateTags = metadataTags.map(t => ({
+          name: t.name,
+          category: t.category
+        }));
+        const similar = findSimilarTags(tagName, candidateTags, 0.6);
+
+        unmatched.push({
+          name: tagName,
+          category: tagCategory,
+          usageCount: parseInt(String(row.usage_count)) || 0,
+          suggestedMatches: similar
+            .filter(s => s.category !== undefined)
+            .map(s => ({ name: s.name, category: s.category!, similarity: s.similarity }))
+            .slice(0, 5)
+        });
+      }
+    }
+
+    console.log(`✅ Found ${unmatched.length} unmatched tags`);
+    
+    res.json({
+      unmatched: unmatched,
+      total: unmatched.length,
+      totalUsage: unmatched.reduce((sum, t) => sum + t.usageCount, 0)
+    });
+  } catch (error) {
+    console.error("❌ Error finding unmatched tags:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Get auto-merge suggestions (high confidence matches)
+router.post("/api/tags-manager/auto-merge-suggestions", async (req, res) => {
+  try {
+    const { threshold = 0.85 } = req.body;
+    
+    console.log(`🔍 Generating auto-merge suggestions (threshold: ${threshold})...`);
+    
+    // Get unmatched tags
+    const allTagsFromAnalyses = await db.execute(sql`
+      WITH tag_expanded AS (
+        SELECT DISTINCT
+          tag->>'name' as name,
+          tag->>'category' as category,
+          COUNT(*)::integer as usage_count
+        FROM historical_news_analyses,
+          jsonb_array_elements(tags) as tag
+        WHERE tags IS NOT NULL AND jsonb_typeof(tags) = 'array'
+        GROUP BY tag->>'name', tag->>'category'
+      )
+      SELECT name, category, usage_count
+      FROM tag_expanded;
+    `);
+
+    const { tagMetadata } = await import("@shared/schema");
+    const metadataTags = await db.select({
+      name: tagMetadata.name,
+      category: tagMetadata.category,
+      normalizedName: tagMetadata.normalizedName
+    }).from(tagMetadata);
+
+    const metadataMap = new Map<string, Set<string>>();
+    metadataTags.forEach(tag => {
+      const normalized = normalizeTagName(tag.name);
+      const key = `${normalized}::${tag.category}`;
+      if (!metadataMap.has(key)) {
+        metadataMap.set(key, new Set());
+      }
+      metadataMap.get(key)!.add(`${tag.category}::${tag.name}`);
+    });
+
+    const unmatched: Array<{
+      name: string;
+      category: string;
+      usageCount: number;
+      suggestedMatches?: Array<{ name: string; category: string; similarity: number }>;
+    }> = [];
+
+    for (const row of allTagsFromAnalyses.rows) {
+      const tagName = row.name as string;
+      const tagCategory = row.category as string;
+      const normalized = normalizeTagName(tagName);
+      const key = `${normalized}::${tagCategory}`;
+
+      const metadataEntry = metadataMap.get(key);
+      if (!metadataEntry || !metadataEntry.has(`${tagCategory}::${tagName}`)) {
+        const candidateTags = metadataTags.map(t => ({
+          name: t.name,
+          category: t.category
+        }));
+        const similar = findSimilarTags(tagName, candidateTags, threshold);
+
+        if (similar.length > 0) {
+          unmatched.push({
+            name: tagName,
+            category: tagCategory,
+            usageCount: parseInt(String(row.usage_count)) || 0,
+            suggestedMatches: similar
+              .filter(s => s.category !== undefined)
+              .map(s => ({ name: s.name, category: s.category!, similarity: s.similarity }))
+              .slice(0, 5)
+          });
+        }
+      }
+    }
+
+    // Filter to high-confidence suggestions
+    const suggestions = unmatched
+      .filter((tag: any) => 
+        tag.suggestedMatches && 
+        tag.suggestedMatches.length > 0 &&
+        tag.suggestedMatches[0].similarity >= threshold
+      )
+      .map((tag: any) => ({
+        source: { name: tag.name, category: tag.category },
+        target: {
+          name: tag.suggestedMatches[0].name,
+          category: tag.suggestedMatches[0].category
+        },
+        confidence: tag.suggestedMatches[0].similarity,
+        usageCount: tag.usageCount
+      }))
+      .sort((a, b) => b.confidence - a.confidence);
+
+    console.log(`✅ Generated ${suggestions.length} auto-merge suggestions`);
+    
+    res.json({
+      suggestions,
+      total: suggestions.length,
+      totalUsage: suggestions.reduce((sum: number, s: any) => sum + s.usageCount, 0)
+    });
+  } catch (error) {
+    console.error("❌ Error generating merge suggestions:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Bulk categorize tags using pattern rules
+router.post("/api/tags-manager/bulk-categorize", async (req, res) => {
+  try {
+    const { rules } = req.body;
+    
+    console.log("🏷️ Bulk categorizing tags...");
+    
+    // Common categorization rules
+    const defaultRules = [
+      // Countries
+      { pattern: /^(USA|United States|US|America)$/i, category: 'country' },
+      { pattern: /^(China|Japan|UK|United Kingdom|Germany|France|Russia|India|Brazil|Canada|Australia|South Korea|Italy|Spain|Mexico|Indonesia|Netherlands|Saudi Arabia|Turkey|Switzerland|Sweden|Poland|Belgium|Argentina|Norway|Israel|Ireland|Singapore|Malaysia|Thailand|Philippines|Vietnam|New Zealand|Chile|Colombia|Finland|Denmark|Portugal|Greece|Czech Republic|Romania|Hungary|Ukraine|Egypt|South Africa|Pakistan|Bangladesh|Nigeria|Kenya|Morocco|Algeria|Tunisia|Ethiopia|Ghana|Tanzania|Uganda|Zimbabwe|Mozambique|Madagascar|Cameroon|Ivory Coast|Niger|Burkina Faso|Mali|Malawi|Zambia|Senegal|Chad|Somalia|Guinea|Rwanda|Benin|Burundi|Togo|Sierra Leone|Central African Republic|Liberia|Mauritania|Eritrea|Gambia|Botswana|Namibia|Gabon|Lesotho|Guinea-Bissau|Equatorial Guinea|Mauritius|Eswatini|Djibouti|Comoros|Cabo Verde|Sao Tome and Principe|Seychelles)$/i, category: 'country' },
+      
+      // US States
+      { pattern: /^(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming|District of Columbia|DC)$/i, category: 'country' },
+      
+      // People - Common first names
+      { pattern: /^(Barack|Donald|Joe|Elon|Bill|Warren|Jeff|Mark|Tim|Michael|David|John|Robert|James|William|Richard|Joseph|Thomas|Charles|Christopher|Daniel|Matthew|Anthony|Steven|Paul|Andrew|Joshua|Kenneth|Kevin|Brian|George|Edward|Ronald|Timothy|Jason|Jeffrey|Ryan|Jacob|Gary|Nicholas|Eric|Jonathan|Stephen|Larry|Justin|Scott|Brandon|Benjamin|Samuel|Frank|Gregory|Raymond|Alexander|Patrick|Jack|Dennis|Jerry|Tyler|Aaron|Jose|Henry|Adam|Douglas|Nathan|Zachary|Kyle|Noah|Alan|Juan|Wayne|Roy|Ralph|Randy|Eugene|Vincent|Russell|Louis|Philip|Bobby|Johnny|Obama|Trump|Biden|Musk|Gates|Buffett|Bezos|Zuckerberg|Cook|Jobs|Page|Brin|Dorsey|Buterin|Nakamoto|Satoshi)$/i, category: 'person' },
+      
+      // Companies
+      { pattern: /^(Apple|Microsoft|Google|Amazon|Meta|Facebook|Tesla|Nvidia|AMD|Intel|IBM|Oracle|Salesforce|Netflix|Twitter|X|Uber|Airbnb|Stripe|PayPal|Visa|Mastercard|Goldman Sachs|JPMorgan|Bank of America|Wells Fargo|Citigroup|Morgan Stanley|BlackRock|Vanguard|Fidelity|Charles Schwab|TD Ameritrade|E*TRADE|Robinhood|Coinbase|Binance|Kraken|Gemini|FTX|Celsius|BlockFi|Voyager|Crypto.com|Huobi|OKX|Bybit|Bitfinex|Bitstamp|BitMEX|Deribit|Ledger|Trezor|Blockstream|Lightning Labs|Square|Block|MicroStrategy|Marathon|Riot|Hut 8|Argo|Hive|Bitfarms|Core Scientific|Grayscale|Bitwise|ProShares|Valkyrie|21Shares|WisdomTree)$/i, category: 'company' },
+      
+      // Crypto currencies
+      { pattern: /^(Bitcoin|BTC|Ethereum|ETH|Litecoin|LTC|Ripple|XRP|Cardano|ADA|Polkadot|DOT|Solana|SOL|Dogecoin|DOGE|Chainlink|LINK|Polygon|MATIC|Avalanche|AVAX|Cosmos|ATOM|Algorand|ALGO|Tezos|XTZ|Stellar|XLM|Monero|XMR|Zcash|ZEC|Dash|DASH|Bitcoin Cash|BCH|Bitcoin SV|BSV|Ethereum Classic|ETC|Filecoin|FIL|Uniswap|UNI|Aave|AAVE|Compound|COMP|Maker|MKR|SushiSwap|SUSHI|Curve|CRV|Yearn|YFI|1inch|1INCH|Balancer|BAL|Synthetix|SNX|Axie Infinity|AXS|The Sandbox|SAND|Decentraland|MANA|Enjin|ENJ|Gala|GALA|Immutable X|IMX|Flow|FLOW|Dapper Labs|NBA Top Shot|CryptoKitties|CryptoPunks|Bored Ape|BAYC|Art Blocks|Chromie Squiggle|Autoglyphs|Meebits|Loot|Rarible|OpenSea|SuperRare|Foundation|Nifty Gateway|Async Art|KnownOrigin|MakersPlace|VIV3|Async Art|Async Art|Async Art)$/i, category: 'crypto' },
+    ];
+    
+    const rulesToUse = rules || defaultRules;
+    
+    // Get all tags from analyses
+    const unmatchedResult = await db.execute(sql`
+      WITH tag_expanded AS (
+        SELECT DISTINCT
+          tag->>'name' as name,
+          tag->>'category' as category,
+          COUNT(*)::integer as usage_count
+        FROM historical_news_analyses,
+          jsonb_array_elements(tags) as tag
+        WHERE tags IS NOT NULL AND jsonb_typeof(tags) = 'array'
+        GROUP BY tag->>'name', tag->>'category'
+      )
+      SELECT name, category, usage_count
+      FROM tag_expanded;
+    `);
+    
+    const categorized: Array<{ name: string; oldCategory: string; newCategory: string; usageCount: number }> = [];
+    
+    for (const row of unmatchedResult.rows) {
+      const tagName = row.name as string;
+      const currentCategory = row.category as string;
+      
+      for (const rule of rulesToUse) {
+        if (rule.pattern.test(tagName) && currentCategory !== rule.category) {
+          categorized.push({
+            name: tagName,
+            oldCategory: currentCategory,
+            newCategory: rule.category,
+            usageCount: parseInt(String(row.usage_count)) || 0
+          });
+          break;
+        }
+      }
+    }
+    
+    console.log(`✅ Found ${categorized.length} tags to recategorize`);
+    
+    res.json({
+      categorized,
+      total: categorized.length,
+      totalUsage: categorized.reduce((sum, c) => sum + c.usageCount, 0)
+    });
+  } catch (error) {
+    console.error("❌ Error bulk categorizing:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Bulk apply changes (merges, categorizations, add to metadata)
+router.post("/api/tags-manager/bulk-apply", async (req, res) => {
+  try {
+    const { merges, categorizations, addToMetadata } = req.body;
+    
+    console.log(`🔄 Applying bulk changes: ${merges?.length || 0} merges, ${categorizations?.length || 0} categorizations, ${addToMetadata?.length || 0} metadata additions`);
+    
+    const { historicalNewsAnalyses, tagMetadata } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    let updated = 0;
+    
+    // Apply merges
+    if (merges && Array.isArray(merges)) {
+      for (const merge of merges) {
+        const { source, target } = merge;
+        const allAnalyses = await db.select().from(historicalNewsAnalyses);
+        
+        for (const analysis of allAnalyses) {
+          if (analysis.tags && Array.isArray(analysis.tags)) {
+            let hasChanges = false;
+            const updatedTags = analysis.tags
+              .map((t: any) => {
+                if (t.name === source.name && t.category === source.category) {
+                  hasChanges = true;
+                  return { name: target.name, category: target.category };
+                }
+                return t;
+              })
+              .filter((t: any, index: number, arr: any[]) => {
+                return arr.findIndex((other: any) => 
+                  other.name === t.name && other.category === t.category
+                ) === index;
+              });
+            
+            if (hasChanges) {
+              const tagNames = updatedTags.map((t: any) => t.name).filter(Boolean);
+              await db.update(historicalNewsAnalyses)
+                .set({ tags: updatedTags, tagNames })
+                .where(eq(historicalNewsAnalyses.id, analysis.id));
+              updated++;
+            }
+          }
+        }
+      }
+    }
+    
+    // Apply categorizations
+    if (categorizations && Array.isArray(categorizations)) {
+      for (const cat of categorizations) {
+        const { name, newCategory } = cat;
+        const allAnalyses = await db.select().from(historicalNewsAnalyses);
+        
+        for (const analysis of allAnalyses) {
+          if (analysis.tags && Array.isArray(analysis.tags)) {
+            let hasChanges = false;
+            const updatedTags = analysis.tags.map((t: any) => {
+              if (t.name === name) {
+                hasChanges = true;
+                return { ...t, category: newCategory };
+              }
+              return t;
+            });
+            
+            if (hasChanges) {
+              const tagNames = updatedTags.map((t: any) => t.name).filter(Boolean);
+              await db.update(historicalNewsAnalyses)
+                .set({ tags: updatedTags, tagNames })
+                .where(eq(historicalNewsAnalyses.id, analysis.id));
+              updated++;
+            }
+          }
+        }
+      }
+    }
+    
+    // Add to metadata
+    if (addToMetadata && Array.isArray(addToMetadata)) {
+      for (const tag of addToMetadata) {
+        try {
+          await db.insert(tagMetadata).values({
+            name: tag.name,
+            category: tag.category,
+            normalizedName: normalizeTagName(tag.name),
+            usageCount: tag.usageCount || 0
+          }).onConflictDoNothing();
+        } catch (error) {
+          // Ignore duplicates
+        }
+      }
+    }
+    
+    // Invalidate caches
+    cacheManager.invalidate('tags:catalog');
+    cacheManager.invalidate('tags:catalog:manual');
+    cacheManager.invalidate('tags:catalog-v2');
+    cacheManager.invalidate('tags:catalog-v2:manual');
+    cacheManager.invalidate('tags:hierarchy');
+    cacheManager.invalidate('tags:manage');
+    
+    console.log(`✅ Bulk apply completed: ${updated} analyses updated`);
+    
+    res.json({
+      success: true,
+      updated,
+      message: `Applied ${merges?.length || 0} merges, ${categorizations?.length || 0} categorizations, ${addToMetadata?.length || 0} metadata additions`
+    });
+  } catch (error) {
+    console.error("❌ Error bulk applying changes:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// ============================================================================
+// AI CATEGORIZATION ENDPOINTS
+// ============================================================================
+
+router.post("/api/tags/ai-categorize/start", async (req, res) => {
+  try {
+    console.log("🤖 Starting AI categorization of all tags...");
+    
+    // Check if already running
+    if (isAiCategorizationRunning) {
+      return res.status(409).json({ 
+        error: "AI categorization already running. Please stop the current one first." 
+      });
+    }
+    
+    // Get all unique tags from analyses
+    const { sql: drizzleSql } = await import("drizzle-orm");
+    const result = await db.execute(drizzleSql`
+      WITH tag_expanded AS (
+        SELECT DISTINCT
+          tag->>'name' as name,
+          tag->>'category' as category
+        FROM historical_news_analyses,
+          jsonb_array_elements(tags) as tag
+        WHERE tags IS NOT NULL AND jsonb_typeof(tags) = 'array'
+      )
+      SELECT name, category
+      FROM tag_expanded
+      ORDER BY name;
+    `);
+    
+    const allTags = result.rows.map((row: any) => ({
+      name: row.name as string,
+      category: row.category as string
+    }));
+    
+    aiCategorizationTotal = allTags.length;
+    console.log(`✅ Found ${aiCategorizationTotal} unique tags to categorize`);
+    
+    // Send initial response
+    res.json({ 
+      success: true, 
+      total: aiCategorizationTotal,
+      message: `Starting AI categorization of ${aiCategorizationTotal} tags` 
+    });
+    
+    // Mark as running
+    isAiCategorizationRunning = true;
+    shouldStopAiCategorization = false;
+    aiCategorizationProcessed = 0;
+    
+    // Start background processing
+    (async () => {
+      const { tagMetadata, historicalNewsAnalyses } = await import("@shared/schema");
+      const { eq, and, sql: drizzleSql } = await import("drizzle-orm");
+      let processed = 0;
+      let failed = 0;
+      let updated = 0;
+      const failedTags: string[] = [];
+      
+      // Helper function to find parent tag ID by subcategory path
+      const findParentTagId = async (categoryKey: string, subcategoryPath: string[]): Promise<string | null> => {
+        if (subcategoryPath.length === 0) {
+          // Find main category
+          const mainCat = await db.select()
+            .from(tagMetadata)
+            .where(and(
+              eq(tagMetadata.category, categoryKey),
+              eq(tagMetadata.parentTagId, null)
+            ))
+            .limit(1);
+          return mainCat[0]?.id || null;
+        }
+        
+        // Traverse the path to find the parent
+        let currentParentId: string | null = null;
+        for (const subcatKey of subcategoryPath) {
+          // Find subcategory by name matching the key pattern
+          // The subcategory name should contain the key (e.g., "1.2.1" in "1.2.1 Core Implementations")
+          const subcats = await db.select()
+            .from(tagMetadata)
+            .where(and(
+              eq(tagMetadata.category, categoryKey),
+              currentParentId ? eq(tagMetadata.parentTagId, currentParentId) : eq(tagMetadata.parentTagId, null)
+            ));
+          
+          // Find the one that matches the key
+          const matching = subcats.find(s => s.name.includes(subcatKey));
+          if (!matching) {
+            console.warn(`⚠️ Could not find subcategory ${subcatKey} in path ${subcategoryPath.join(' -> ')}`);
+            return currentParentId;
+          }
+          currentParentId = matching.id;
+        }
+        
+        return currentParentId;
+      };
+      
+      // Helper function to update tag in all analyses
+      const updateTagInAnalyses = async (oldTag: { name: string; category: string }, newTag: { name: string; category: string; parentTagId?: string | null }) => {
+        // Update tag_metadata first
+        const existingMetadata = await db.select()
+          .from(tagMetadata)
+          .where(and(
+            eq(tagMetadata.name, oldTag.name),
+            eq(tagMetadata.category, oldTag.category)
+          ))
+          .limit(1);
+        
+        if (existingMetadata.length > 0) {
+          // Update existing metadata
+          await db.update(tagMetadata)
+            .set({
+              category: newTag.category,
+              parentTagId: newTag.parentTagId || null,
+              updatedAt: new Date()
+            })
+            .where(eq(tagMetadata.id, existingMetadata[0].id));
+        } else {
+          // Check if tag already exists with new category (to avoid duplicate key errors)
+          const existingWithNewCategory = await db.select()
+            .from(tagMetadata)
+            .where(and(
+              eq(tagMetadata.name, oldTag.name),
+              eq(tagMetadata.category, newTag.category)
+            ))
+            .limit(1);
+          
+          if (existingWithNewCategory.length === 0) {
+            // Create new metadata entry
+            await db.insert(tagMetadata).values({
+              name: oldTag.name,
+              category: newTag.category,
+              parentTagId: newTag.parentTagId || null,
+              normalizedName: normalizeTagName(oldTag.name),
+              usageCount: 0
+            });
+          } else {
+            // Update existing entry with new category
+            await db.update(tagMetadata)
+              .set({
+                parentTagId: newTag.parentTagId || null,
+                updatedAt: new Date()
+              })
+              .where(eq(tagMetadata.id, existingWithNewCategory[0].id));
+          }
+        }
+        
+        // Update all analyses that contain this tag
+        // Use a simpler approach: get all analyses, update in memory, then save
+        const analysesWithTag = await db.execute(drizzleSql`
+          SELECT id, tags, tag_names
+          FROM historical_news_analyses
+          WHERE tags @> ${JSON.stringify([{ name: oldTag.name, category: oldTag.category }])}::jsonb
+        `);
+        
+        let updatedCount = 0;
+        for (const row of analysesWithTag.rows) {
+          const analysis = row as any;
+          if (!analysis.tags || !Array.isArray(analysis.tags)) continue;
+          
+          let hasChanges = false;
+          const updatedTags = analysis.tags.map((t: any) => {
+            if (t.name === oldTag.name && t.category === oldTag.category) {
+              hasChanges = true;
+              return { name: oldTag.name, category: newTag.category };
+            }
+            return t;
+          });
+          
+          if (hasChanges) {
+            const tagNames = updatedTags.map((t: any) => t.name).filter(Boolean);
+            const { historicalNewsAnalyses: hna } = await import("@shared/schema");
+            const { eq: eqFn } = await import("drizzle-orm");
+            await db.update(hna)
+              .set({ tags: updatedTags, tagNames })
+              .where(eqFn(hna.id, analysis.id));
+            updatedCount++;
+          }
+        }
+        
+        return updatedCount;
+      };
+      
+      for (const tag of allTags) {
+        // Check if stop was requested
+        if (shouldStopAiCategorization) {
+          console.log(`🛑 AI categorization stopped by user after ${processed} tags (${failed} failed)`);
+          break;
+        }
+        
+        try {
+          aiCategorizationCurrentTag = tag.name;
+          console.log(`🤖 [${processed + failed + 1}/${aiCategorizationTotal}] Categorizing "${tag.name}" (current: ${tag.category})...`);
+          
+          // Categorize using AI
+          const categorization = await categorizeTag(tag.name, tag.category);
+          
+          console.log(`   → Categorized as: ${categorization.category} ${categorization.subcategoryPath.join(' -> ')} (confidence: ${(categorization.confidence * 100).toFixed(1)}%)`);
+          
+          // Find parent tag ID
+          const parentTagId = await findParentTagId(categorization.category, categorization.subcategoryPath);
+          
+          // Always update to ensure metadata entry exists (even if category didn't change)
+          const updatedCount = await updateTagInAnalyses(
+            { name: tag.name, category: tag.category },
+            { name: tag.name, category: categorization.category, parentTagId }
+          );
+          
+          if (updatedCount > 0) {
+            updated += updatedCount;
+            console.log(`   ✅ Updated ${updatedCount} analyses`);
+          } else if (categorization.category === tag.category && !parentTagId) {
+            // Tag already had correct category and no parent, but metadata entry was created/updated
+            console.log(`   ✓ Metadata entry ensured`);
+          }
+          
+          processed++;
+          aiCategorizationProcessed = processed + failed;
+          
+          // Small delay to avoid rate limits (already handled in categorizeTag, but extra safety)
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          console.error(`❌ Error categorizing "${tag.name}":`, error);
+          failed++;
+          failedTags.push(tag.name);
+          aiCategorizationProcessed = processed + failed;
+          
+          // Continue with next tag on error
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      
+      console.log(`✅ AI categorization completed: ${processed} successful, ${failed} failed, ${updated} analyses updated`);
+      if (failedTags.length > 0) {
+        console.log(`❌ Failed tags: ${failedTags.slice(0, 20).join(', ')}${failedTags.length > 20 ? '...' : ''}`);
+      }
+      
+      // Invalidate caches
+      cacheManager.invalidate('tags:catalog');
+      cacheManager.invalidate('tags:catalog:manual');
+      cacheManager.invalidate('tags:catalog-v2');
+      cacheManager.invalidate('tags:catalog-v2:manual');
+      cacheManager.invalidate('tags:hierarchy');
+      cacheManager.invalidate('tags:manage');
+      cacheManager.invalidate('tags:analyses:all');
+      cacheManager.invalidate('tags:analyses:manual');
+      
+      isAiCategorizationRunning = false;
+    })();
+    
+  } catch (error) {
+    console.error("❌ Error starting AI categorization:", error);
+    isAiCategorizationRunning = false;
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post("/api/tags/ai-categorize/stop", async (req, res) => {
+  try {
+    console.log("🛑 Stop AI categorization requested");
+    
+    if (!isAiCategorizationRunning) {
+      return res.status(400).json({ 
+        error: "No AI categorization process is currently running" 
+      });
+    }
+    
+    shouldStopAiCategorization = true;
+    const processedCount = aiCategorizationProcessed;
+    
+    res.json({ 
+      success: true, 
+      processed: processedCount,
+      total: aiCategorizationTotal,
+      message: "AI categorization will stop after current tag completes" 
+    });
+  } catch (error) {
+    console.error("❌ Error stopping AI categorization:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.get("/api/tags/ai-categorize/status", async (req, res) => {
+  try {
+    res.json({
+      isRunning: isAiCategorizationRunning,
+      processed: aiCategorizationProcessed,
+      total: aiCategorizationTotal,
+      currentTag: aiCategorizationCurrentTag,
+      progress: aiCategorizationTotal > 0 ? Math.round((aiCategorizationProcessed / aiCategorizationTotal) * 100) : 0
+    });
+  } catch (error) {
+    console.error("❌ Error getting AI categorization status:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Get recently categorized tags (what changed)
+router.get("/api/tags/ai-categorize/recent-changes", async (req, res) => {
+  try {
+    const { tagMetadata } = await import("@shared/schema");
+    const { desc, sql: drizzleSql } = await import("drizzle-orm");
+    
+    // Get tags updated in the last hour
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    
+    const recentlyUpdated = await db.select({
+      id: tagMetadata.id,
+      name: tagMetadata.name,
+      category: tagMetadata.category,
+      parentTagId: tagMetadata.parentTagId,
+      updatedAt: tagMetadata.updatedAt,
+      createdAt: tagMetadata.createdAt
+    })
+    .from(tagMetadata)
+    .where(drizzleSql`updated_at > ${oneHourAgo}`)
+    .orderBy(desc(tagMetadata.updatedAt))
+    .limit(100);
+    
+    // Get parent tag names for context
+    const parentIds = recentlyUpdated
+      .map(t => t.parentTagId)
+      .filter(Boolean) as string[];
+    
+    const parentTags = parentIds.length > 0 
+      ? await db.select({
+          id: tagMetadata.id,
+          name: tagMetadata.name,
+          category: tagMetadata.category
+        })
+        .from(tagMetadata)
+        .where(drizzleSql`id = ANY(${parentIds})`)
+      : [];
+    
+    const parentMap = new Map(parentTags.map(p => [p.id, p]));
+    
+    // Get usage counts from analyses
+    const changes = await Promise.all(
+      recentlyUpdated.map(async (tag) => {
+        // Count how many analyses have this tag with the new category
+        const countResult = await db.execute(drizzleSql`
+          SELECT COUNT(*)::integer as count
+          FROM historical_news_analyses
+          WHERE tags @> ${JSON.stringify([{ name: tag.name, category: tag.category }])}::jsonb
+        `);
+        
+        const usageCount = countResult.rows[0]?.count || 0;
+        const parent = tag.parentTagId ? parentMap.get(tag.parentTagId) : null;
+        
+        return {
+          tagName: tag.name,
+          newCategory: tag.category,
+          parentTag: parent ? { name: parent.name, category: parent.category } : null,
+          usageCount,
+          updatedAt: tag.updatedAt,
+          createdAt: tag.createdAt,
+          isNew: tag.createdAt && tag.updatedAt && 
+                 Math.abs(tag.createdAt.getTime() - tag.updatedAt.getTime()) < 1000
+        };
+      })
+    );
+    
+    res.json({
+      success: true,
+      count: changes.length,
+      changes,
+      message: `Found ${changes.length} recently categorized tags`
+    });
+  } catch (error) {
+    console.error("❌ Error getting recent changes:", error);
     res.status(500).json({ error: (error as Error).message });
   }
 });

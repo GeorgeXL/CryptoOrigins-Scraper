@@ -22,6 +22,12 @@ interface ApiRequest {
   purpose?: string;
   triggeredBy?: string;
   date?: string;
+  // Tag categorization fields
+  tagName?: string;
+  tagCategory?: string;
+  tagSubcategoryPath?: string[];
+  tagConfidence?: number;
+  tagReasoning?: string;
 }
 
 interface ApiStats {
@@ -114,6 +120,10 @@ const getRequestSummary = (request: ApiRequest): string => {
   
   // OpenAI
   if (request.service === 'openai') {
+    // Tag categorization
+    if (request.tagName && request.context === 'tag-categorization') {
+      return `🏷️ Categorizing tag: "${request.tagName}"`;
+    }
     if (data.openaiResponse?.summary) {
       return `✨ Generated summary: "${data.openaiResponse.summary.substring(0, 60)}${data.openaiResponse.summary.length > 60 ? '...' : ''}"`;
     }
@@ -212,6 +222,21 @@ const renderRequestDetails = (request: ApiRequest): JSX.Element | null => {
   
   // OpenAI details
   if (request.service === 'openai') {
+    // Tag categorization details
+    if (request.tagName && request.context === 'tag-categorization') {
+      return (
+        <div className="space-y-1">
+          <div>
+            <span className="font-medium">Tag:</span> <span className="font-mono">{request.tagName}</span>
+          </div>
+          {request.tagCategory && (
+            <div>
+              <span className="font-medium">Current Category:</span> {request.tagCategory}
+            </div>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="space-y-1">
         {data.date && (
@@ -301,6 +326,55 @@ const renderSuccessResult = (request: ApiRequest): JSX.Element | null => {
             Suggested correct date: {data.correctDate}
           </div>
         )}
+      </>
+    );
+  }
+  
+  // OpenAI tag categorization success
+  if (request.service === 'openai' && request.tagName && request.context === 'tag-categorization') {
+    return (
+      <>
+        <div className="font-medium text-green-800 text-sm mb-2">✅ Tag Categorized</div>
+        <div className="space-y-1 text-xs">
+          <div>
+            <span className="font-medium text-green-700">Tag:</span>{' '}
+            <span className="font-mono bg-green-100 px-1.5 py-0.5 rounded">{request.tagName}</span>
+          </div>
+          {request.tagCategory && (
+            <div>
+              <span className="font-medium text-green-700">Category:</span>{' '}
+              <span className="bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded text-xs font-medium">
+                {request.tagCategory}
+              </span>
+            </div>
+          )}
+          {request.tagSubcategoryPath && request.tagSubcategoryPath.length > 0 && (
+            <div>
+              <span className="font-medium text-green-700">Subcategory Path:</span>{' '}
+              <span className="text-green-600 font-mono">
+                {request.tagSubcategoryPath.join(' → ')}
+              </span>
+            </div>
+          )}
+          {request.tagConfidence !== undefined && (
+            <div>
+              <span className="font-medium text-green-700">Confidence:</span>{' '}
+              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                request.tagConfidence >= 0.8 ? 'bg-green-200 text-green-800' :
+                request.tagConfidence >= 0.6 ? 'bg-yellow-200 text-yellow-800' :
+                'bg-orange-200 text-orange-800'
+              }`}>
+                {(request.tagConfidence * 100).toFixed(1)}%
+              </span>
+            </div>
+          )}
+          {request.tagReasoning && (
+            <div className="mt-2 pt-2 border-t border-green-200">
+              <div className="font-medium text-green-700 mb-1">Reasoning:</div>
+              <div className="text-green-600 italic">{request.tagReasoning}</div>
+            </div>
+          )}
+        </div>
       </>
     );
   }

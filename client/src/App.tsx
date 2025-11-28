@@ -14,6 +14,7 @@ import EventCockpit from "@/pages/EventCockpit";
 import Cleaner from "@/pages/Cleaner";
 import TagsBrowser from "@/pages/TagsBrowser";
 import TagsManager from "@/pages/TagsManager";
+import TagCleanupTool from "@/pages/TagCleanupTool";
 import ConflictCockpit from "@/pages/ConflictCockpit";
 import Settings from "@/pages/Settings";
 import IsolatedLab from "@/pages/IsolatedLab";
@@ -31,6 +32,7 @@ function Router() {
         <Route path="/cleaner" component={Cleaner} />
         <Route path="/tags-browser" component={TagsBrowser} />
         <Route path="/tags-manager" component={TagsManager} />
+        <Route path="/tags-cleanup" component={TagCleanupTool} />
         <Route path="/conflict/:sourceDate" component={ConflictCockpit} />
         <Route path="/violation/:date" component={ConflictCockpit} />
         <Route path="/fact-check/:date" component={ConflictCockpit} />

@@ -46,7 +46,10 @@ import {
   Copy,
   ExternalLink,
   Pencil,
-  Trash2
+  Trash2,
+  Bot,
+  StopCircle,
+  Loader2
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -58,14 +61,18 @@ import { DeleteDialog } from "@/components/TagsManager/DeleteDialog";
 // Main category type definition
 export type MainCategory = 
   | 'bitcoin'
-  | 'money-economics'
+  | 'blockchain-platforms'
+  | 'digital-assets'
   | 'technology'
   | 'organizations'
   | 'people'
   | 'regulation-law'
   | 'markets-geography'
+  | 'traditional-finance'
+  | 'markets-trading'
+  | 'security-crime'
   | 'education-community'
-  | 'crime-security'
+  | 'history-culture'
   | 'miscellaneous';
 
 interface EntityTag {
@@ -84,6 +91,178 @@ interface HistoricalNewsAnalysis {
 }
 
 const PAGE_SIZE_OPTIONS = [50, 200, 500];
+
+// AI Categorization Panel Component
+function AiCategorizationPanel() {
+  const { toast } = useToast();
+  const [status, setStatus] = useState<{
+    isRunning: boolean;
+    processed: number;
+    total: number;
+    currentTag: string;
+    progress: number;
+  } | null>(null);
+
+  // Poll for status updates
+  useEffect(() => {
+    if (!status?.isRunning) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch('/api/tags/ai-categorize/status');
+        if (response.ok) {
+          const data = await response.json();
+          setStatus(data);
+          if (!data.isRunning) {
+            toast({
+              title: "Categorization Complete",
+              description: `Processed ${data.processed} of ${data.total} tags`,
+            });
+            // Invalidate queries to refresh data
+            queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
+            queryClient.invalidateQueries({ queryKey: ['tags-hierarchy'] });
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching categorization status:', error);
+      }
+    }, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(interval);
+  }, [status?.isRunning, toast]);
+
+  const startCategorization = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/tags/ai-categorize/start', {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to start categorization');
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setStatus({
+        isRunning: true,
+        processed: 0,
+        total: data.total,
+        currentTag: '',
+        progress: 0,
+      });
+      toast({
+        title: "Categorization Started",
+        description: `Processing ${data.total} tags...`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const stopCategorization = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/tags/ai-categorize/stop', {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to stop categorization');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Stopping Categorization",
+        description: "The process will stop after the current tag completes",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Initial status fetch
+  useEffect(() => {
+    fetch('/api/tags/ai-categorize/status')
+      .then(res => res.json())
+      .then(data => setStatus(data))
+      .catch(err => console.error('Error fetching initial status:', err));
+  }, []);
+
+  if (!status) return null;
+
+  return (
+    <Card className="p-4 bg-gradient-to-r from-purple-50 to-blue-50 border-purple-200">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <Bot className="w-5 h-5 text-purple-600" />
+          <div>
+            <h3 className="font-semibold text-slate-900">AI Tag Categorization</h3>
+            <p className="text-sm text-slate-600">
+              Automatically categorize all tags into the new taxonomy structure using AI
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center space-x-4">
+          {status.isRunning ? (
+            <>
+              <div className="text-right">
+                <div className="text-sm font-medium text-slate-900">
+                  {status.processed} / {status.total} tags
+                </div>
+                <div className="text-xs text-slate-600">
+                  {status.currentTag && `Processing: ${status.currentTag}`}
+                </div>
+                <div className="w-48 bg-slate-200 rounded-full h-2 mt-1">
+                  <div
+                    className="bg-purple-600 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${status.progress}%` }}
+                  />
+                </div>
+              </div>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => stopCategorization.mutate()}
+                disabled={stopCategorization.isPending}
+              >
+                <StopCircle className="w-4 h-4 mr-2" />
+                Stop
+              </Button>
+            </>
+          ) : (
+            <Button
+              onClick={() => startCategorization.mutate()}
+              disabled={startCategorization.isPending}
+              className="bg-purple-600 hover:bg-purple-700"
+            >
+              {startCategorization.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Starting...
+                </>
+              ) : (
+                <>
+                  <Bot className="w-4 h-4 mr-2" />
+                  Categorize All Tags with AI
+                </>
+              )}
+            </Button>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 export default function TagsBrowser() {
   const { toast } = useToast();
@@ -174,18 +353,22 @@ export default function TagsBrowser() {
     staleTime: 1000 * 60 * 60, // Cache for 1 hour (hierarchy rarely changes)
   });
 
-  // Map main category names to display names (New 9-Category Taxonomy)
+  // Map main category names to display names (New 14-Category Taxonomy)
   const categoryDisplayNames: Record<MainCategory, string> = {
-    'bitcoin': 'Bitcoin',
-    'money-economics': 'Money & Economics',
-    'technology': 'Technology Concepts',
-    'organizations': 'Organizations & Companies',
-    'people': 'People',
-    'regulation-law': 'Regulation & Government',
-    'markets-geography': 'Geography & Markets',
-    'education-community': 'Education & Community',
-    'crime-security': 'Crime & Security',
-    'miscellaneous': 'Miscellaneous'
+    'bitcoin': '🪙 Bitcoin',
+    'blockchain-platforms': '🔗 Blockchain Platforms',
+    'digital-assets': '💰 Digital Assets & Tokens',
+    'technology': '⚡ Technology & Concepts',
+    'organizations': '🏢 Companies & Organizations',
+    'people': '👥 People',
+    'regulation-law': '⚖️ Regulation & Law',
+    'markets-geography': '🌍 Markets & Geography',
+    'traditional-finance': '💵 Traditional Finance & Economics',
+    'markets-trading': '📊 Markets & Trading',
+    'security-crime': '🔒 Security & Crime',
+    'education-community': '🎓 Education & Community',
+    'history-culture': '📜 History & Culture',
+    'miscellaneous': '📝 Miscellaneous'
   };
 
   // Frontend grouping logic - Uses hierarchy from database
@@ -517,14 +700,18 @@ export default function TagsBrowser() {
   // Define category order (Bitcoin first, then others)
   const CATEGORY_ORDER: MainCategory[] = [
     'bitcoin',
-    'money-economics', 
-    'technology', 
-    'organizations', 
-    'people', 
-    'regulation-law', 
-    'markets-geography', 
+    'blockchain-platforms',
+    'digital-assets',
+    'technology',
+    'organizations',
+    'people',
+    'regulation-law',
+    'markets-geography',
+    'traditional-finance',
+    'markets-trading',
+    'security-crime',
     'education-community',
-    'crime-security', 
+    'history-culture',
     'miscellaneous'
   ];
   
@@ -1125,6 +1312,9 @@ export default function TagsBrowser() {
           <span>{catalogData?.taggedCount || 0} tagged analyses</span>
         </div>
       </div>
+
+      {/* AI Categorization Tool */}
+      <AiCategorizationPanel />
 
       {/* Search Bar */}
       <Card className="p-4">

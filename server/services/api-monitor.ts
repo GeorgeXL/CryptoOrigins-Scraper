@@ -17,6 +17,12 @@ export interface ApiRequest {
   purpose?: string;
   triggeredBy?: string;
   date?: string;
+  // Tag categorization fields
+  tagName?: string;
+  tagCategory?: string;
+  tagSubcategoryPath?: string[];
+  tagConfidence?: number;
+  tagReasoning?: string;
 }
 
 class ApiMonitor extends EventEmitter {
