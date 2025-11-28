@@ -4,24 +4,42 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 import type { Express } from 'express';
 
-// Import from built server code (built during Vercel build step)
-// The build process creates dist/server/serverless.js from server/serverless.ts
-// @ts-ignore - Vercel will compile this, and the server code is built first
-import { createApp } from "../dist/server/serverless.js";
+let createAppFn: typeof import("../dist/server/serverless.js").createApp | null = null;
+
+async function loadCreateApp() {
+  if (createAppFn) {
+    return createAppFn;
+  }
+
+  try {
+    const module = await import("../dist/server/serverless.js");
+    createAppFn = module.createApp;
+    return createAppFn;
+  } catch (distError) {
+    console.error("❌ Failed to load dist/server/serverless.js:", distError);
+    throw distError;
+  }
+}
 
 type AppContainer = { app: Express; server: any };
 
 // Store the app promise but don't create it until first request
 let appPromise: Promise<AppContainer> | null = null;
 
-function getOrCreateApp(): Promise<AppContainer> {
+async function getOrCreateApp(): Promise<AppContainer> {
   if (!appPromise) {
     console.log('🔧 Initializing app on first request...');
-    appPromise = createApp().catch((error: Error) => {
-      console.error('❌ FATAL: Failed to create app:', error);
-      console.error('   Error message:', error.message);
-      console.error('   Error stack:', error.stack);
-      // Reset promise so next request can retry
+    appPromise = (async () => {
+      try {
+        const createApp = await loadCreateApp();
+        return await createApp();
+      } catch (error) {
+        console.error('❌ FATAL: Failed to create app:', error);
+        console.error('   Error message:', (error as Error).message);
+        console.error('   Error stack:', (error as Error).stack);
+        throw error;
+      }
+    })().catch((error: Error) => {
       appPromise = null;
       throw error;
     });
