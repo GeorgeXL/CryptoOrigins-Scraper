@@ -12,6 +12,7 @@ async function loadCreateApp() {
   }
 
   try {
+    // Explicit .js extension to avoid ESM resolution issues on Vercel
     const module = await import("../dist/server/serverless.js");
     createAppFn = module.createApp;
     return createAppFn;

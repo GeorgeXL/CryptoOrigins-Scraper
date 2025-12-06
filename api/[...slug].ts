@@ -1,4 +1,5 @@
-export { default } from "./index";
+// Explicit .js extension to satisfy Node ESM resolution on Vercel
+export { default } from "./index.js";
 
 
 
