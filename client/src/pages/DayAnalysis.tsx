@@ -602,6 +602,16 @@ export default function DayAnalysis() {
     analyzeDayMutation.mutate();
   };
 
+  // Helper to safely parse JSON responses and surface raw text when server returns HTML/error pages
+  const parseJsonSafe = async (response: Response) => {
+    const text = await response.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(text || "Response was not valid JSON");
+    }
+  };
+
   const saveChangesMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch(`/api/analysis/date/${date}`, {
@@ -617,11 +627,11 @@ export default function DayAnalysis() {
       });
       
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Failed to save: ${response.statusText}`);
+        const text = await response.text();
+        throw new Error(text || `Failed to save: ${response.statusText}`);
       }
       
-      return response.json();
+      return parseJsonSafe(response);
     },
     onSuccess: () => {
       // Invalidate multiple related queries to ensure UI updates
@@ -678,11 +688,11 @@ export default function DayAnalysis() {
       });
       
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Failed to remove tag: ${response.statusText}`);
+        const text = await response.text();
+        throw new Error(text || `Failed to remove tag: ${response.statusText}`);
       }
       
-      return { success: true, tags_version2: updatedTags };
+      return parseJsonSafe(response);
     },
     onSuccess: () => {
       // Invalidate queries to refresh the UI
@@ -733,11 +743,11 @@ export default function DayAnalysis() {
       });
       
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Failed to add tag: ${response.statusText}`);
+        const text = await response.text();
+        throw new Error(text || `Failed to add tag: ${response.statusText}`);
       }
       
-      return { success: true, tags_version2: updatedTags };
+      return parseJsonSafe(response);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
