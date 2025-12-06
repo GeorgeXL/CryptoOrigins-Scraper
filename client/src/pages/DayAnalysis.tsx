@@ -604,22 +604,24 @@ export default function DayAnalysis() {
 
   const saveChangesMutation = useMutation({
     mutationFn: async () => {
-      // Using Supabase directly instead of API endpoint
-      if (!supabase) throw new Error("Supabase not configured");
-      
-      const { error } = await supabase
-        .from("historical_news_analyses")
-        .update({
+      const response = await fetch(`/api/analysis/date/${date}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
           summary: editedSummary || dayData?.analysis.summary,
           reasoning: dayData?.analysis.reasoning,
-          is_manual_override: true // Mark as manual override when edited
-        })
-        .eq("date", date);
-        
-      if (error) {
-        throw new Error(`Failed to save: ${error.message}`);
+          is_manual_override: true
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Failed to save: ${response.statusText}`);
       }
-      return { success: true };
+      
+      return response.json();
     },
     onSuccess: () => {
       // Invalidate multiple related queries to ensure UI updates
@@ -664,23 +666,21 @@ export default function DayAnalysis() {
       // Filter out the tag to remove
       const updatedTags = dayData.analysis.tagsVersion2.filter(tag => tag !== tagNameToRemove);
       
-      // Using Supabase directly instead of API endpoint
-      if (!supabase) throw new Error("Supabase not configured");
-      
-      const { error } = await supabase
-        .from("historical_news_analyses")
-        .update({
+      const response = await fetch(`/api/analysis/date/${date}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          summary: dayData.analysis.summary,
           tags_version2: updatedTags,
-        })
-        .eq("date", date);
+        }),
+      });
       
-      if (error) {
-        throw new Error(`Failed to remove tag: ${error.message}`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Failed to remove tag: ${response.statusText}`);
       }
-      
-      // Also update usage count in tags table if possible (optional, but good for consistency)
-      // We can do this async without waiting
-      // decrementTagUsage(tagNameToRemove); 
       
       return { success: true, tags_version2: updatedTags };
     },
@@ -721,22 +721,21 @@ export default function DayAnalysis() {
       
       const updatedTags = [...currentTags, newTagName];
       
-      // Using Supabase directly instead of API endpoint
-      if (!supabase) throw new Error("Supabase not configured");
-      
-      const { error } = await supabase
-        .from("historical_news_analyses")
-        .update({
+      const response = await fetch(`/api/analysis/date/${date}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          summary: dayData?.analysis.summary,
           tags_version2: updatedTags,
-        })
-        .eq("date", date);
+        }),
+      });
       
-      if (error) {
-        throw new Error(`Failed to add tag: ${error.message}`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Failed to add tag: ${response.statusText}`);
       }
-      
-      // Ensure tag exists in tags table (optional, but good for consistency)
-      // ensureTagExists(newTagName);
       
       return { success: true, tags_version2: updatedTags };
     },
@@ -744,7 +743,7 @@ export default function DayAnalysis() {
       queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
       toast({
         title: "Tag Added",
-        description: "New tag has been added from highlighted text.",
+        description: "New tag has been added.",
       });
     },
     onError: (error: any) => {

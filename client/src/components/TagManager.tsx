@@ -707,25 +707,18 @@ export function TagManager() {
   // Move tag mutation
   const moveTagMutation = useMutation({
     mutationFn: async ({ tagId, category, subcategoryKey }: { tagId: string; category: string; subcategoryKey: string }) => {
-      if (!supabase) throw new Error("Supabase not configured");
+      const response = await fetch(`/api/tags/${tagId}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, subcategoryKey })
+      });
       
-      // Construct subcategory path
-      const subcategoryPath = subcategoryKey === 'root' || subcategoryKey === '' 
-        ? [] 
-        : subcategoryKey.split('.');
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Failed to move tag: ${response.statusText}`);
+      }
       
-      const { error } = await supabase
-        .from('tags')
-        .update({
-          category,
-          subcategory_path: subcategoryPath,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', tagId);
-        
-      if (error) throw new Error(`Failed to move tag: ${error.message}`);
-      
-      return { success: true };
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['supabase-all-tags-manager'] });
@@ -739,19 +732,18 @@ export function TagManager() {
   // Update tag mutation
   const updateTagMutation = useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: { name?: string } }) => {
-      if (!supabase) throw new Error("Supabase not configured");
+      const response = await fetch(`/api/tags/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
       
-      const { error } = await supabase
-        .from('tags')
-        .update({
-          name: updates.name,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', id);
-        
-      if (error) throw new Error(`Failed to update tag: ${error.message}`);
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Failed to update tag: ${response.statusText}`);
+      }
       
-      return { success: true };
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['supabase-all-tags-manager'] });
@@ -762,22 +754,18 @@ export function TagManager() {
   // Create tag mutation
   const createTagMutation = useMutation({
     mutationFn: async ({ name, category, subcategoryPath }: { name: string; category: string; subcategoryPath: string[] }) => {
-      if (!supabase) throw new Error("Supabase not configured");
+      const response = await fetch('/api/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, category, subcategoryPath })
+      });
       
-      const { data, error } = await supabase
-        .from('tags')
-        .insert({
-          name,
-          category,
-          subcategory_path: subcategoryPath,
-          usage_count: 0
-        })
-        .select()
-        .single();
-        
-      if (error) throw new Error(`Failed to create tag: ${error.message}`);
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Failed to create tag: ${response.statusText}`);
+      }
       
-      return data;
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['supabase-all-tags-manager'] });
@@ -788,16 +776,16 @@ export function TagManager() {
   // Delete tag mutation
   const deleteTagMutation = useMutation({
     mutationFn: async (id: string) => {
-      if (!supabase) throw new Error("Supabase not configured");
+      const response = await fetch(`/api/tags/${id}`, {
+        method: 'DELETE'
+      });
       
-      const { error } = await supabase
-        .from('tags')
-        .delete()
-        .eq('id', id);
-        
-      if (error) throw new Error(`Failed to delete tag: ${error.message}`);
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Failed to delete tag: ${response.statusText}`);
+      }
       
-      return { success: true };
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['supabase-all-tags-manager'] });
@@ -808,41 +796,18 @@ export function TagManager() {
   // Add subcategory mutation
   const addSubcategoryMutation = useMutation({
     mutationFn: async ({ category, parentPath, name }: { category: string; parentPath: string[]; name: string }) => {
-      if (!supabase) throw new Error("Supabase not configured");
+      const response = await fetch('/api/tags/subcategory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, parentPath, name })
+      });
       
-      // Generate new key (simple increment logic or random suffix)
-      // Since we don't have strict schema for subcategories, we just create a label mapping
-      // The path itself defines the structure.
-      // We need to find the next available index for this level.
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Failed to create subcategory: ${response.statusText}`);
+      }
       
-      // This is tricky client-side without reading all tags.
-      // Simplified approach: Use a timestamp-based unique suffix for the key path
-      // e.g. parentPath=["1", "2"] -> newPath=["1", "2", "123456789"]
-      
-      // Wait, subcategories are virtual. They only exist if tags have them in subcategory_path OR if they are in subcategory_labels.
-      // To "create" a subcategory, we essentially just need to register its label.
-      
-      const newId = Math.random().toString(36).substr(2, 6);
-      const newPath = [...parentPath, newId];
-      const pathString = newPath.join('.'); // Assuming dot notation for path key storage if needed, but schema uses array
-      // Wait, subcategory_labels table uses a specific format? 
-      // Let's check schema... it uses "path" as text.
-      
-      // We'll store the path as "1.2.3" string in labels table.
-      // The key in our tree logic is what matters.
-      // If we use random ID, it might look ugly in URL or UI if exposed.
-      // Let's try to find max index? Too expensive. Random is safer.
-      
-      const { error } = await supabase
-        .from('subcategory_labels')
-        .insert({
-          path: newPath.join('.'), // Store as dot-notation string or whatever format used
-          label: name
-        });
-        
-      if (error) throw new Error(`Failed to create subcategory: ${error.message}`);
-      
-      return { success: true };
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['supabase-labels-manager'] });
@@ -854,27 +819,18 @@ export function TagManager() {
   // Rename subcategory mutation
   const renameSubcategoryMutation = useMutation({
     mutationFn: async ({ category, subcategoryKey, newName }: { category: string; subcategoryKey: string; newName: string }) => {
-      if (!supabase) throw new Error("Supabase not configured");
+      const response = await fetch('/api/tags/subcategory/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, subcategoryKey, newName })
+      });
       
-      // subcategoryKey is like "1.2.3" (path joined by dots usually)
-      // Or is it just the last segment? The logic in tagHelpers uses "key" which is the segment.
-      // But rename dialog passes "subcategoryKey" which likely comes from the tree node "key".
-      
-      // We need to update subcategory_labels table
-      // First try to update existing
-      const { error, count } = await supabase
-        .from('subcategory_labels')
-        .update({ label: newName })
-        .eq('path', subcategoryKey); // Assuming key == path string
-        
-      // If no rows updated, maybe insert?
-      if (!error && count === 0) {
-         await supabase.from('subcategory_labels').insert({ path: subcategoryKey, label: newName });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Failed to rename subcategory: ${response.statusText}`);
       }
       
-      if (error) throw new Error(`Failed to rename subcategory: ${error.message}`);
-      
-      return { success: true };
+      return response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['supabase-labels-manager'] });
@@ -886,68 +842,18 @@ export function TagManager() {
   // Delete subcategory mutation
   const deleteSubcategoryMutation = useMutation({
     mutationFn: async ({ category, subcategoryKey, action }: { category: string; subcategoryKey: string; action: 'delete' | 'move_to_parent' }) => {
-      if (!supabase) throw new Error("Supabase not configured");
+      const response = await fetch('/api/tags/subcategory/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, subcategoryKey, action })
+      });
       
-      // 1. Remove label
-      await supabase.from('subcategory_labels').delete().eq('path', subcategoryKey);
-      
-      // 2. Handle tags
-      // Get all tags that start with this path
-      const pathArray = subcategoryKey.split('.');
-      
-      // We need to fetch tags to filter them since we can't easily regex filter on array column in client-side style
-      // But we can use "contains" operator for array? No, exact match.
-      // We'll fetch all tags (already cached?) or just update carefully.
-      
-      // Actually, let's fetch all tags that contain this path prefix
-      const { data: tagsToUpdate, error: fetchError } = await supabase
-        .from('tags')
-        .select('id, subcategory_path');
-        
-      if (fetchError) throw fetchError;
-      
-      const tagsInSub = tagsToUpdate?.filter(t => {
-        if (!t.subcategory_path) return false;
-        // Check if path matches prefix
-        if (t.subcategory_path.length < pathArray.length) return false;
-        for (let i = 0; i < pathArray.length; i++) {
-          if (t.subcategory_path[i] !== pathArray[i]) return false;
-        }
-        return true;
-      }) || [];
-      
-      if (tagsInSub.length === 0) return { success: true };
-      
-      if (action === 'delete') {
-        // Delete all these tags
-        const ids = tagsInSub.map(t => t.id);
-        await supabase.from('tags').delete().in('id', ids);
-      } else {
-        // Move to parent
-        // Parent path is pathArray without last element
-        const parentPath = pathArray.slice(0, -1);
-        
-        const updates = tagsInSub.map(async (tag) => {
-           // For nested tags (deeper than immediate children), we might want to preserve relative structure?
-           // Or flatten everything to parent?
-           // "Move tags to parent category" usually implies flattening immediate children.
-           // Let's just strip the deleted segment from the path.
-           
-           // Original: [a, b, c, d]
-           // Delete 'b' (key="a.b")
-           // New: [a, c, d] ? Or just [a]?
-           // Usually "move to parent" means they become children of parent.
-           // So [a, b, c] -> [a, c]
-           
-           const newPath = [...parentPath, ...tag.subcategory_path.slice(pathArray.length)];
-           
-           await supabase.from('tags').update({ subcategory_path: newPath }).eq('id', tag.id);
-        });
-        
-        await Promise.all(updates);
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Failed to delete subcategory: ${response.statusText}`);
       }
       
-      return { success: true };
+      return response.json();
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['supabase-all-tags-manager'] });
