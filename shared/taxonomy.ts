@@ -263,3 +263,25 @@ export function getCategoryKeyFromPath(path: string[] | null | undefined, fallba
 export function getCategoryDisplayMeta(key: string): { name: string; emoji?: string } {
   return MAIN_CATEGORY_META[key] || { name: LABEL_LOOKUP[key] || key };
 }
+
+export function getSubcategoryMeta(categoryKey: string, subcategoryKey: string): { label: string } | undefined {
+  const category = TAXONOMY[categoryKey as CategoryKey];
+  if (!category?.subcategories) return undefined;
+  
+  // Search through subcategories
+  const findSubcategory = (subcats: Record<string, SubcategoryDefinition>, key: string): { label: string } | undefined => {
+    for (const [subcatKey, subcatDef] of Object.entries(subcats)) {
+      if (subcatKey === key) {
+        return { label: subcatDef.label };
+      }
+      // Check nested subcategories
+      if (subcatDef.subcategories) {
+        const nested = findSubcategory(subcatDef.subcategories, key);
+        if (nested) return nested;
+      }
+    }
+    return undefined;
+  };
+  
+  return findSubcategory(category.subcategories, subcategoryKey);
+}
