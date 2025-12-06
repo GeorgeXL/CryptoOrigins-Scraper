@@ -13,7 +13,7 @@ export function ApiStatusIndicator() {
 
   if (!health) {
     return (
-      <div className="flex items-center space-x-2">
+      <div className="flex items-center space-x-2" title={error?.message || "Health check failed"}>
         <div className="w-2 h-2 rounded-full bg-gray-500"></div>
         <span className="text-sm text-gray-600">Status Unknown</span>
       </div>

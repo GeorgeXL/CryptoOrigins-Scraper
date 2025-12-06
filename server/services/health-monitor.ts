@@ -30,18 +30,21 @@ class HealthMonitor {
 
     const apis: ApiStatus[] = [];
     
-    // Test AI Providers
+    // Test AI Providers in parallel to avoid timeouts
     const providers = ['openai', 'gemini', 'perplexity'];
-    for (const provider of providers) {
-      const result = await this.testAiProvider(provider as any);
-      apis.push(result);
-    }
+    const aiPromises = providers.map(provider => this.testAiProvider(provider as any));
     
-    // Test EXA
-    const exaResult = await this.testExa();
-    apis.push(exaResult);
-    
+    // Test EXA in parallel
+    const exaPromise = this.testExa();
 
+    // Wait for all checks
+    const [openaiResult, geminiResult, perplexityResult, exaResult] = await Promise.all([
+      ...aiPromises,
+      exaPromise
+    ]);
+
+    apis.push(openaiResult, geminiResult, perplexityResult, exaResult);
+    
     // Determine overall status
     const hasOutage = apis.some(api => api.status === 'outage');
     const hasDegraded = apis.some(api => api.status === 'degraded');
