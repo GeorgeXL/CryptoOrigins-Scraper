@@ -73,7 +73,7 @@ import { TagsSidebar } from "@/components/TagsSidebar";
 import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
-import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor } from "@/utils/tagHelpers";
+import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor, buildFilterTreeFromTags } from "@/utils/tagHelpers";
 
 // Main category type definition
 export type MainCategory = 
@@ -158,68 +158,69 @@ export default function HomePage() {
   const [isReanalyzing, setIsReanalyzing] = useState(false);
   const [isCategorizing, setIsCategorizing] = useState(false);
 
-  // Fetch flat tags from new v2 endpoint for frontend grouping
-  const { data: catalogV2Data, error: catalogError } = useQuery<{
-    tags: { name: string; count: number }[];
-    taggedCount: number;
-    untaggedCount: number;
-    totalAnalyses: number;
-  }>({
-    queryKey: ['tags-catalog-v2'],
+  // Fetch tags from Supabase directly
+  const { data: allTagsData, refetch: refetchFilterTree } = useQuery({
+    queryKey: ['supabase-all-tags'],
     queryFn: async () => {
-      const response = await fetch(`/api/tags/catalog-v2`);
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Catalog v2 API error:', response.status, errorText);
-        throw new Error(`Failed to fetch catalog: ${response.statusText}`);
-      }
-      const data = await response.json();
-      console.log('Catalog v2 data received:', {
-        tagCount: data.tags?.length || 0,
-        taggedCount: data.taggedCount
-      });
-      return data;
+      if (!supabase) return [];
+      const { data, error } = await supabase
+        .from('tags')
+        .select('*');
+      if (error) throw error;
+      return data || [];
     },
-    retry: 1,
+    staleTime: 0,
+    refetchOnMount: true
   });
 
-  // Fetch tag filter tree from normalized tags table
-  const { data: filterTreeData, refetch: refetchFilterTree } = useQuery<{
-    categories: any[];
-    totalTags: number;
-    builtFrom?: string;
-  }>({
-    queryKey: ['tags-filter-tree'],
+  // Fetch labels
+  const { data: labelsData } = useQuery({
+    queryKey: ['supabase-labels'],
     queryFn: async () => {
-      const response = await fetch('/api/tags/filter-tree');
-      if (!response.ok) {
-        throw new Error('Failed to fetch filter tree');
-      }
-      return response.json();
+      if (!supabase) return [];
+      const { data, error } = await supabase.from('subcategory_labels').select('*');
+      if (error) return [];
+      return data || [];
     },
-    staleTime: 0, // Always refetch when invalidated (was 1 hour, but need immediate updates after deletes)
-    refetchOnMount: true, // Always refetch when component mounts
+    staleTime: Infinity
   });
 
-  // Fallback to old hierarchy endpoint if filter-tree is not available
-  const { data: hierarchyData } = useQuery<{
-    categories: any[];
-    totalTags: number;
-  }>({
-    queryKey: ['tags-hierarchy'],
+  // Fetch counts from Supabase directly
+  const { data: countsData } = useQuery({
+    queryKey: ['supabase-counts'],
     queryFn: async () => {
-      const response = await fetch('/api/tags/hierarchy');
-      if (!response.ok) {
-        throw new Error('Failed to fetch hierarchy');
-      }
-      return response.json();
-    },
-    staleTime: 1000 * 60 * 60,
-    enabled: !filterTreeData, // Only fetch if filter-tree is not available
+      if (!supabase) return { taggedCount: 0, untaggedCount: 0, totalAnalyses: 0 };
+      
+      // Total analyses
+      const { count: totalAnalyses } = await supabase
+        .from('historical_news_analyses')
+        .select('*', { count: 'exact', head: true });
+        
+      return {
+        taggedCount: 0, 
+        untaggedCount: 0, 
+        totalAnalyses: totalAnalyses || 0
+      };
+    }
   });
 
-  // Use filter-tree data if available, otherwise fall back to hierarchy
-  const hierarchyDataToUse = filterTreeData || hierarchyData;
+  // Construct filter tree client-side
+  const hierarchyDataToUse = useMemo(() => {
+    if (!allTagsData) return null;
+    
+    const labelsMap = new Map<string, string>();
+    labelsData?.forEach(l => labelsMap.set(l.path, l.label));
+    
+    return buildFilterTreeFromTags(allTagsData as any, labelsMap);
+  }, [allTagsData, labelsData]);
+
+  // Mock catalogV2Data for existing code
+  const catalogV2Data = useMemo(() => ({
+    tags: allTagsData?.map(t => ({ name: t.name, count: t.usage_count })) || [],
+    taggedCount: countsData?.taggedCount || 0,
+    untaggedCount: countsData?.untaggedCount || 0,
+    totalAnalyses: countsData?.totalAnalyses || 0
+  }), [allTagsData, countsData]);
 
   // Map main category names to display names (New 14-Category Taxonomy)
   const categoryDisplayNames: Record<MainCategory, string> = {

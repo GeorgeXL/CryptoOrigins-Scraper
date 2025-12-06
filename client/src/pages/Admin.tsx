@@ -27,20 +27,39 @@ export default function Admin() {
         throw new Error('Supabase client not configured');
       }
       
-      // Fetch all analyses from Supabase directly
-      const { data, error } = await supabase
-        .from('historical_news_analyses')
-        .select('date, summary, is_manual_override')
-        .gte('date', '2008-01-01')
-        .lte('date', new Date().toISOString().split('T')[0])
-        .order('date', { ascending: true });
-      
-      if (error) {
-        throw new Error(`Database error: ${error.message}`);
+      // Fetch all analyses from Supabase directly with pagination
+      let allData: any[] = [];
+      let page = 0;
+      const pageSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('historical_news_analyses')
+          .select('date, summary, is_manual_override')
+          .gte('date', '2008-01-01')
+          .lte('date', new Date().toISOString().split('T')[0])
+          .order('date', { ascending: true })
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+        
+        if (error) {
+          throw new Error(`Database error: ${error.message}`);
+        }
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data];
+          if (data.length < pageSize) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+        } else {
+          hasMore = false;
+        }
       }
       
       // Map to expected format
-      const analyses: Analysis[] = (data || []).map(row => ({
+      const analyses: Analysis[] = (allData || []).map(row => ({
         date: row.date,
         summary: row.summary || '',
         isManualOverride: row.is_manual_override || false,
@@ -124,20 +143,39 @@ export default function Admin() {
         throw new Error('Supabase client not configured');
       }
       
-      // Fetch all analyses from Supabase directly
-      const { data, error } = await supabase
-        .from('historical_news_analyses')
-        .select('date, summary, is_manual_override')
-        .gte('date', '2008-01-01')
-        .lte('date', new Date().toISOString().split('T')[0])
-        .order('date', { ascending: true });
-      
-      if (error) {
-        throw new Error(`Database error: ${error.message}`);
+      // Fetch all analyses from Supabase directly with pagination
+      let allData: any[] = [];
+      let page = 0;
+      const pageSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('historical_news_analyses')
+          .select('date, summary, is_manual_override')
+          .gte('date', '2008-01-01')
+          .lte('date', new Date().toISOString().split('T')[0])
+          .order('date', { ascending: true })
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+        
+        if (error) {
+          throw new Error(`Database error: ${error.message}`);
+        }
+
+        if (data && data.length > 0) {
+          allData = [...allData, ...data];
+          if (data.length < pageSize) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+        } else {
+          hasMore = false;
+        }
       }
       
       // Map to expected format
-      const analyses: Analysis[] = (data || []).map(row => ({
+      const analyses: Analysis[] = (allData || []).map(row => ({
         date: row.date,
         summary: row.summary || '',
         isManualOverride: row.is_manual_override || false,

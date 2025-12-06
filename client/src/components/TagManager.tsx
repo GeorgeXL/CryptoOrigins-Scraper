@@ -19,6 +19,8 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { supabase } from "@/lib/supabase";
+import { buildFilterTreeFromTags } from "@/utils/tagHelpers";
 import {
   Collapsible,
   CollapsibleContent,
@@ -559,23 +561,88 @@ export function TagManager() {
   // Quality check state
   const [showQualityCheck, setShowQualityCheck] = useState(false);
 
-  // Fetch filter tree (hierarchical tags)
-  const { data: filterTree, isLoading } = useQuery<FilterTreeResponse>({
-    queryKey: ['/api/tags/filter-tree'],
+  // Fetch tags from Supabase directly
+  const { data: allTagsData, isLoading: isTagsLoading } = useQuery({
+    queryKey: ['supabase-all-tags-manager'],
     queryFn: async () => {
-      const res = await fetch('/api/tags/filter-tree');
-      if (!res.ok) throw new Error('Failed to fetch tags');
-      return res.json();
+      if (!supabase) return [];
+      const { data, error } = await supabase
+        .from('tags')
+        .select('*');
+      if (error) throw error;
+      return data || [];
     },
+    staleTime: 0,
+    refetchOnMount: true
   });
 
-  // Fetch quality check data
-  const { data: qualityCheck, isLoading: qualityCheckLoading } = useQuery<QualityCheckResponse>({
-    queryKey: ['/api/tags/quality-check'],
+  // Fetch labels
+  const { data: labelsData } = useQuery({
+    queryKey: ['supabase-labels-manager'],
     queryFn: async () => {
-      const res = await fetch('/api/tags/quality-check');
-      if (!res.ok) throw new Error('Failed to fetch quality check');
-      return res.json();
+      if (!supabase) return [];
+      const { data, error } = await supabase.from('subcategory_labels').select('*');
+      if (error) return [];
+      return data || [];
+    },
+    staleTime: Infinity
+  });
+
+  // Construct filter tree client-side
+  const filterTree = useMemo(() => {
+    if (!allTagsData) return { categories: [], totalTags: 0 };
+    
+    const labelsMap = new Map<string, string>();
+    labelsData?.forEach(l => labelsMap.set(l.path, l.label));
+    
+    return buildFilterTreeFromTags(allTagsData as any, labelsMap);
+  }, [allTagsData, labelsData]);
+  
+  const isLoading = isTagsLoading;
+
+  // Fetch quality check data from Supabase
+  const { data: qualityCheck, isLoading: qualityCheckLoading } = useQuery<QualityCheckResponse>({
+    queryKey: ['supabase-quality-check'],
+    queryFn: async () => {
+      if (!supabase) throw new Error("Supabase not configured");
+      
+      let tags = allTagsData;
+      if (!tags) {
+         const { data, error } = await supabase.from('tags').select('*');
+         if (error) throw error;
+         tags = data || [];
+      }
+      
+      const tagsList = tags || [];
+      
+      // 1. Tags without subcategory path
+      const tagsWithoutPath = tagsList.filter(t => 
+        !t.subcategory_path || t.subcategory_path.length === 0
+      ).map(t => ({
+        id: t.id,
+        name: t.name,
+        category: t.category,
+        usage_count: t.usage_count
+      }));
+      
+      // 2. Unused tags
+      const unusedTags = tagsList.filter(t => t.usage_count === 0).map(t => ({
+        id: t.id,
+        name: t.name,
+        category: t.category,
+        usage_count: t.usage_count
+      }));
+      
+      // 3. Totals
+      const totalTags = tagsList.length;
+      const totalUsedInSummaries = tagsList.filter(t => t.usage_count > 0).length;
+      
+      return {
+        tagsWithoutPath,
+        unusedTags,
+        totalTags,
+        totalUsedInSummaries
+      };
     },
     enabled: showQualityCheck,
   });
