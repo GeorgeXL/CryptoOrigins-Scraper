@@ -3286,141 +3286,9 @@ var init_tag_categorizer = __esm({
   }
 });
 
-// vite.config.ts
-var vite_config_exports = {};
-__export(vite_config_exports, {
-  default: () => vite_config_default
-});
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import path from "path";
-var vite_config_default;
-var init_vite_config = __esm({
-  "vite.config.ts"() {
-    "use strict";
-    vite_config_default = defineConfig({
-      plugins: [react()],
-      envPrefix: ["VITE_", "SUPABASE_"],
-      resolve: {
-        alias: {
-          "@": path.resolve(import.meta.dirname, "client", "src"),
-          "@shared": path.resolve(import.meta.dirname, "shared"),
-          "@assets": path.resolve(import.meta.dirname, "attached_assets")
-        }
-      },
-      root: path.resolve(import.meta.dirname, "client"),
-      build: {
-        outDir: path.resolve(import.meta.dirname, "dist"),
-        emptyOutDir: true
-      },
-      server: {
-        fs: {
-          strict: true,
-          deny: ["**/.*"]
-        },
-        port: 3e3
-      }
-    });
-  }
-});
-
-// server/vite.ts
-var vite_exports = {};
-__export(vite_exports, {
-  log: () => log,
-  serveStatic: () => serveStatic,
-  setupVite: () => setupVite
-});
-import express from "express";
-import fs from "fs";
-import path2 from "path";
-function log(message, source = "express") {
-  const formattedTime = (/* @__PURE__ */ new Date()).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true
-  });
-  console.log(`${formattedTime} [${source}] ${message}`);
-}
-async function setupVite(app, server) {
-  const viteModule = await import("vite");
-  const viteConfigModule = await Promise.resolve().then(() => (init_vite_config(), vite_config_exports));
-  const nanoidModule = await import("nanoid");
-  const createViteServer = viteModule.createServer;
-  const createLogger = viteModule.createLogger;
-  const viteConfig = viteConfigModule.default;
-  const nanoid = nanoidModule.nanoid;
-  const viteLogger = createLogger();
-  const serverOptions = {
-    middlewareMode: true,
-    hmr: { server },
-    allowedHosts: true
-  };
-  const vite = await createViteServer({
-    ...viteConfig,
-    configFile: false,
-    customLogger: {
-      ...viteLogger,
-      error: (msg, options) => {
-        viteLogger.error(msg, options);
-        process.exit(1);
-      }
-    },
-    server: serverOptions,
-    appType: "custom"
-  });
-  app.use(vite.middlewares);
-  app.use("*", async (req, res, next) => {
-    const url = req.originalUrl;
-    if (url.startsWith("/api/")) {
-      return next();
-    }
-    try {
-      const clientTemplate = path2.resolve(
-        import.meta.dirname,
-        "..",
-        "client",
-        "index.html"
-      );
-      let template = await fs.promises.readFile(clientTemplate, "utf-8");
-      template = template.replace(
-        `src="/src/main.tsx"`,
-        `src="/src/main.tsx?v=${nanoid()}"`
-      );
-      const page = await vite.transformIndexHtml(url, template);
-      res.status(200).set({ "Content-Type": "text/html" }).end(page);
-    } catch (e) {
-      vite.ssrFixStacktrace(e);
-      next(e);
-    }
-  });
-}
-function serveStatic(app) {
-  const distPath = process.env.VERCEL ? path2.resolve(process.cwd(), "dist") : path2.resolve(import.meta.dirname, "..", "dist");
-  if (!fs.existsSync(distPath)) {
-    console.warn(
-      `\u26A0\uFE0F serveStatic: build directory not found at ${distPath}. Skipping static middleware (Vercel should serve static assets).`
-    );
-    return;
-  }
-  app.use(express.static(distPath));
-  app.use("*", (_req, res) => {
-    res.sendFile(path2.resolve(distPath, "index.html"));
-  });
-}
-var init_vite = __esm({
-  "server/vite.ts"() {
-    "use strict";
-  }
-});
-
 // server/serverless.ts
 import "dotenv/config";
-
-// server/index.ts
-import "dotenv/config";
-import express2 from "express";
+import express from "express";
 
 // server/routes.ts
 import { createServer } from "http";
@@ -3463,9 +3331,9 @@ function getDbInstance() {
     throw new Error("FATAL: DATABASE_URL or POSTG-RES_URL is not set in Vercel environment variables.");
   }
   try {
-    const isServerless2 = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
-    const maxConnections = isServerless2 ? 2 : 15;
-    console.log(`\u{1F527} LAZY INIT: Creating database pool (serverless: ${isServerless2}, max: ${maxConnections})...`);
+    const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const maxConnections = isServerless ? 2 : 15;
+    console.log(`\u{1F527} LAZY INIT: Creating database pool (serverless: ${isServerless}, max: ${maxConnections})...`);
     let cleanConnectionString = databaseUrl.split(/\s+/)[0].replace(/"/g, "");
     cleanConnectionString = cleanConnectionString.replace(/[?&]supa=[^&]*/g, "");
     cleanConnectionString = cleanConnectionString.replace(/\?&/, "?");
@@ -8895,9 +8763,9 @@ function getTaxonomyLabel(key) {
   if (!key) return void 0;
   return LABEL_LOOKUP[key] || key;
 }
-function getCategoryKeyFromPath(path3, fallback) {
-  if (path3 && path3.length > 0) {
-    const firstSegment = path3[0];
+function getCategoryKeyFromPath(path, fallback) {
+  if (path && path.length > 0) {
+    const firstSegment = path[0];
     const prefix = firstSegment.split(".")[0];
     return NUMBER_TO_CATEGORY[prefix] || fallback;
   }
@@ -10701,9 +10569,9 @@ router4.post("/api/tags/subcategory", async (req, res) => {
     let nextNum = 1;
     const existingNums = /* @__PURE__ */ new Set();
     for (const row of existingKeys.rows) {
-      const path3 = row.subcategory_path;
-      if (path3 && path3.length > 0) {
-        const lastPart = path3[path3.length - 1];
+      const path = row.subcategory_path;
+      if (path && path.length > 0) {
+        const lastPart = path[path.length - 1];
         const num = parseInt(lastPart.split(".").pop() || "0");
         if (!isNaN(num)) existingNums.add(num);
       }
@@ -11494,10 +11362,10 @@ async function registerRoutes(app) {
   return httpServer;
 }
 
-// server/index.ts
+// server/serverless.ts
 import compression from "compression";
 async function createApp() {
-  const app = express2();
+  const app = express();
   app.use(compression({
     level: 6,
     // Good balance between compression and speed
@@ -11510,11 +11378,11 @@ async function createApp() {
       return compression.filter(req, res);
     }
   }));
-  app.use(express2.json({ limit: "50mb" }));
-  app.use(express2.urlencoded({ extended: false, limit: "50mb" }));
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: false, limit: "50mb" }));
   app.use((req, res, next) => {
     const start = Date.now();
-    const path3 = req.path;
+    const path = req.path;
     let capturedJsonResponse = void 0;
     const originalResJson = res.json;
     res.json = function(bodyJson, ...args) {
@@ -11523,8 +11391,8 @@ async function createApp() {
     };
     res.on("finish", () => {
       const duration = Date.now() - start;
-      if (path3.startsWith("/api")) {
-        let logLine = `${req.method} ${path3} ${res.statusCode} in ${duration}ms`;
+      if (path.startsWith("/api")) {
+        let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
         if (capturedJsonResponse) {
           logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
         }
@@ -11543,57 +11411,7 @@ async function createApp() {
     console.error("Error handler:", err);
     res.status(status).json({ message });
   });
-  const isVercel2 = process.env.VERCEL === "1";
-  if (app.get("env") === "development") {
-    const { setupVite: setupVite2 } = await Promise.resolve().then(() => (init_vite(), vite_exports));
-    await setupVite2(app, server);
-  } else if (!isVercel2) {
-    const { serveStatic: serveStatic2 } = await Promise.resolve().then(() => (init_vite(), vite_exports));
-    serveStatic2(app);
-  }
   return { app, server };
-}
-var isVercel = process.env.VERCEL === "1";
-var isServerless = process.env.AWS_LAMBDA_FUNCTION_NAME || isVercel;
-if (!isServerless) {
-  (async () => {
-    try {
-      console.log("\u{1F680} Starting server...");
-      console.log("\u{1F4CB} Environment check:");
-      console.log(`   NODE_ENV: ${process.env.NODE_ENV}`);
-      console.log(`   PORT: ${process.env.PORT || "3000 (default)"}`);
-      console.log(`   DATABASE_URL: ${process.env.DATABASE_URL ? "\u2705 Set" : "\u274C Not set"}`);
-      console.log("\u{1F527} Creating app...");
-      const { server } = await createApp();
-      console.log("\u2705 App created successfully");
-      const port = Number(process.env.PORT || 3e3);
-      console.log(`\u{1F4E1} Starting server on port ${port}...`);
-      server.listen(port, "0.0.0.0", () => {
-        console.log(`\u2705 Server is running on http://localhost:${port}`);
-        console.log(`serving on port ${port}`);
-      });
-      server.on("error", (err) => {
-        console.error("\u274C Server error:", err);
-        if (err.code === "EADDRINUSE") {
-          console.error(`   Port ${port} is already in use. Try a different port.`);
-        }
-        process.exit(1);
-      });
-      process.on("SIGTERM", () => {
-        console.log("SIGTERM received, shutting down gracefully");
-        server.close(() => {
-          process.exit(0);
-        });
-      });
-    } catch (error) {
-      console.error("\u274C Failed to start server:", error);
-      if (error instanceof Error) {
-        console.error("Error message:", error.message);
-        console.error("Error stack:", error.stack);
-      }
-      process.exit(1);
-    }
-  })();
 }
 export {
   createApp
