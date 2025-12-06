@@ -636,6 +636,8 @@ export default function DayAnalysis() {
     onSuccess: () => {
       // Invalidate multiple related queries to ensure UI updates
       queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-counts'] });
       
       // Get year from date to invalidate year data (for calendar updates)
       const dateYear = date?.substring(0, 4);
@@ -697,6 +699,8 @@ export default function DayAnalysis() {
     onSuccess: () => {
       // Invalidate queries to refresh the UI
       queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-counts'] });
       
       const dateYear = date?.substring(0, 4);
       if (dateYear) {
@@ -751,6 +755,8 @@ export default function DayAnalysis() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-counts'] });
       toast({
         title: "Tag Added",
         description: "New tag has been added.",
