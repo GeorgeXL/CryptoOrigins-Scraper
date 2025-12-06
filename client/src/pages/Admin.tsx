@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import CSVImportDialog from "@/components/CSVImportDialog";
 import { Upload, Loader2, Download, FileText } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
 
 interface Analysis {
   date: string;
@@ -18,18 +19,32 @@ export default function Admin() {
   const [showExportDialog, setShowExportDialog] = useState(false);
 
 
-  // Export Functions
+  // Export Functions - using Supabase directly for reliability
   const exportToCSV = async () => {
     setIsExporting(true);
     try {
-      // Fetch all analyses from 2008 to current date
-      const response = await fetch(`/api/analysis/filter?startDate=2008-01-01&endDate=${new Date().toISOString().split('T')[0]}`);
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch analysis data');
+      if (!supabase) {
+        throw new Error('Supabase client not configured');
       }
       
-      const analyses: Analysis[] = await response.json();
+      // Fetch all analyses from Supabase directly
+      const { data, error } = await supabase
+        .from('historical_news_analyses')
+        .select('date, summary, is_manual_override')
+        .gte('date', '2008-01-01')
+        .lte('date', new Date().toISOString().split('T')[0])
+        .order('date', { ascending: true });
+      
+      if (error) {
+        throw new Error(`Database error: ${error.message}`);
+      }
+      
+      // Map to expected format
+      const analyses: Analysis[] = (data || []).map(row => ({
+        date: row.date,
+        summary: row.summary || '',
+        isManualOverride: row.is_manual_override || false,
+      }));
       
       if (!analyses || analyses.length === 0) {
         toast({
@@ -101,18 +116,32 @@ export default function Admin() {
     }
   }
 
-  // TXT Export Function
+  // TXT Export Function - using Supabase directly for reliability
   const exportToTXT = async () => {
     setIsExporting(true);
     try {
-      // Fetch all analyses from 2008 to current date
-      const response = await fetch(`/api/analysis/filter?startDate=2008-01-01&endDate=${new Date().toISOString().split('T')[0]}`);
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch analysis data');
+      if (!supabase) {
+        throw new Error('Supabase client not configured');
       }
       
-      const analyses: Analysis[] = await response.json();
+      // Fetch all analyses from Supabase directly
+      const { data, error } = await supabase
+        .from('historical_news_analyses')
+        .select('date, summary, is_manual_override')
+        .gte('date', '2008-01-01')
+        .lte('date', new Date().toISOString().split('T')[0])
+        .order('date', { ascending: true });
+      
+      if (error) {
+        throw new Error(`Database error: ${error.message}`);
+      }
+      
+      // Map to expected format
+      const analyses: Analysis[] = (data || []).map(row => ({
+        date: row.date,
+        summary: row.summary || '',
+        isManualOverride: row.is_manual_override || false,
+      }));
       
       if (!analyses || analyses.length === 0) {
         toast({
