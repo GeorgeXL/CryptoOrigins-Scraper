@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton";
 
 export function ApiStatusIndicator() {
-  const { health, isLoading, getStatusDot, getStatusColor, formatStatus } = useApiHealth();
+  const { health, isLoading, error, getStatusDot, getStatusColor, formatStatus } = useApiHealth();
 
   if (isLoading) {
     return <Skeleton className="w-4 h-4 rounded-full" />;
