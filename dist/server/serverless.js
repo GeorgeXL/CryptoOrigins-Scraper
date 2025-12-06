@@ -10870,12 +10870,13 @@ var HealthMonitor = class {
     }
     const apis = [];
     const providers = ["openai", "gemini", "perplexity"];
-    for (const provider of providers) {
-      const result = await this.testAiProvider(provider);
-      apis.push(result);
-    }
-    const exaResult = await this.testExa();
-    apis.push(exaResult);
+    const aiPromises = providers.map((provider) => this.testAiProvider(provider));
+    const exaPromise = this.testExa();
+    const [openaiResult, geminiResult, perplexityResult, exaResult] = await Promise.all([
+      ...aiPromises,
+      exaPromise
+    ]);
+    apis.push(openaiResult, geminiResult, perplexityResult, exaResult);
     const hasOutage = apis.some((api) => api.status === "outage");
     const hasDegraded = apis.some((api) => api.status === "degraded");
     let overall = "operational";
