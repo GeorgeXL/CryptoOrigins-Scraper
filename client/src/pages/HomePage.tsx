@@ -68,7 +68,7 @@ import { supabase } from "@/lib/supabase";
 import { Link } from "wouter";
 import { EditTagDialog } from "@/components/TagsManager/EditTagDialog";
 import { DeleteDialog } from "@/components/TagsManager/DeleteDialog";
-import { getCategoryDisplayMeta, getSubcategoryMeta, type CategoryKey } from "@shared/taxonomy";
+import { getCategoryDisplayMeta } from "@shared/taxonomy";
 import { TagsSidebar } from "@/components/TagsSidebar";
 import {
   SidebarProvider,
@@ -165,143 +165,61 @@ export default function HomePage() {
     untaggedCount: number;
     totalAnalyses: number;
   }>({
-    queryKey: ['supabase-tags-catalog-v2'],
+    queryKey: ['tags-catalog-v2'],
     queryFn: async () => {
-      if (!supabase) throw new Error('Supabase not configured');
-      
-      // Fetch all tags from Supabase
-      const { data: tags, error: tagsError } = await supabase
-        .from('tags')
-        .select('id, name, category, subcategory_path')
-        .order('name');
-      
-      if (tagsError) throw new Error(`Database error: ${tagsError.message}`);
-      
-      // Fetch analyses to count tagged/untagged
-      const { data: analyses, error: analysesError } = await supabase
-        .from('historical_news_analyses')
-        .select('date, tags_version2');
-      
-      if (analysesError) throw new Error(`Database error: ${analysesError.message}`);
-      
-      // Count tagged vs untagged
-      let taggedCount = 0;
-      let untaggedCount = 0;
-      
-      for (const analysis of analyses || []) {
-        const tagsArray = analysis.tags_version2 as string[] | null;
-        if (tagsArray && tagsArray.length > 0) {
-          taggedCount++;
-        } else {
-          untaggedCount++;
-        }
+      const response = await fetch(`/api/tags/catalog-v2`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Catalog v2 API error:', response.status, errorText);
+        throw new Error(`Failed to fetch catalog: ${response.statusText}`);
       }
-      
-      console.log('Catalog v2 data received from Supabase:', {
-        tagCount: tags?.length || 0,
-        taggedCount
+      const data = await response.json();
+      console.log('Catalog v2 data received:', {
+        tagCount: data.tags?.length || 0,
+        taggedCount: data.taggedCount
       });
-      
-      return {
-        tags: tags || [],
-        taggedCount,
-        untaggedCount,
-        totalAnalyses: analyses?.length || 0,
-      };
+      return data;
     },
     retry: 1,
   });
 
-  // Fetch tag filter tree directly from Supabase
+  // Fetch tag filter tree from normalized tags table
   const { data: filterTreeData, refetch: refetchFilterTree } = useQuery<{
     categories: any[];
     totalTags: number;
     builtFrom?: string;
   }>({
-    queryKey: ['supabase-tags-filter-tree'],
+    queryKey: ['tags-filter-tree'],
     queryFn: async () => {
-      if (!supabase) throw new Error('Supabase not configured');
-      
-      // Fetch all tags from Supabase
-      const { data: rawTags, error } = await supabase
-        .from('tags')
-        .select('id, name, category, normalized_name, subcategory_path')
-        .order('category')
-        .order('name');
-      
-      if (error) throw new Error(`Database error: ${error.message}`);
-      if (!rawTags || rawTags.length === 0) {
-        return { categories: [], totalTags: 0, builtFrom: 'supabase-direct' };
+      const response = await fetch('/api/tags/filter-tree');
+      if (!response.ok) {
+        throw new Error('Failed to fetch filter tree');
       }
-      
-      // Build tree structure client-side
-      const categoryMap = new Map<string, any>();
-      
-      for (const tag of rawTags) {
-        const categoryKey = tag.category || 'uncategorized';
-        const categoryMeta = getCategoryDisplayMeta(categoryKey as CategoryKey);
-        
-        if (!categoryMap.has(categoryKey)) {
-          categoryMap.set(categoryKey, {
-            category: categoryKey,
-            name: categoryMeta.name,
-            emoji: categoryMeta.emoji,
-            tags: [],
-            subcategories: [],
-            totalTags: 0,
-          });
-        }
-        
-        const category = categoryMap.get(categoryKey)!;
-        const tagObj = {
-          id: tag.id,
-          name: tag.name,
-          normalizedName: tag.normalized_name || undefined,
-          usageCount: 0,
-        };
-        
-        // Check if tag has a subcategory path
-        const subcategoryPath = tag.subcategory_path as string[] | null;
-        if (subcategoryPath && subcategoryPath.length > 0) {
-          const subcatKey = subcategoryPath[subcategoryPath.length - 1];
-          const subcatMeta = getSubcategoryMeta(categoryKey as CategoryKey, subcatKey);
-          
-          let existingSubcat = category.subcategories.find((s: any) => s.key === subcatKey);
-          if (!existingSubcat) {
-            existingSubcat = {
-              key: subcatKey,
-              name: subcatMeta?.label || subcatKey,
-              tags: [],
-              subcategories: [],
-              totalTags: 0,
-            };
-            category.subcategories.push(existingSubcat);
-          }
-          existingSubcat.tags.push(tagObj);
-          existingSubcat.totalTags++;
-        } else {
-          category.tags.push(tagObj);
-        }
-        
-        category.totalTags++;
-      }
-      
-      const categories = Array.from(categoryMap.values()).sort((a, b) => 
-        a.name.localeCompare(b.name)
-      );
-      
-      return {
-        categories,
-        totalTags: rawTags.length,
-        builtFrom: 'supabase-direct',
-      };
+      return response.json();
     },
-    staleTime: 0,
-    refetchOnMount: true,
+    staleTime: 0, // Always refetch when invalidated (was 1 hour, but need immediate updates after deletes)
+    refetchOnMount: true, // Always refetch when component mounts
   });
 
-  // hierarchyDataToUse now just uses filterTreeData (no fallback needed)
-  const hierarchyDataToUse = filterTreeData;
+  // Fallback to old hierarchy endpoint if filter-tree is not available
+  const { data: hierarchyData } = useQuery<{
+    categories: any[];
+    totalTags: number;
+  }>({
+    queryKey: ['tags-hierarchy'],
+    queryFn: async () => {
+      const response = await fetch('/api/tags/hierarchy');
+      if (!response.ok) {
+        throw new Error('Failed to fetch hierarchy');
+      }
+      return response.json();
+    },
+    staleTime: 1000 * 60 * 60,
+    enabled: !filterTreeData, // Only fetch if filter-tree is not available
+  });
+
+  // Use filter-tree data if available, otherwise fall back to hierarchy
+  const hierarchyDataToUse = filterTreeData || hierarchyData;
 
   // Map main category names to display names (New 14-Category Taxonomy)
   const categoryDisplayNames: Record<MainCategory, string> = {
@@ -821,8 +739,8 @@ export default function HomePage() {
         description: `Tag has been updated in ${data.updated} analyses`,
       });
       await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog-v2'] });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
+      await queryClient.invalidateQueries({ queryKey: ['tags-filter-tree'] });
       await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
       setShowRenameDialog(false);
       setTagToEdit(null);
@@ -867,13 +785,13 @@ export default function HomePage() {
       });
       // Invalidate and refetch to ensure UI updates immediately
       await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog-v2'] });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] }); // Critical: invalidate hierarchy
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-hierarchy'] }); // Fallback hierarchy
+      await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
+      await queryClient.invalidateQueries({ queryKey: ['tags-filter-tree'] }); // Critical: invalidate hierarchy
+      await queryClient.invalidateQueries({ queryKey: ['tags-hierarchy'] }); // Fallback hierarchy
       await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
       
       // Force refetch of filter-tree to bypass staleTime cache
-      await queryClient.refetchQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      await queryClient.refetchQueries({ queryKey: ['tags-filter-tree'] });
       
       setShowDeleteDialog(false);
       setTagToEdit(null);
@@ -906,11 +824,11 @@ export default function HomePage() {
         description: 'Tag cache has been cleared successfully',
       });
       // Invalidate and refetch all tag-related queries
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog-v2'] });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-hierarchy'] });
-      await queryClient.refetchQueries({ queryKey: ['supabase-tags-catalog-v2'] });
-      await queryClient.refetchQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
+      await queryClient.invalidateQueries({ queryKey: ['tags-filter-tree'] });
+      await queryClient.invalidateQueries({ queryKey: ['tags-hierarchy'] });
+      await queryClient.refetchQueries({ queryKey: ['tags-catalog-v2'] });
+      await queryClient.refetchQueries({ queryKey: ['tags-filter-tree'] });
     },
     onError: (error: Error) => {
       toast({
@@ -1700,7 +1618,7 @@ export default function HomePage() {
                         });
                         
                         await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
-                        await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog-v2'] });
+                        await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
                         await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
                         setShowDeleteDialog(false);
                         setTagToEdit(null);

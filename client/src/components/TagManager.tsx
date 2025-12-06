@@ -19,8 +19,6 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/lib/supabase';
-import { TAXONOMY, type CategoryKey, getCategoryDisplayMeta, getSubcategoryMeta, buildFullPath } from '@shared/taxonomy';
 import {
   Collapsible,
   CollapsibleContent,
@@ -561,145 +559,23 @@ export function TagManager() {
   // Quality check state
   const [showQualityCheck, setShowQualityCheck] = useState(false);
 
-  // Fetch tags directly from Supabase and build tree client-side
+  // Fetch filter tree (hierarchical tags)
   const { data: filterTree, isLoading } = useQuery<FilterTreeResponse>({
-    queryKey: ['supabase-tags-filter-tree'],
+    queryKey: ['/api/tags/filter-tree'],
     queryFn: async () => {
-      if (!supabase) throw new Error('Supabase not configured');
-      
-      // Fetch all tags from Supabase
-      const { data: rawTags, error } = await supabase
-        .from('tags')
-        .select('id, name, category, normalized_name, subcategory_path')
-        .order('category')
-        .order('name');
-      
-      if (error) throw new Error(`Database error: ${error.message}`);
-      if (!rawTags || rawTags.length === 0) {
-        return { categories: [], totalTags: 0 };
-      }
-      
-      // Build tree structure client-side
-      const categoryMap = new Map<string, Category>();
-      
-      for (const tag of rawTags) {
-        const categoryKey = (tag.category || 'uncategorized') as CategoryKey;
-        const categoryMeta = getCategoryDisplayMeta(categoryKey);
-        
-        if (!categoryMap.has(categoryKey)) {
-          categoryMap.set(categoryKey, {
-            category: categoryKey,
-            name: categoryMeta.name,
-            emoji: categoryMeta.emoji,
-            tags: [],
-            subcategories: [],
-            totalTags: 0,
-          });
-        }
-        
-        const category = categoryMap.get(categoryKey)!;
-        const tagObj: Tag = {
-          id: tag.id,
-          name: tag.name,
-          normalizedName: tag.normalized_name || undefined,
-          usageCount: 0, // We'll skip usage counts for now to keep it simple
-        };
-        
-        // Check if tag has a subcategory path
-        const subcategoryPath = tag.subcategory_path as string[] | null;
-        if (subcategoryPath && subcategoryPath.length > 0) {
-          // Place in subcategory
-          const subcatKey = subcategoryPath[subcategoryPath.length - 1];
-          const subcatMeta = getSubcategoryMeta(categoryKey, subcatKey);
-          
-          let existingSubcat = category.subcategories.find(s => s.key === subcatKey);
-          if (!existingSubcat) {
-            existingSubcat = {
-              key: subcatKey,
-              name: subcatMeta?.label || subcatKey,
-              tags: [],
-              subcategories: [],
-              totalTags: 0,
-            };
-            category.subcategories.push(existingSubcat);
-          }
-          existingSubcat.tags.push(tagObj);
-          existingSubcat.totalTags++;
-        } else {
-          // Place at category root
-          category.tags.push(tagObj);
-        }
-        
-        category.totalTags++;
-      }
-      
-      // Convert map to array and sort
-      const categories = Array.from(categoryMap.values()).sort((a, b) => 
-        a.name.localeCompare(b.name)
-      );
-      
-      return {
-        categories,
-        totalTags: rawTags.length,
-      };
+      const res = await fetch('/api/tags/filter-tree');
+      if (!res.ok) throw new Error('Failed to fetch tags');
+      return res.json();
     },
   });
 
-  // Fetch quality check data directly from Supabase
+  // Fetch quality check data
   const { data: qualityCheck, isLoading: qualityCheckLoading } = useQuery<QualityCheckResponse>({
-    queryKey: ['supabase-tags-quality-check'],
+    queryKey: ['/api/tags/quality-check'],
     queryFn: async () => {
-      if (!supabase) throw new Error('Supabase not configured');
-      
-      // Fetch all tags
-      const { data: allTags, error: tagsError } = await supabase
-        .from('tags')
-        .select('id, name, category, subcategory_path');
-      
-      if (tagsError) throw new Error(`Database error: ${tagsError.message}`);
-      
-      // Fetch all unique tags used in summaries
-      const { data: analyses, error: analysesError } = await supabase
-        .from('historical_news_analyses')
-        .select('tags_version2');
-      
-      if (analysesError) throw new Error(`Database error: ${analysesError.message}`);
-      
-      // Build set of used tag names
-      const usedTagNames = new Set<string>();
-      for (const analysis of analyses || []) {
-        const tags = analysis.tags_version2 as string[] | null;
-        if (tags) {
-          tags.forEach(t => usedTagNames.add(t));
-        }
-      }
-      
-      // Find tags without subcategory path
-      const tagsWithoutPath: QualityCheckTag[] = (allTags || [])
-        .filter(t => !t.subcategory_path || (t.subcategory_path as string[]).length === 0)
-        .map(t => ({
-          id: t.id,
-          name: t.name,
-          category: t.category || 'uncategorized',
-          usage_count: usedTagNames.has(t.name) ? 1 : 0,
-        }));
-      
-      // Find unused tags
-      const unusedTags: QualityCheckTag[] = (allTags || [])
-        .filter(t => !usedTagNames.has(t.name))
-        .map(t => ({
-          id: t.id,
-          name: t.name,
-          category: t.category || 'uncategorized',
-          usage_count: 0,
-        }));
-      
-      return {
-        tagsWithoutPath,
-        unusedTags,
-        totalTags: allTags?.length || 0,
-        totalUsedInSummaries: usedTagNames.size,
-      };
+      const res = await fetch('/api/tags/quality-check');
+      if (!res.ok) throw new Error('Failed to fetch quality check');
+      return res.json();
     },
     enabled: showQualityCheck,
   });
@@ -773,7 +649,7 @@ export function TagManager() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/tags/filter-tree'] });
       toast({ description: 'Tag moved successfully' });
     },
     onError: (error) => {
@@ -793,7 +669,7 @@ export function TagManager() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/tags/filter-tree'] });
       toast({ description: 'Tag renamed successfully' });
     },
   });
@@ -810,7 +686,7 @@ export function TagManager() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/tags/filter-tree'] });
       toast({ description: 'Tag created successfully' });
     },
   });
@@ -825,7 +701,7 @@ export function TagManager() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/tags/filter-tree'] });
       toast({ description: 'Tag deleted successfully' });
     },
   });
@@ -842,7 +718,7 @@ export function TagManager() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/tags/filter-tree'] });
       toast({ description: 'Subcategory created successfully' });
     },
   });
@@ -859,7 +735,7 @@ export function TagManager() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/tags/filter-tree'] });
       toast({ description: 'Subcategory renamed successfully' });
     },
   });
@@ -876,7 +752,7 @@ export function TagManager() {
       return res.json();
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-filter-tree'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/tags/filter-tree'] });
       toast({ description: variables.action === 'delete' ? 'Subcategory and tags deleted' : 'Tags moved to parent, subcategory removed' });
     },
   });
