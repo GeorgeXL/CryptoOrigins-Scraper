@@ -68,13 +68,18 @@ export async function createApp(): Promise<{ app: Express; server: Server }> {
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
+  const isVercel = process.env.VERCEL === "1";
+  
   if (app.get("env") === "development") {
     const { setupVite } = await import("./vite.js");
     await setupVite(app, server);
-  } else {
+  } else if (!isVercel) {
+    // Only serve static files in non-Vercel production environments
+    // Vercel serves static assets separately via its CDN
     const { serveStatic } = await import("./vite.js");
     serveStatic(app);
   }
+  // In Vercel, static assets are served by Vercel's edge network, not Express
 
   return { app, server };
 }

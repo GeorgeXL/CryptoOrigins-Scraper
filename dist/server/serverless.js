@@ -11543,10 +11543,11 @@ async function createApp() {
     console.error("Error handler:", err);
     res.status(status).json({ message });
   });
+  const isVercel2 = process.env.VERCEL === "1";
   if (app.get("env") === "development") {
     const { setupVite: setupVite2 } = await Promise.resolve().then(() => (init_vite(), vite_exports));
     await setupVite2(app, server);
-  } else {
+  } else if (!isVercel2) {
     const { serveStatic: serveStatic2 } = await Promise.resolve().then(() => (init_vite(), vite_exports));
     serveStatic2(app);
   }
