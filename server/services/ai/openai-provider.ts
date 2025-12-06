@@ -6,7 +6,7 @@ import { apiMonitor } from "../api-monitor";
 
 export class OpenAIProvider implements IAiProvider {
   private client: OpenAI;
-  private defaultModel = "gpt-4o-mini";
+  private defaultModel = "gpt-5-mini";
 
   constructor(apiKey?: string) {
     this.client = new OpenAI({
@@ -16,6 +16,15 @@ export class OpenAIProvider implements IAiProvider {
 
   getName(): string {
     return "openai";
+  }
+
+  async complete(prompt: string, options?: Partial<CompletionOptions>): Promise<string> {
+    const result = await this.generateCompletion({
+      prompt,
+      ...options,
+      model: options?.model || this.defaultModel,
+    });
+    return result.text;
   }
 
   async healthCheck(): Promise<boolean> {
@@ -30,33 +39,55 @@ export class OpenAIProvider implements IAiProvider {
 
   async generateCompletion(options: CompletionOptions): Promise<CompletionResult> {
     const startTime = Date.now();
+    const model = options.model || this.defaultModel;
+    const isGpt5 = model.startsWith('gpt-5');
+    
     const requestId = apiMonitor.logRequest({
       service: 'openai',
       endpoint: '/chat/completions',
       method: 'POST',
       status: 'pending',
-      context: 'completion',
-      requestData: { model: options.model || this.defaultModel }
+      context: options.context || 'completion',
+      purpose: options.purpose,
+      requestData: { model }
     });
 
     try {
-      const response = await this.client.chat.completions.create({
-        model: options.model || this.defaultModel,
+      const requestParams: any = {
+        model,
         messages: [
           ...(options.systemPrompt ? [{ role: "system" as const, content: options.systemPrompt }] : []),
           { role: "user" as const, content: options.prompt },
         ],
-        temperature: options.temperature ?? 0.7,
-        max_tokens: options.maxTokens,
         stop: options.stop,
-      });
+      };
+
+      // GPT-5 models use max_completion_tokens instead of max_tokens
+      // and don't support temperature parameter
+      if (isGpt5) {
+        requestParams.max_completion_tokens = options.maxTokens ? Math.max(options.maxTokens, 1000) : 1000;
+      } else {
+        requestParams.temperature = options.temperature ?? 0.7;
+        requestParams.max_tokens = options.maxTokens;
+      }
+
+      const response = await this.client.chat.completions.create(requestParams);
 
       const text = response.choices[0]?.message?.content || "";
       
       apiMonitor.updateRequest(requestId, {
         status: 'success',
         duration: Date.now() - startTime,
-        responseSize: response.usage?.total_tokens
+        responseSize: response.usage?.total_tokens,
+        responseData: {
+          text: text,
+          model: response.model,
+          tokens: {
+            prompt: response.usage?.prompt_tokens,
+            completion: response.usage?.completion_tokens,
+            total: response.usage?.total_tokens
+          }
+        }
       });
 
       return {
@@ -80,26 +111,40 @@ export class OpenAIProvider implements IAiProvider {
 
   async generateJson<T>(options: JsonCompletionOptions<T>): Promise<T> {
     const startTime = Date.now();
-    const requestId = apiMonitor.logRequest({
+    const model = options.model || this.defaultModel;
+    const isGpt5 = model.startsWith('gpt-5');
+    
+    // Use existing monitorId if provided, otherwise create new request
+    const requestId = options.monitorId || apiMonitor.logRequest({
       service: 'openai',
       endpoint: '/chat/completions',
       method: 'POST',
       status: 'pending',
-      context: 'json-completion',
-      requestData: { model: options.model || this.defaultModel }
+      context: options.context || 'json-completion',
+      purpose: options.purpose,
+      requestData: { model }
     });
 
     try {
-      const response = await this.client.chat.completions.create({
-        model: options.model || this.defaultModel,
+      const requestParams: any = {
+        model,
         messages: [
           ...(options.systemPrompt ? [{ role: "system" as const, content: options.systemPrompt }] : []),
           { role: "user" as const, content: options.prompt },
         ],
         response_format: { type: "json_object" },
-        temperature: options.temperature ?? 0.3,
-        max_tokens: options.maxTokens,
-      });
+      };
+
+      // GPT-5 models use max_completion_tokens instead of max_tokens
+      // and don't support temperature parameter
+      if (isGpt5) {
+        requestParams.max_completion_tokens = options.maxTokens ? Math.max(options.maxTokens, 1000) : 1000;
+      } else {
+        requestParams.temperature = options.temperature ?? 0.3;
+        requestParams.max_tokens = options.maxTokens;
+      }
+
+      const response = await this.client.chat.completions.create(requestParams);
 
       const content = response.choices[0]?.message?.content || "{}";
       
@@ -114,7 +159,16 @@ export class OpenAIProvider implements IAiProvider {
       apiMonitor.updateRequest(requestId, {
         status: 'success',
         duration: Date.now() - startTime,
-        responseSize: response.usage?.total_tokens
+        responseSize: response.usage?.total_tokens,
+        responseData: {
+          content: cleanContent,
+          parsed: result,
+          tokens: {
+            prompt: response.usage?.prompt_tokens,
+            completion: response.usage?.completion_tokens,
+            total: response.usage?.total_tokens
+          }
+        }
       });
 
       return result as T;
@@ -150,7 +204,7 @@ export class OpenAIProvider implements IAiProvider {
     return this.generateJson({
       prompt,
       systemPrompt: "You are a quality control analyst for a historical news timeline.",
-      model: 'gpt-4o-mini',
+      model: 'gpt-5-mini',
       schema: z.object({
         needsEnhancement: z.boolean(),
         reasoning: z.string(),
@@ -176,12 +230,70 @@ export class OpenAIProvider implements IAiProvider {
     return this.generateJson({
       prompt,
       systemPrompt: "You are an expert editor specializing in historical news summaries.",
-      model: 'gpt-4o-mini',
+      model: 'gpt-5-mini',
       schema: z.object({
         summary: z.string(),
         reasoning: z.string(),
       }),
     });
+  }
+
+  async doubleCheckSummary(summary: string): Promise<{ isValid: boolean; issues: string[]; reasoning: string }> {
+    const prompt = `Review this summary for quality:
+
+Summary: "${summary}"
+
+Check the following:
+1. Is it written in active voice? (e.g., "Bitcoin reaches $1000" not "Bitcoin reached $1000")
+2. Is it a complete, clear sentence with proper structure?
+3. Are there any quality issues? (placeholder text, weird formatting, unclear meaning, etc.)
+4. Does it make sense and read well?
+
+Return a JSON object with:
+- "isValid": boolean (true if summary is well-written with no issues, false otherwise)
+- "issues": array of strings (list any issues found, empty array if none)
+- "reasoning": string (brief explanation of your assessment)`;
+
+    return this.generateJson({
+      prompt,
+      systemPrompt: "You are a quality control reviewer for historical news summaries. Be thorough but fair.",
+      model: 'gpt-4o-mini',
+      schema: z.object({
+        isValid: z.boolean(),
+        issues: z.array(z.string()),
+        reasoning: z.string(),
+      }),
+    });
+  }
+
+  /**
+   * Generate embeddings for text(s) using OpenAI's text-embedding-3-small model
+   * @param texts - Single text string or array of text strings
+   * @returns Array of embedding vectors (number[][])
+   */
+  async embed(texts: string | string[]): Promise<number[][]> {
+    const inputTexts = Array.isArray(texts) ? texts : [texts];
+    
+    try {
+      const response = await this.client.embeddings.create({
+        model: "text-embedding-3-small",
+        input: inputTexts,
+      });
+      
+      // Track API usage
+      apiMonitor.logRequest({
+        service: 'openai',
+        endpoint: '/embeddings',
+        method: 'POST',
+        status: 'success',
+        context: `${inputTexts.length} text(s)`,
+      });
+      
+      return response.data.map(item => item.embedding);
+    } catch (error) {
+      console.error('OpenAI embedding error:', error);
+      throw error;
+    }
   }
 }
 

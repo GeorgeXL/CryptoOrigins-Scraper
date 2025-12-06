@@ -1,49 +1,37 @@
 import { aiService } from './ai';
 import { apiMonitor } from './api-monitor';
-import type { EntityTag } from '@shared/schema';
 
 class EntityExtractorService {
   /**
-   * Extract entities from a summary text
+   * Extract tag names from a summary text (simple array of tag names)
    * @param summary The news summary to analyze
-   * @returns Array of extracted entities with name and category
+   * @returns Array of tag names: ["Elon Musk", "Obama", "NFT", "Bitcoin"]
    */
-  async extractEntities(summary: string): Promise<EntityTag[]> {
-    const prompt = `You are an expert at extracting entities and topics from Bitcoin and cryptocurrency news summaries.
-
-Extract ALL relevant entities AND the primary topic from the following news summary:
+  async extractEntities(summary: string): Promise<string[]> {
+    const prompt = `Extract all named entities from this news summary as a JSON array.
 
 Summary: "${summary}"
 
-Extract entities in these categories:
-- country: Countries mentioned (e.g., "United States", "China", "Israel")
-- company: Companies mentioned (e.g., "Tesla", "Microsoft", "Binance", "Coinbase")
-- organization: Organizations (e.g., "SEC", "Federal Reserve", "IMF")
-- crypto: Cryptocurrencies, tokens, NFT projects (e.g., "Bitcoin", "Ethereum", "BTC", "ETH", "Bored Ape", "Uniswap")
-- person: People mentioned (e.g., "Elon Musk", "Satoshi Nakamoto", "Vitalik Buterin")
-- protocol: Protocols or technologies (e.g., "Lightning Network", "Taproot", "Proof of Stake")
-- topic: The PRIMARY theme of the summary (choose ONE):
-  * "Bitcoin Price" - Price movements, trading, market valuation
-  * "Regulation" - Legal, regulatory, policy, government actions
-  * "Adoption" - Companies adopting Bitcoin, institutional investment, mainstream acceptance
-  * "Mining" - Mining difficulty, hashrate, mining companies, energy consumption
-  * "Technology" - Protocol upgrades, technical developments, network improvements
-  * "Macroeconomics" - Economic events, inflation, interest rates, global economy
+Extract ONLY proper names of:
+- Cryptocurrencies/tokens: Bitcoin, Ethereum, Solana, NFT, etc.
+- People: Elon Musk, Vitalik Buterin, Obama, etc.
+- Companies: Tesla, Coinbase, PayPal, Bank of America, etc.
+- Organizations: SEC, IMF, Federal Reserve, G20, etc.
+- Countries/regions: Venezuela, China, EU, UK, etc.
+- Specific laws/protocols: MiCA, Taproot, etc.
 
-Entity Rules:
-1. Extract the EXACT name as it appears (don't convert "BTC" to "Bitcoin")
-2. Only extract entities that are CLEARLY mentioned in the summary
-3. Don't infer or guess entities that aren't explicitly stated
-4. Keep entity names concise (use common names, not full legal names)
-5. Remove duplicates
+Rules:
+1. Extract the exact name as it appears
+2. Extract both full names and acronyms if present
+3. Do NOT extract: generic job titles (lawmakers, ministers), generic departments (Treasury alone), abstract concepts (regulation, compliance), amounts, percentages, version numbers
+4. Return as JSON array: ["Bitcoin", "Venezuela"]
 
-Topic Rules:
-1. Choose the ONE topic that best describes the summary's main theme
-2. Every summary should have exactly ONE topic tag
-3. If multiple themes apply, choose the most dominant one
-
-Return ONLY a JSON array in this format:
-[{"name": "Bitcoin", "category": "crypto"}, {"name": "Tesla", "category": "company"}, {"name": "Bitcoin Price", "category": "topic"}]`;
+Examples:
+"Venezuela approves bitcoin" → ["Venezuela", "Bitcoin"]
+"SEC sues Coinbase" → ["SEC", "Coinbase"]
+"Elon Musk tweets about Dogecoin" → ["Elon Musk", "Dogecoin"]
+"UK lawmakers debate crypto" → ["UK"]
+"Obama cautions about economy" → ["Obama"]`;
 
     let monitorId: string | null = null;
     
@@ -60,63 +48,183 @@ Return ONLY a JSON array in this format:
       const openai = aiService.getProvider('openai');
       const result = await openai.generateCompletion({
         prompt,
-        systemPrompt: 'You are an expert at entity extraction. Always return valid JSON arrays only.',
+        systemPrompt: 'You are an expert at entity extraction. Extract all proper named entities you find - specific people, companies, countries, organizations, cryptocurrencies, etc. Do NOT extract generic terms, job titles, or abstract concepts. Always return valid JSON arrays only.',
         model: 'gpt-4o-mini',
-        temperature: 0.1,
+        temperature: 0.15,
       });
 
       apiMonitor.updateRequest(monitorId, {
         status: 'success'
       });
 
-      let entities: EntityTag[] = [];
+      let tagNames: string[] = [];
       
       try {
-        const parsed = JSON.parse(result.text);
+        // Clean the response text - OpenAI sometimes returns markdown code blocks
+        let cleanedText = result.text.trim();
+        
+        // Remove markdown code blocks (```json ... ``` or ``` ... ```)
+        if (cleanedText.startsWith('```')) {
+          // Find the closing ```
+          const closingIndex = cleanedText.indexOf('```', 3);
+          if (closingIndex > 0) {
+            cleanedText = cleanedText.substring(3, closingIndex).trim();
+            // Remove "json" if it's the first word
+            if (cleanedText.toLowerCase().startsWith('json')) {
+              cleanedText = cleanedText.substring(4).trim();
+            }
+          } else {
+            // No closing ```, try to extract JSON from the content
+            cleanedText = cleanedText.substring(3).trim();
+            if (cleanedText.toLowerCase().startsWith('json')) {
+              cleanedText = cleanedText.substring(4).trim();
+            }
+          }
+        }
+        
+        const parsed = JSON.parse(cleanedText);
         
         // Handle different response formats
         if (Array.isArray(parsed)) {
-          entities = parsed;
+          // Check if it's an array of strings (new format) or objects (old format)
+          if (parsed.length > 0 && typeof parsed[0] === 'string') {
+            tagNames = parsed;
+          } else if (parsed.length > 0 && typeof parsed[0] === 'object') {
+            // Old format with objects - extract names
+            tagNames = parsed
+              .filter((tag: any) => tag && typeof tag === 'object' && typeof tag.name === 'string')
+              .map((tag: any) => tag.name.trim());
+          }
         } else if (parsed.entities && Array.isArray(parsed.entities)) {
-          entities = parsed.entities;
+          if (typeof parsed.entities[0] === 'string') {
+            tagNames = parsed.entities;
+          } else {
+            tagNames = parsed.entities
+              .filter((tag: any) => tag && typeof tag === 'object' && typeof tag.name === 'string')
+              .map((tag: any) => tag.name.trim());
+          }
         } else if (parsed.tags && Array.isArray(parsed.tags)) {
-          entities = parsed.tags;
-        }
-
-        // Validate and clean entities
-        entities = entities
-          .filter((tag: any) => 
-            tag && 
-            typeof tag === 'object' && 
-            typeof tag.name === 'string' && 
-            typeof tag.category === 'string' &&
-            tag.name.trim().length > 0
-          )
-          .map((tag: any) => ({
-            name: tag.name.trim(),
-            category: tag.category.toLowerCase().trim()
-          }));
-
-        // Remove duplicates
-        const uniqueEntities = new Map<string, EntityTag>();
-        for (const entity of entities) {
-          const key = `${entity.name.toLowerCase()}:${entity.category}`;
-          if (!uniqueEntities.has(key)) {
-            uniqueEntities.set(key, entity);
+          if (typeof parsed.tags[0] === 'string') {
+            tagNames = parsed.tags;
+          } else {
+            tagNames = parsed.tags
+              .filter((tag: any) => tag && typeof tag === 'object' && typeof tag.name === 'string')
+              .map((tag: any) => tag.name.trim());
           }
         }
 
-        const finalEntities = Array.from(uniqueEntities.values());
-        
-        // If no entities found, add a special "NO TAG" marker to indicate processing completed
-        if (finalEntities.length === 0) {
-          return [{
-            name: 'NO TAG',
-            category: 'system'
-          }];
-        }
+        // Validate and clean tag names
+        tagNames = tagNames
+          .filter((name: any) => typeof name === 'string' && name.trim().length > 0)
+          .map((name: string) => name.trim());
 
-        return finalEntities;
+        // Filter out garbage tags and irrelevant entities
+        tagNames = tagNames.filter((name: string) => {
+          const nameLower = name.toLowerCase();
+          
+          // Reject pure numbers
+          if (/^\d+$/.test(name)) return false;
+          
+          // Reject prices and dollar amounts (but keep ticker symbols like $ERG)
+          if (/^\$[\d,]+/.test(name)) return false;
+          
+          // Reject currency amounts with words (e.g., "100 million dollars", "100 millions dollars")
+          if (/\d+[,\d]*\s*(million|billion|thousand|trillion)\s*(dollars?|usd|eur|gbp|yen)/i.test(name)) return false;
+          if (/\d+[,\d]*\s*(dollars?|usd|eur|gbp|yen)/i.test(name)) return false;
+          
+          // Reject version numbers (e.g., 0.12.0, 1.2.4)
+          if (/^\d+\.\d+\.?\d*/.test(name)) return false;
+          
+          // Reject block references
+          if (/^block \d/.test(name) || name === 'block size' || name === 'block size limit') return false;
+          
+          // Reject percentages
+          if (/^\d+\.?\d*%$/.test(name)) return false;
+          
+          // Reject bitcoin amounts (e.g., "25,000 BTC", "0.01 BTC")
+          if (/\d+[,\d]*\s*(BTC|Bitcoin|LTC|ETH|mBTC)/i.test(name)) return false;
+          
+          // Reject "X million/billion" patterns (even without currency)
+          if (/^\d+[,\d]*\s*(million|billion|thousand|trillion)/i.test(name)) return false;
+          
+          // Reject generic job titles and roles
+          const genericJobTitles = [
+            'lawmakers', 'lawmaker', 'minister', 'ministers', 'official', 'officials',
+            'pensions minister', 'treasury secretary', 'secretary', 'regulator', 'regulators',
+            'investor', 'investors', 'trader', 'traders', 'analyst', 'analysts',
+            'ceo', 'cto', 'cfo', 'executive', 'executives', 'director', 'directors',
+            'spokesperson', 'spokesman', 'spokeswoman', 'representative', 'representatives'
+          ];
+          if (genericJobTitles.includes(nameLower)) return false;
+          
+          // Reject generic government departments (unless they're specific named entities)
+          const genericDepartments = [
+            'treasury', 'ministry', 'department', 'agency', 'bureau', 'office',
+            'government', 'administration', 'authority', 'commission'
+          ];
+          // Only reject if it's just the generic word without a specific name
+          if (genericDepartments.includes(nameLower) && name.length < 20) {
+            // Allow if it's a specific named entity (e.g., "U.S. Treasury", "HM Treasury")
+            if (!/^(u\.?s\.?|uk|hm|united states|united kingdom)/i.test(name)) {
+              return false;
+            }
+          }
+          
+          // Reject abstract concepts and processes (unless they're named protocols)
+          const abstractConcepts = [
+            'ring-fencing', 'ring fencing', 'regulation', 'regulations', 'adoption',
+            'compliance', 'enforcement', 'oversight', 'supervision', 'governance',
+            'policy', 'policies', 'framework', 'frameworks', 'initiative', 'initiatives',
+            'reform', 'reforms', 'legislation', 'legislative', 'jurisdiction', 'jurisdictions'
+          ];
+          if (abstractConcepts.includes(nameLower)) return false;
+          
+          // Reject too-generic terms
+          const tooGeneric = [
+            'market cap', 'trading engines', 'market', 'markets', 'economy', 'economies',
+            'cryptocurrency', 'cryptocurrencies', 'digital asset', 'digital assets',
+            'blockchain', 'blockchains', 'technology', 'technologies'
+          ];
+          if (tooGeneric.includes(nameLower)) return false;
+          
+          // Reject too-specific malware/CVE identifiers
+          if (/^CVE-\d+/.test(name) || nameLower.includes('infostealer')) return false;
+          
+          // Reject very short names (< 2 chars) unless they're well-known abbreviations
+          const knownShort = ['eu', 'us', 'un', 'cz', 'ai', 'g7', 'g8', 'l2', 'r3', 'uk', 'imf', 'sec', 'fed'];
+          if (name.length < 2 || (name.length === 2 && !knownShort.includes(nameLower))) return false;
+          
+          // Reject if it's just a number with a word (e.g., "100 million", "3 percent")
+          if (/^\d+[,\d]*\s+\w+$/.test(name) && !/^(house bill|senate bill|act \d+|law \d+)/i.test(name)) {
+            return false;
+          }
+          
+          return true;
+        });
+
+        // Remove duplicates (case-insensitive)
+        const uniqueTags = new Set<string>();
+        for (const tag of tagNames) {
+          const lowerTag = tag.toLowerCase();
+          if (!uniqueTags.has(lowerTag)) {
+            uniqueTags.add(lowerTag);
+            // Keep the first occurrence's original casing
+          }
+        }
+        
+        // Convert back to array, preserving original casing
+        const finalTags: string[] = [];
+        const seen = new Set<string>();
+        for (const tag of tagNames) {
+          const lowerTag = tag.toLowerCase();
+          if (!seen.has(lowerTag)) {
+            seen.add(lowerTag);
+            finalTags.push(tag);
+          }
+        }
+        
+        // If no tags found, return empty array (no special marker needed)
+        return finalTags;
       } catch (parseError) {
         console.error('[EntityExtractor] Failed to parse OpenAI response:', result);
         apiMonitor.updateRequest(monitorId, {
@@ -143,16 +251,16 @@ Return ONLY a JSON array in this format:
   }
 
   /**
-   * Extract entities from multiple summaries in batch
+   * Extract tag names from multiple summaries in batch
    * @param summaries Array of summaries to process
    * @param onProgress Optional progress callback (current, total)
-   * @returns Array of tag arrays (one per summary)
+   * @returns Array of tag name arrays (one per summary)
    */
   async extractEntitiesBatch(
     summaries: string[],
     onProgress?: (current: number, total: number) => void
-  ): Promise<EntityTag[][]> {
-    const results: EntityTag[][] = [];
+  ): Promise<string[][]> {
+    const results: string[][] = [];
 
     for (let i = 0; i < summaries.length; i++) {
       const tags = await this.extractEntities(summaries[i]);

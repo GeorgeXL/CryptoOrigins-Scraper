@@ -423,8 +423,8 @@ Return a comprehensive analysis with:
         { role: 'system', content: 'You are a Bitcoin news analyst performing strategic cluster analysis. Provide holistic recommendations.' },
         { role: 'user', content: prompt }
       ],
-      model: 'gpt-4o-mini',
-      temperature: 0.3,
+      model: 'gpt-5-mini',
+      max_completion_tokens: 2000,
       response_format: {
         type: 'json_schema',
         json_schema: {
@@ -533,8 +533,8 @@ Return groups of dates that overlap. Keep the first date in each group, mark oth
         { role: 'system', content: 'You are a Bitcoin news analyst detecting duplicate coverage.' },
         { role: 'user', content: overlapPrompt }
       ],
-      model: 'gpt-4o-mini',
-      temperature: 0.2,
+      model: 'gpt-5-mini',
+      max_completion_tokens: 2000,
       response_format: {
         type: 'json_schema',
         json_schema: {
@@ -681,8 +681,8 @@ Return the article ID and explain why it doesn't overlap.`;
               { role: 'system', content: 'You are a Bitcoin news analyst selecting non-overlapping coverage.' },
               { role: 'user', content: suggestionPrompt }
             ],
-            model: 'gpt-4o-mini',
-            temperature: 0.3,
+            model: 'gpt-5-mini',
+            max_completion_tokens: 2000,
             response_format: {
               type: 'json_schema',
               json_schema: {

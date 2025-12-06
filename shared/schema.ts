@@ -55,11 +55,7 @@ export const historicalNewsAnalyses = pgTable("historical_news_analyses", {
   reVerificationStatus: text("re_verification_status"), // 'success', 'problem' - tracks if re-verification found good coverage
   reVerificationWinner: text("re_verification_winner"), // 'original', 'corrected' - which date had better coverage
   tags: jsonb("tags"), // Array of extracted entities: [{name: "Bitcoin", category: "crypto"}, {name: "Tesla", category: "company"}]
-  tagNames: text("tag_names").array(), // Array of tag names without categories: ["Bitcoin", "Ethereum", "Tesla"] - used for frontend-only grouping
-  // Final Analysis verification fields
-  geminiApproved: boolean("gemini_approved"), // Gemini verification result (true = approved, false = rejected)
-  perplexityApproved: boolean("perplexity_approved"), // Perplexity verification result (true = approved, false = rejected)
-  finalAnalysisCheckedAt: timestamp("final_analysis_checked_at"), // When final analysis verification was performed
+  tagsVersion2: text("tags_version2").array(), // Simple array of tag names: ["Elon Musk", "Obama", "NFT", "Bitcoin"]
 }, (table) => ({
   // Critical indexes for performance
   dateIdx: index("idx_historical_news_date").on(table.date),
@@ -180,6 +176,112 @@ export const tagMetadata: any = pgTable("tag_metadata", {
   normalizedNameIdx: index("idx_tag_metadata_normalized_name").on(table.normalizedName),
 }));
 
+// New normalized tags table - single source of truth for all tags
+export const tags = pgTable("tags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  normalizedName: text("normalized_name"), // For similarity matching (lowercase, normalized)
+  parentTagId: uuid("parent_tag_id").references((): any => tags.id, { onDelete: "set null" }), // Self-referencing for hierarchy
+  subcategoryPath: text("subcategory_path").array(), // e.g., ["8.1", "8.1.2"] - full hierarchy path
+  usageCount: integer("usage_count").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  nameCategoryIdx: uniqueIndex("idx_tags_name_category").on(table.name, table.category),
+  categoryIdx: index("idx_tags_category").on(table.category),
+  parentTagIdx: index("idx_tags_parent_tag").on(table.parentTagId),
+  normalizedNameIdx: index("idx_tags_normalized_name").on(table.normalizedName),
+}));
+
+// Join table linking analyses (pages) to tags - many-to-many relationship
+export const pagesAndTags = pgTable("pages_and_tags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  analysisId: uuid("analysis_id").notNull().references(() => historicalNewsAnalyses.id, { onDelete: "cascade" }),
+  tagId: uuid("tag_id").notNull().references(() => tags.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  pagesTagsIdx: uniqueIndex("idx_pages_and_tags_unique").on(table.analysisId, table.tagId),
+  analysisIdx: index("idx_pages_and_tags_analysis").on(table.analysisId),
+  tagIdx: index("idx_pages_and_tags_tag").on(table.tagId),
+}));
+
+// Custom labels for subcategories (overrides taxonomy.ts defaults)
+export const subcategoryLabels = pgTable("subcategory_labels", {
+  path: text("path").primaryKey(), // e.g., "1.2" or "4.1.2"
+  label: text("label").notNull(),  // Custom display name
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Agent sessions table - tracks each agent run
+export const agentSessions = pgTable("agent_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: text("status").notNull().default("running"), // 'running', 'paused', 'completed', 'stopped', 'error'
+  currentPass: integer("current_pass").notNull().default(1),
+  maxPasses: integer("max_passes").notNull().default(10),
+  issuesFixed: integer("issues_fixed").notNull().default(0),
+  issuesFlagged: integer("issues_flagged").notNull().default(0),
+  totalCost: numeric("total_cost", { precision: 10, scale: 4 }).default("0"),
+  qualityScore: numeric("quality_score", { precision: 5, scale: 2 }),
+  startedAt: timestamp("started_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
+  config: jsonb("config"), // Session configuration
+  stats: jsonb("stats"), // Detailed statistics per module
+}, (table) => ({
+  statusIdx: index("idx_agent_sessions_status").on(table.status),
+  startedAtIdx: index("idx_agent_sessions_started_at").on(table.startedAt),
+}));
+
+// Agent decisions table - tracks all decisions made by the agent
+export const agentDecisions = pgTable("agent_decisions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => agentSessions.id, { onDelete: "cascade" }),
+  passNumber: integer("pass_number").notNull(),
+  module: text("module").notNull(), // 'validator', 'deduper', 'gap-filler', etc.
+  type: text("type").notNull(), // 'remove_tag', 'merge_news', 'fill_gap', 'recategorize', etc.
+  targetType: text("target_type").notNull(), // 'tag', 'news', 'both'
+  targetId: text("target_id"), // ID of affected record
+  confidence: numeric("confidence", { precision: 5, scale: 2 }).notNull(),
+  status: text("status").notNull().default("pending"), // 'pending', 'approved', 'rejected', 'auto-approved'
+  beforeState: jsonb("before_state"), // State before change
+  afterState: jsonb("after_state"), // State after change
+  reasoning: text("reasoning"), // AI reasoning for the decision
+  sources: jsonb("sources"), // Source citations
+  cost: numeric("cost", { precision: 10, scale: 4 }),
+  approvedBy: text("approved_by"), // 'auto', 'user', or user_id
+  approvedAt: timestamp("approved_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  sessionIdx: index("idx_agent_decisions_session").on(table.sessionId),
+  moduleIdx: index("idx_agent_decisions_module").on(table.module),
+  statusIdx: index("idx_agent_decisions_status").on(table.status),
+  confidenceIdx: index("idx_agent_decisions_confidence").on(table.confidence),
+}));
+
+// Agent audit log - comprehensive log of ALL agent actions
+export const agentAuditLog = pgTable("agent_audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => agentSessions.id, { onDelete: "cascade" }),
+  passNumber: integer("pass_number").notNull(),
+  module: text("module").notNull(),
+  action: text("action").notNull(), // 'update', 'insert', 'delete', 'merge'
+  targetType: text("target_type").notNull(),
+  targetId: text("target_id"),
+  beforeValue: jsonb("before_value"),
+  afterValue: jsonb("after_value"),
+  reasoning: text("reasoning"),
+  confidence: numeric("confidence", { precision: 5, scale: 2 }),
+  cost: numeric("cost", { precision: 10, scale: 4 }),
+  durationMs: integer("duration_ms"),
+  approvedBy: text("approved_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  sessionIdx: index("idx_agent_audit_session").on(table.sessionId),
+  moduleIdx: index("idx_agent_audit_module").on(table.module),
+  actionIdx: index("idx_agent_audit_action").on(table.action),
+  createdAtIdx: index("idx_agent_audit_created_at").on(table.createdAt),
+}));
+
 // Relations
 export const historicalNewsAnalysesRelations = relations(historicalNewsAnalyses, ({ many }) => ({
   manualEntries: many(manualNewsEntries),
@@ -225,6 +327,8 @@ export interface ArticleData {
 export interface EntityTag {
   name: string;
   category: string;
+  subcategoryPath?: string[];
+  confidence?: number;
 }
 
 export const insertManualNewsEntrySchema = createInsertSchema(manualNewsEntries).omit({
@@ -308,3 +412,47 @@ export const insertTagMetadataSchema = createInsertSchema(tagMetadata).omit({
 
 export type InsertTagMetadata = z.infer<typeof insertTagMetadataSchema>;
 export type TagMetadata = typeof tagMetadata.$inferSelect;
+
+export const insertTagSchema = createInsertSchema(tags).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertTag = z.infer<typeof insertTagSchema>;
+export type Tag = typeof tags.$inferSelect;
+
+export const insertPagesAndTagsSchema = createInsertSchema(pagesAndTags).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPagesAndTags = z.infer<typeof insertPagesAndTagsSchema>;
+export type PagesAndTags = typeof pagesAndTags.$inferSelect;
+
+// Agent types
+export const insertAgentSessionSchema = createInsertSchema(agentSessions).omit({
+  id: true,
+  startedAt: true,
+  completedAt: true,
+});
+
+export type InsertAgentSession = z.infer<typeof insertAgentSessionSchema>;
+export type AgentSession = typeof agentSessions.$inferSelect;
+
+export const insertAgentDecisionSchema = createInsertSchema(agentDecisions).omit({
+  id: true,
+  createdAt: true,
+  approvedAt: true,
+});
+
+export type InsertAgentDecision = z.infer<typeof insertAgentDecisionSchema>;
+export type AgentDecision = typeof agentDecisions.$inferSelect;
+
+export const insertAgentAuditLogSchema = createInsertSchema(agentAuditLog).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertAgentAuditLog = z.infer<typeof insertAgentAuditLogSchema>;
+export type AgentAuditLog = typeof agentAuditLog.$inferSelect;

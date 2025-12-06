@@ -79,9 +79,28 @@ router.get('/api/event-cockpit/:batchId', async (req, res) => {
     const totalPages = Math.ceil(totalEvents / limit);
     const events = allEvents.slice(offset, offset + limit);
 
+    // Fetch summaries from historical_news_analyses for each event date
+    const eventsWithDatabaseSummaries = await Promise.all(
+      events.map(async (event) => {
+        try {
+          const analysis = await storage.getAnalysisByDate(event.originalDate);
+          return {
+            ...event,
+            databaseSummary: analysis?.summary || null
+          };
+        } catch (error) {
+          console.error(`Error fetching analysis for ${event.originalDate}:`, error);
+          return {
+            ...event,
+            databaseSummary: null
+          };
+        }
+      })
+    );
+
     res.json({
       batch,
-      events,
+      events: eventsWithDatabaseSummaries,
       pagination: {
         currentPage: page,
         totalPages,
@@ -239,6 +258,73 @@ router.post('/api/event-cockpit/approve', async (req, res) => {
   } catch (error) {
     console.error('Approve events error:', error);
     res.status(500).json({ error: 'Failed to approve events' });
+  }
+});
+
+router.post('/api/event-cockpit/replace-real-summaries', async (req, res) => {
+  try {
+    const { eventIds } = req.body;
+    
+    if (!Array.isArray(eventIds) || eventIds.length === 0) {
+      return res.status(400).json({ error: 'Event IDs required' });
+    }
+
+    console.log(`🔄 Replacing real summaries for ${eventIds.length} events...`);
+    
+    let updated = 0;
+    const skipped: string[] = [];
+    const errors: string[] = [];
+
+    for (const eventId of eventIds) {
+      try {
+        // Get the event from batch_events
+        const event = await storage.getBatchEvent(eventId);
+        if (!event) {
+          console.warn(`⚠️ Event ${eventId} not found, skipping`);
+          skipped.push(eventId);
+          continue;
+        }
+
+        // Check if event has enhancedSummary
+        if (!event.enhancedSummary) {
+          console.warn(`⚠️ Event ${eventId} (${event.originalDate}) has no enhancedSummary, skipping`);
+          skipped.push(eventId);
+          continue;
+        }
+
+        // Check if analysis exists for this date
+        const analysis = await storage.getAnalysisByDate(event.originalDate);
+        if (!analysis) {
+          console.warn(`⚠️ No analysis found for date ${event.originalDate}, skipping`);
+          skipped.push(eventId);
+          continue;
+        }
+
+        // Update the real summary in historical_news_analyses
+        await storage.updateAnalysis(event.originalDate, {
+          summary: event.enhancedSummary
+        });
+
+        console.log(`✅ Replaced real summary for ${event.originalDate} (${event.enhancedSummary.length} chars)`);
+        updated++;
+      } catch (error) {
+        console.error(`❌ Error replacing summary for event ${eventId}:`, error);
+        errors.push(eventId);
+      }
+    }
+
+    console.log(`✅ Replace real summaries completed: ${updated} updated, ${skipped.length} skipped, ${errors.length} errors`);
+
+    res.json({
+      success: true,
+      updated,
+      skipped: skipped.length,
+      errors: errors.length > 0 ? errors : undefined,
+      total: eventIds.length
+    });
+  } catch (error) {
+    console.error('Replace real summaries error:', error);
+    res.status(500).json({ error: 'Failed to replace real summaries' });
   }
 });
 

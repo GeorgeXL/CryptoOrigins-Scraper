@@ -1,0 +1,39 @@
+{
+  "sessionId": "7c217d7e-8a33-49e3-8e2a-1274c098486e",
+  "state": {
+    "sessionId": "7c217d7e-8a33-49e3-8e2a-1274c098486e",
+    "status": "running",
+    "currentPass": 1,
+    "issuesFound": 0,
+    "issuesFixed": 0,
+    "issuesFlagged": 0,
+    "totalCost": 0,
+    "qualityScore": 0,
+    "startTime": "2025-11-30T11:23:26.720Z",
+    "lastUpdateTime": "2025-11-30T11:23:26.720Z"
+  },
+  "config": {
+    "maxPasses": 2,
+    "maxRuntimeHours": 4,
+    "maxBudget": 35,
+    "targetQuality": 95,
+    "convergenceThreshold": 0.5,
+    "convergencePasses": 3,
+    "autoApproveThreshold": 90,
+    "flagThreshold": 70,
+    "rejectThreshold": 50,
+    "batchSize": 100,
+    "parallelWorkers": 5,
+    "enableValidator": true,
+    "enableDeduper": true,
+    "enableGapFiller": true,
+    "enableCategoryFixer": true,
+    "enableQualityImprover": true,
+    "humanCheckpointEveryNPasses": 3,
+    "humanCheckpointTimeout": 60,
+    "testMode": true,
+    "testLimit": 5
+  },
+  "timestamp": "2025-11-30T11:25:26.825Z",
+  "moduleProgress": {}
+}

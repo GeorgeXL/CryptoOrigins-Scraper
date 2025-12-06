@@ -1,5 +1,5 @@
 export interface QualityIssue {
-  type: 'TOO_SHORT' | 'TOO_LONG' | 'EXCESSIVE_DOTS' | 'GENERIC_FALLBACK' | 'REPEATED_WORDS' | 'PLACEHOLDER_TEXT' | 'DUPLICATE_SUMMARY' | 'SIMILAR_SUMMARY' | 'INVALID_LINKS';
+  type: 'TOO_SHORT' | 'TOO_LONG' | 'EXCESSIVE_DOTS' | 'GENERIC_FALLBACK' | 'REPEATED_WORDS' | 'PLACEHOLDER_TEXT' | 'DUPLICATE_SUMMARY' | 'SIMILAR_SUMMARY' | 'INVALID_LINKS' | 'UNUSUAL_SYMBOLS';
   message: string;
   severity: 'low' | 'medium' | 'high';
   details?: any; // For storing additional data like invalid URLs
@@ -44,7 +44,8 @@ export class QualityCheckerService {
     const issues: QualityIssue[] = [];
 
     // Length validation
-    if (summary.length <= QualityCheckerService.MIN_LENGTH) {
+    // Accept 100-110 characters (inclusive), so exactly 100 or 110 should pass
+    if (summary.length < QualityCheckerService.MIN_LENGTH) {
       issues.push({
         type: 'TOO_SHORT',
         message: `Summary too short (${summary.length} chars, minimum ${QualityCheckerService.MIN_LENGTH})`,
@@ -111,6 +112,23 @@ export class QualityCheckerService {
         });
         break;
       }
+    }
+
+    // Check for unusual symbols (semicolon, colon, hyphen, question mark)
+    // These are typically not used in well-formatted summaries
+    const unusualSymbols = /[;:?]| - /;
+    if (unusualSymbols.test(summary)) {
+      const foundSymbols: string[] = [];
+      if (summary.includes(';')) foundSymbols.push('semicolon');
+      if (summary.includes(':')) foundSymbols.push('colon');
+      if (summary.includes('?')) foundSymbols.push('question mark');
+      if (/ - /.test(summary)) foundSymbols.push('space-hyphen');
+      
+      issues.push({
+        type: 'UNUSUAL_SYMBOLS',
+        message: `Summary contains unusual symbols: ${foundSymbols.join(', ')}`,
+        severity: 'medium'
+      });
     }
 
     return issues;

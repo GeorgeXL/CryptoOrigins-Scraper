@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import "./index.css";
+import "./styles/admin-theme.css";
 
 // Global error handlers for better debugging
 if (typeof window !== 'undefined') {

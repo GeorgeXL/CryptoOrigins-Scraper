@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Breadcrumb, generateSettingsBreadcrumbs } from "@/components/Breadcrumb";
+import { Breadcrumb } from "@/components/Breadcrumb";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -173,7 +173,7 @@ export default function Settings() {
     <div className="container mx-auto py-6 space-y-6">
       {/* Breadcrumb Navigation */}
       <Breadcrumb 
-        items={generateSettingsBreadcrumbs()} 
+        items={[{ label: "Settings", href: "/admin" }]} 
         className="text-sm"
       />
 

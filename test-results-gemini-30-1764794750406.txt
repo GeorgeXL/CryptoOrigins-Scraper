@@ -1,0 +1,598 @@
+🧪 Testing tag categorization on 30 tags using GEMINI
+
+================================================================================
+📊 Found 30 tags to test:
+
+   1. .crypto
+   2. #BitcoinBowl
+   3. ¥12.58 billion
+   4. 100x Group
+   5. 1kx
+   6. 1MDB
+   7. 21 Inc.
+   8. 21Shares
+   9. 37coins
+   10. 3Commas
+   11. a16z
+   12. Aave
+   13. AAVE
+   14. AAX
+   15. AB-129
+   16. ABACUS
+   17. ABC
+   18. Abra
+   19. Abraham Lincoln
+   20. Abu Dhabi
+   21. ACINQ
+   22. ActiveMining
+   23. ACX
+   24. ADA
+   25. Adam Back
+   26. Adapt3r
+   27. ADCCA
+   28. Addax Petroleum
+   29. AdMob
+   30. Africa
+
+
+[1/30] Testing ".crypto"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Opera announces partnership with Unstoppable Domains to access Web3 and browse .crypto websites easi..."
+   🤖 Categorizing...
+   ✅ Category: technology
+   ✅ Subcategory Path: [3.2]
+   ✅ Full Path: ⚡ Technology Concepts → DeFi & Web3 Concepts
+   ✅ Confidence: 90.0%
+   💭 Reasoning: .crypto domains are related to Web3 concepts, specifically decentralized domain names.
+
+[2/30] Testing "#BitcoinBowl"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "The first Bitcoin Bowl concludes with major excitement promoting Bitcoin and trending hashtag #Bitco..."
+   🤖 Categorizing...
+   ✅ Category: topics
+   ✅ Subcategory Path: [10.3, 10.3.2]
+   ✅ Full Path: 🏷️ Topics & Themes → Adoption & Integration → Retail Adoption
+   ✅ Confidence: 90.0%
+   💭 Reasoning: #BitcoinBowl is a promotional event, indicating adoption and integration of Bitcoin, specifically retail adoption.
+
+[3/30] Testing "¥12.58 billion"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Kraken reports progress in MtGox claims, approving 7,952 claims worth ¥12.58 billion for creditors t..."
+   🤖 Categorizing...
+   ✅ Category: money-economics
+   ✅ Subcategory Path: [2.8]
+   ✅ Full Path: 💰 Money & Economics → Prices & Values
+   ✅ Confidence: 95.0%
+   💭 Reasoning: The tag "¥12.58 billion" represents a currency value, which falls under the category of Prices & Values within Money & Economics.
+
+[4/30] Testing "100x Group"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "100x Group grants $40,000 to Bitcoin developer Calvin Kim to enhance scalability and security with U..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.9, 4.9]
+   ✅ Full Path: 🏢 Organizations & Companies → Development & Research → 4.9 (not found)
+   ✅ Confidence: 90.0%
+   💭 Reasoning: 100x Group is providing a grant to a Bitcoin developer, suggesting it is involved in development and research within the cryptocurrency space.
+
+[5/30] Testing "1kx"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Snapshot Labs secures $4 million in seed funding led by 1kx to enhance its DAO governance toolkit pl..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.9, 4.9]
+   ✅ Full Path: 🏢 Organizations & Companies → Development & Research → 4.9 (not found)
+   ✅ Confidence: 90.0%
+   💭 Reasoning: 1kx is a venture capital firm that invests in crypto and blockchain startups, which falls under the category of Development & Research organizations.
+
+[6/30] Testing "1MDB"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Clare Rewcastle-Brown returns to Malaysia after the government lifts her arrest warrant for 1MDB rep..."
+   🤖 Categorizing...
+   ✅ Category: crime-security
+   ✅ Subcategory Path: [9.2, 9.2.3]
+   ✅ Full Path: 🔒 Crime & Security → Major Crimes & Scams → Fraud Cases
+   ✅ Confidence: 95.0%
+   💭 Reasoning: 1MDB refers to a major fraud case, which falls under the 'Crime & Security' category, specifically 'Major Crimes & Scams' and 'Fraud Cases'.
+
+[7/30] Testing "21 Inc."
+--------------------------------------------------------------------------------
+   📝 Found 2 sample summaries for context
+   Preview: "21 Inc. integrates ASIC chips in IoT, Nasdaq tracks securities on blockchain, and itBit is now regul..."
+   🤖 Categorizing...
+   ✅ Category: bitcoin
+   ✅ Subcategory Path: [1.4]
+   ✅ Full Path: 🪙 Bitcoin → Bitcoin Companies & Services
+   ✅ Confidence: 95.0%
+   💭 Reasoning: 21 Inc. was a Bitcoin company that focused on integrating ASIC chips into IoT devices for Bitcoin mining. Therefore, it falls under Bitcoin Companies & Services.
+
+[8/30] Testing "21Shares"
+--------------------------------------------------------------------------------
+   📝 Found 2 sample summaries for context
+   Preview: "SEC delays decision on Ark 21Shares Bitcoin ETF application extending review process by several week..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.2, 4.2.3]
+   ✅ Full Path: 🏢 Organizations & Companies → Financial Institutions → Asset Managers
+   ✅ Confidence: 95.0%
+   💭 Reasoning: 21Shares is an asset manager that offers crypto ETFs. The SEC filings in the summaries confirm this.
+
+[9/30] Testing "37coins"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Bitcoin remittance startup 37coins announces its closure and users must withdraw their funds by Dece..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.4, 4.4.1]
+   ✅ Full Path: 🏢 Organizations & Companies → Payment & Infrastructure → Payment Processors
+   ✅ Confidence: 95.0%
+   💭 Reasoning: 37coins was a Bitcoin remittance startup, which fits under Payment & Infrastructure, specifically Payment Processors.
+
+[10/30] Testing "3Commas"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "3Commas confirms API key hack costing traders $22 million while Celsius seeks more time for investor..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.7, 4.7.3]
+   ✅ Full Path: 🏢 Organizations & Companies → Technology Companies → Fintech & Payments
+   ✅ Confidence: 90.0%
+   💭 Reasoning: 3Commas is a fintech company that provides trading automation tools, which aligns with the 'Fintech & Payments' subcategory within 'Technology Companies'.
+
+[11/30] Testing "a16z"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Venture capital firm a16z invests $15 million in MakerDAO, acquiring approximately 6 percent of MKR ..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.2, 4.2.1]
+   ✅ Full Path: 🏢 Organizations & Companies → Financial Institutions → Investment Banks
+   ✅ Confidence: 95.0%
+   💭 Reasoning: a16z is a venture capital firm, which falls under Financial Institutions, specifically Investment Banks.
+
+[12/30] Testing "Aave"
+--------------------------------------------------------------------------------
+   📝 Found 3 sample summaries for context
+   Preview: "Aave is exploring expansion to Bitcoin's Spiderchain, seeking community input to boost DeFi on Bitco..."
+   🤖 Categorizing...
+   ✅ Category: money-economics
+   ✅ Subcategory Path: [2.3]
+   ✅ Full Path: 💰 Money & Economics → DeFi Tokens
+   ✅ Confidence: 95.0%
+   💭 Reasoning: Aave is a DeFi token and platform, which falls under the 'DeFi Tokens' subcategory.
+
+[13/30] Testing "AAVE"
+--------------------------------------------------------------------------------
+   📝 Found 2 sample summaries for context
+   Preview: "Bitcoin trades near $30,700 as investors await inflation data, with altcoins like AAVE also gaining ..."
+   🤖 Categorizing...
+   ✅ Category: money-economics
+   ✅ Subcategory Path: [2.3]
+   ✅ Full Path: 💰 Money & Economics → DeFi Tokens
+   ✅ Confidence: 95.0%
+   💭 Reasoning: AAVE is a DeFi token, as indicated by its governance control and mention alongside other cryptocurrencies.
+
+[14/30] Testing "AAX"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Bitcoin Latinum expands with a ninth listing on AAX, enhancing transaction speed and targeting key i..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.1, 4.1.1]
+   ✅ Full Path: 🏢 Organizations & Companies → Exchanges → Major Centralized Exchanges
+   ✅ Confidence: 95.0%
+   💭 Reasoning: AAX is a cryptocurrency exchange, which falls under the 'Exchanges' subcategory within 'Organizations'. Given that it is a centralized exchange, it is categorized under 'Major Centralized Exchanges'.
+
+[15/30] Testing "AB-129"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "California Senate committee passes AB-129 bill moving closer to legalize Bitcoin and remove dollar t..."
+   🤖 Categorizing...
+   ✅ Category: regulation-law
+   ✅ Subcategory Path: [6.2]
+   ✅ Full Path: ⚖️ Regulation & Government → Laws & Frameworks
+   ✅ Confidence: 95.0%
+   💭 Reasoning: AB-129 is a bill in the California Senate related to legalizing Bitcoin, which falls under Laws & Frameworks within the Regulation & Government category.
+
+[16/30] Testing "ABACUS"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "SEC proposes a rule to prevent underwriters from profiting at investors' expense after Goldman's ABA..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.2, 4.2.1]
+   ✅ Full Path: 🏢 Organizations & Companies → Financial Institutions → Investment Banks
+   ✅ Confidence: 90.0%
+   💭 Reasoning: ABACUS was a deal by Goldman Sachs, which is an investment bank. Therefore, it falls under the category of Organizations > Financial Institutions > Investment Banks.
+
+[17/30] Testing "ABC"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "BCHN gains recognition as the main Bitcoin Cash chain while ABC operates independently after the har..."
+   🤖 Categorizing...
+   ✅ Category: bitcoin
+   ✅ Subcategory Path: [1.3]
+   ✅ Full Path: 🪙 Bitcoin → Bitcoin Forks
+   ✅ Confidence: 95.0%
+   💭 Reasoning: ABC (Bitcoin ABC) is a Bitcoin Cash fork. The summary explicitly mentions ABC operating independently after a hard fork, indicating it's a fork of Bitcoin Cash.
+
+[18/30] Testing "Abra"
+--------------------------------------------------------------------------------
+   📝 Found 2 sample summaries for context
+   Preview: "Ethereum's Merge to proof-of-stake reduces energy consumption by 99%, as Abra launches a digital ass..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.4, 4.4.2]
+   ✅ Full Path: 🏢 Organizations & Companies → Payment & Infrastructure → Custody & Wallets
+   ✅ Confidence: 95.0%
+   💭 Reasoning: Abra is described as launching a digital asset bank and American Express is investing in them, suggesting they are a financial institution providing custody and wallet services.
+
+[19/30] Testing "Abraham Lincoln"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Stephen L. Carter reflects on Abraham Lincoln's complexities and significance in ending slavery and ..."
+   🤖 Categorizing...
+   ✅ Category: people
+   ✅ Subcategory Path: [5.4]
+   ✅ Full Path: 👥 People → Controversial & Famous Figures
+   ✅ Confidence: 95.0%
+   💭 Reasoning: Abraham Lincoln is a famous historical figure, making 'Controversial & Famous Figures' the most appropriate subcategory.
+
+[20/30] Testing "Abu Dhabi"
+--------------------------------------------------------------------------------
+   📝 Found 3 sample summaries for context
+   Preview: "QCP Capital receives in-principle approval from Abu Dhabi's FSRA, expanding in the Middle East crypt..."
+   🤖 Categorizing...
+   ✅ Category: geography-markets
+   ✅ Subcategory Path: [7.1]
+   ✅ Full Path: geography-markets (not found)
+   ✅ Confidence: 95.0%
+   💭 Reasoning: Abu Dhabi is a city and an emirate, making it a geographical location. The summaries discuss crypto-related activities within Abu Dhabi, indicating its relevance as a market.
+
+[21/30] Testing "ACINQ"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "ACINQ releases Eclair 0.2-alpha1 marking the first compliant Lightning Network implementation for de..."
+   🤖 Categorizing...
+   ✅ Category: bitcoin
+   ✅ Subcategory Path: [1.2.5]
+   ✅ Full Path: 🪙 Bitcoin → 1.2.5 (not found)
+   ✅ Confidence: 95.0%
+   💭 Reasoning: ACINQ develops Eclair, a Lightning Network implementation. Lightning Network is a Layer 2 scaling solution for Bitcoin.
+
+[22/30] Testing "ActiveMining"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "eASIC and ActiveMining announce a new 24 TH/s ASIC Bitcoin miner generating excitement in mining com..."
+   🤖 Categorizing...
+   ✅ Category: bitcoin
+   ✅ Subcategory Path: [1.2, 1.2.6]
+   ✅ Full Path: 🪙 Bitcoin → Bitcoin Technology → Mining & Consensus
+   ✅ Confidence: 95.0%
+   💭 Reasoning: "ActiveMining" relates to Bitcoin mining operations, which falls under the 'Mining & Consensus' subcategory within the 'Bitcoin Technology' category.
+
+[23/30] Testing "ACX"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "ACX acquires customers from DigitalX Direct to boost international growth and expand Bitcoin trading..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.7, 4.7.3]
+   ✅ Full Path: 🏢 Organizations & Companies → Technology Companies → Fintech & Payments
+   ✅ Confidence: 85.0%
+   💭 Reasoning: ACX acquiring customers to boost international growth suggests it is a company involved in fintech and payments, as it expands Bitcoin trading options.
+
+[24/30] Testing "ADA"
+--------------------------------------------------------------------------------
+   📝 Found 2 sample summaries for context
+   Preview: "Cardano launches the "Valentine" upgrade, boosting DeFi security and cross-chain functionality for A..."
+   🤖 Categorizing...
+   ✅ Category: money-economics
+   ✅ Subcategory Path: [2.1]
+   ✅ Full Path: 💰 Money & Economics → Other Cryptocurrencies
+   ✅ Confidence: 95.0%
+   💭 Reasoning: ADA is the ticker symbol for Cardano, which is a cryptocurrency. Therefore, it falls under the category of 'Other Cryptocurrencies'.
+
+[25/30] Testing "Adam Back"
+--------------------------------------------------------------------------------
+   📝 Found 3 sample summaries for context
+   Preview: "Adam Back takes over as CEO of Blockstream following Austin Hill's departure to explore new opportun..."
+   🤖 Categorizing...
+   ✅ Category: people
+   ✅ Subcategory Path: [5.1]
+   ✅ Full Path: 👥 People → Crypto & Tech Figures
+   ✅ Confidence: 95.0%
+   💭 Reasoning: Adam Back is a well-known figure in the crypto and tech space, particularly related to Bitcoin. The summaries mention his role at Blockstream and his early interactions related to Bitcoin's design.
+
+[26/30] Testing "Adapt3r"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Archblock partners with Adapt3r to link U.S. community banks to DeFi, boosting on-chain credit acces..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.7, 4.7.3]
+   ✅ Full Path: 🏢 Organizations & Companies → Technology Companies → Fintech & Payments
+   ✅ Confidence: 85.0%
+   💭 Reasoning: Adapt3r is partnering with Archblock to link U.S. community banks to DeFi, suggesting it is a Fintech company.
+
+[27/30] Testing "ADCCA"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Deloitte partners with ADCCA to create new Bitcoin accounting standards addressing tax and regulator..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.10]
+   ✅ Full Path: 🏢 Organizations & Companies → Other Organizations
+   ✅ Confidence: 90.0%
+   💭 Reasoning: ADCCA is an organization that Deloitte is partnering with, and it does not fit into any of the other organization subcategories, so I am placing it in 'Other Organizations'.
+
+[28/30] Testing "Addax Petroleum"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Sinopec announces a $7.2 billion bid for Addax Petroleum to secure oil assets in Africa and the Midd..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.10]
+   ✅ Full Path: 🏢 Organizations & Companies → Other Organizations
+   ✅ Confidence: 90.0%
+   💭 Reasoning: Addax Petroleum is a company, and since it's not clearly fitting into the other organization subcategories, I'm placing it in 'Other Organizations'.
+
+[29/30] Testing "AdMob"
+--------------------------------------------------------------------------------
+   📝 Found 1 sample summaries for context
+   Preview: "Advocacy groups urge FTC to block Google's $750 million AdMob deal over antitrust and privacy concer..."
+   🤖 Categorizing...
+   ✅ Category: organizations
+   ✅ Subcategory Path: [4.7, 4.7.2]
+   ✅ Full Path: 🏢 Organizations & Companies → Technology Companies → Social Media & Communication
+   ✅ Confidence: 95.0%
+   💭 Reasoning: AdMob is a mobile advertising company owned by Google, placing it under Technology Companies, specifically Social Media & Communication due to its role in advertising.
+
+[30/30] Testing "Africa"
+--------------------------------------------------------------------------------
+   📝 Found 3 sample summaries for context
+   Preview: "A Bitcoin Technology Center launches in Ghana along with Strike's zero-fee remittance feature for Af..."
+   🤖 Categorizing...
+   ✅ Category: markets-geography
+   ✅ Subcategory Path: [7.1]
+   ✅ Full Path: 🌍 Geography & Markets → Countries & Regions
+   ✅ Confidence: 95.0%
+   💭 Reasoning: The tag 'Africa' refers to a geographical region, which falls under the 'Geography & Markets' category.
+
+================================================================================
+
+📊 SUMMARY:
+
+   ✅ Successful: 30/30
+   ❌ Failed: 0/30
+   📈 Average Confidence: 93.0%
+
+📋 DETAILED RESULTS:
+
+1. ".crypto"
+   Category: technology
+   Path: [3.2]
+   Full: ⚡ Technology Concepts → DeFi & Web3 Concepts
+   Confidence: 90.0%
+   Reasoning: .crypto domains are related to Web3 concepts, specifically decentralized domain names.
+
+2. "#BitcoinBowl"
+   Category: topics
+   Path: [10.3 → 10.3.2]
+   Full: 🏷️ Topics & Themes → Adoption & Integration → Retail Adoption
+   Confidence: 90.0%
+   Reasoning: #BitcoinBowl is a promotional event, indicating adoption and integration of Bitcoin, specifically retail adoption.
+
+3. "¥12.58 billion"
+   Category: money-economics
+   Path: [2.8]
+   Full: 💰 Money & Economics → Prices & Values
+   Confidence: 95.0%
+   Reasoning: The tag "¥12.58 billion" represents a currency value, which falls under the category of Prices & Values within Money & Economics.
+
+4. "100x Group"
+   Category: organizations
+   Path: [4.9 → 4.9]
+   Full: 🏢 Organizations & Companies → Development & Research → 4.9 (not found)
+   Confidence: 90.0%
+   Reasoning: 100x Group is providing a grant to a Bitcoin developer, suggesting it is involved in development and research within the cryptocurrency space.
+
+5. "1kx"
+   Category: organizations
+   Path: [4.9 → 4.9]
+   Full: 🏢 Organizations & Companies → Development & Research → 4.9 (not found)
+   Confidence: 90.0%
+   Reasoning: 1kx is a venture capital firm that invests in crypto and blockchain startups, which falls under the category of Development & Research organizations.
+
+6. "1MDB"
+   Category: crime-security
+   Path: [9.2 → 9.2.3]
+   Full: 🔒 Crime & Security → Major Crimes & Scams → Fraud Cases
+   Confidence: 95.0%
+   Reasoning: 1MDB refers to a major fraud case, which falls under the 'Crime & Security' category, specifically 'Major Crimes & Scams' and 'Fraud Cases'.
+
+7. "21 Inc."
+   Category: bitcoin
+   Path: [1.4]
+   Full: 🪙 Bitcoin → Bitcoin Companies & Services
+   Confidence: 95.0%
+   Reasoning: 21 Inc. was a Bitcoin company that focused on integrating ASIC chips into IoT devices for Bitcoin mining. Therefore, it falls under Bitcoin Companies & Services.
+
+8. "21Shares"
+   Category: organizations
+   Path: [4.2 → 4.2.3]
+   Full: 🏢 Organizations & Companies → Financial Institutions → Asset Managers
+   Confidence: 95.0%
+   Reasoning: 21Shares is an asset manager that offers crypto ETFs. The SEC filings in the summaries confirm this.
+
+9. "37coins"
+   Category: organizations
+   Path: [4.4 → 4.4.1]
+   Full: 🏢 Organizations & Companies → Payment & Infrastructure → Payment Processors
+   Confidence: 95.0%
+   Reasoning: 37coins was a Bitcoin remittance startup, which fits under Payment & Infrastructure, specifically Payment Processors.
+
+10. "3Commas"
+   Category: organizations
+   Path: [4.7 → 4.7.3]
+   Full: 🏢 Organizations & Companies → Technology Companies → Fintech & Payments
+   Confidence: 90.0%
+   Reasoning: 3Commas is a fintech company that provides trading automation tools, which aligns with the 'Fintech & Payments' subcategory within 'Technology Companies'.
+
+11. "a16z"
+   Category: organizations
+   Path: [4.2 → 4.2.1]
+   Full: 🏢 Organizations & Companies → Financial Institutions → Investment Banks
+   Confidence: 95.0%
+   Reasoning: a16z is a venture capital firm, which falls under Financial Institutions, specifically Investment Banks.
+
+12. "Aave"
+   Category: money-economics
+   Path: [2.3]
+   Full: 💰 Money & Economics → DeFi Tokens
+   Confidence: 95.0%
+   Reasoning: Aave is a DeFi token and platform, which falls under the 'DeFi Tokens' subcategory.
+
+13. "AAVE"
+   Category: money-economics
+   Path: [2.3]
+   Full: 💰 Money & Economics → DeFi Tokens
+   Confidence: 95.0%
+   Reasoning: AAVE is a DeFi token, as indicated by its governance control and mention alongside other cryptocurrencies.
+
+14. "AAX"
+   Category: organizations
+   Path: [4.1 → 4.1.1]
+   Full: 🏢 Organizations & Companies → Exchanges → Major Centralized Exchanges
+   Confidence: 95.0%
+   Reasoning: AAX is a cryptocurrency exchange, which falls under the 'Exchanges' subcategory within 'Organizations'. Given that it is a centralized exchange, it is categorized under 'Major Centralized Exchanges'.
+
+15. "AB-129"
+   Category: regulation-law
+   Path: [6.2]
+   Full: ⚖️ Regulation & Government → Laws & Frameworks
+   Confidence: 95.0%
+   Reasoning: AB-129 is a bill in the California Senate related to legalizing Bitcoin, which falls under Laws & Frameworks within the Regulation & Government category.
+
+16. "ABACUS"
+   Category: organizations
+   Path: [4.2 → 4.2.1]
+   Full: 🏢 Organizations & Companies → Financial Institutions → Investment Banks
+   Confidence: 90.0%
+   Reasoning: ABACUS was a deal by Goldman Sachs, which is an investment bank. Therefore, it falls under the category of Organizations > Financial Institutions > Investment Banks.
+
+17. "ABC"
+   Category: bitcoin
+   Path: [1.3]
+   Full: 🪙 Bitcoin → Bitcoin Forks
+   Confidence: 95.0%
+   Reasoning: ABC (Bitcoin ABC) is a Bitcoin Cash fork. The summary explicitly mentions ABC operating independently after a hard fork, indicating it's a fork of Bitcoin Cash.
+
+18. "Abra"
+   Category: organizations
+   Path: [4.4 → 4.4.2]
+   Full: 🏢 Organizations & Companies → Payment & Infrastructure → Custody & Wallets
+   Confidence: 95.0%
+   Reasoning: Abra is described as launching a digital asset bank and American Express is investing in them, suggesting they are a financial institution providing custody and wallet services.
+
+19. "Abraham Lincoln"
+   Category: people
+   Path: [5.4]
+   Full: 👥 People → Controversial & Famous Figures
+   Confidence: 95.0%
+   Reasoning: Abraham Lincoln is a famous historical figure, making 'Controversial & Famous Figures' the most appropriate subcategory.
+
+20. "Abu Dhabi"
+   Category: geography-markets
+   Path: [7.1]
+   Full: geography-markets (not found)
+   Confidence: 95.0%
+   Reasoning: Abu Dhabi is a city and an emirate, making it a geographical location. The summaries discuss crypto-related activities within Abu Dhabi, indicating its relevance as a market.
+
+21. "ACINQ"
+   Category: bitcoin
+   Path: [1.2.5]
+   Full: 🪙 Bitcoin → 1.2.5 (not found)
+   Confidence: 95.0%
+   Reasoning: ACINQ develops Eclair, a Lightning Network implementation. Lightning Network is a Layer 2 scaling solution for Bitcoin.
+
+22. "ActiveMining"
+   Category: bitcoin
+   Path: [1.2 → 1.2.6]
+   Full: 🪙 Bitcoin → Bitcoin Technology → Mining & Consensus
+   Confidence: 95.0%
+   Reasoning: "ActiveMining" relates to Bitcoin mining operations, which falls under the 'Mining & Consensus' subcategory within the 'Bitcoin Technology' category.
+
+23. "ACX"
+   Category: organizations
+   Path: [4.7 → 4.7.3]
+   Full: 🏢 Organizations & Companies → Technology Companies → Fintech & Payments
+   Confidence: 85.0%
+   Reasoning: ACX acquiring customers to boost international growth suggests it is a company involved in fintech and payments, as it expands Bitcoin trading options.
+
+24. "ADA"
+   Category: money-economics
+   Path: [2.1]
+   Full: 💰 Money & Economics → Other Cryptocurrencies
+   Confidence: 95.0%
+   Reasoning: ADA is the ticker symbol for Cardano, which is a cryptocurrency. Therefore, it falls under the category of 'Other Cryptocurrencies'.
+
+25. "Adam Back"
+   Category: people
+   Path: [5.1]
+   Full: 👥 People → Crypto & Tech Figures
+   Confidence: 95.0%
+   Reasoning: Adam Back is a well-known figure in the crypto and tech space, particularly related to Bitcoin. The summaries mention his role at Blockstream and his early interactions related to Bitcoin's design.
+
+26. "Adapt3r"
+   Category: organizations
+   Path: [4.7 → 4.7.3]
+   Full: 🏢 Organizations & Companies → Technology Companies → Fintech & Payments
+   Confidence: 85.0%
+   Reasoning: Adapt3r is partnering with Archblock to link U.S. community banks to DeFi, suggesting it is a Fintech company.
+
+27. "ADCCA"
+   Category: organizations
+   Path: [4.10]
+   Full: 🏢 Organizations & Companies → Other Organizations
+   Confidence: 90.0%
+   Reasoning: ADCCA is an organization that Deloitte is partnering with, and it does not fit into any of the other organization subcategories, so I am placing it in 'Other Organizations'.
+
+28. "Addax Petroleum"
+   Category: organizations
+   Path: [4.10]
+   Full: 🏢 Organizations & Companies → Other Organizations
+   Confidence: 90.0%
+   Reasoning: Addax Petroleum is a company, and since it's not clearly fitting into the other organization subcategories, I'm placing it in 'Other Organizations'.
+
+29. "AdMob"
+   Category: organizations
+   Path: [4.7 → 4.7.2]
+   Full: 🏢 Organizations & Companies → Technology Companies → Social Media & Communication
+   Confidence: 95.0%
+   Reasoning: AdMob is a mobile advertising company owned by Google, placing it under Technology Companies, specifically Social Media & Communication due to its role in advertising.
+
+30. "Africa"
+   Category: markets-geography
+   Path: [7.1]
+   Full: 🌍 Geography & Markets → Countries & Regions
+   Confidence: 95.0%
+   Reasoning: The tag 'Africa' refers to a geographical region, which falls under the 'Geography & Markets' category.
+
+================================================================================
+
+🔍 VALIDATION:
+
+   ⚠️  Invalid category keys found: geography-markets
+   Valid keys: bitcoin, money-economics, technology, organizations, people, regulation-law, markets-geography, education-community, crime-security, topics, miscellaneous
+   ✅ All subcategory paths are valid
+
+================================================================================
+⚠️  Some issues found - review results above
+================================================================================

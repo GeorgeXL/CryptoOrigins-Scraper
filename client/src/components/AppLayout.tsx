@@ -1,23 +1,22 @@
-import { ReactNode, useState } from "react";
+import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { Button } from "@/components/ui/button";
 import { 
-  Settings, 
-  Calendar, 
-  History,
   Bitcoin,
-  Zap,
-  Sparkles,
   Tag,
-  FolderKanban
+  Calendar
 } from "lucide-react";
-import CSVImportDialog from './CSVImportDialog';
+import {
+  NavigationMenu,
+  NavigationMenuItem,
+  NavigationMenuLink,
+  NavigationMenuList,
+  NavigationMenuTrigger,
+  NavigationMenuContent,
+  navigationMenuTriggerStyle,
+} from "@/components/ui/navigation-menu";
 import ApiMonitor from './ApiMonitor';
 import { ApiStatusIndicator } from './ApiStatusIndicator';
-import { ApiStatusBanner } from './ApiStatusBanner';
-import { SettingsPopup } from './SettingsPopup';
-import { StatusBarWarnings } from './StatusBarWarnings';
-import { Breadcrumb, generateDateBreadcrumbs, generateMonthBreadcrumbs, generateSettingsBreadcrumbs } from './Breadcrumb';
+import { Breadcrumb, generateDateBreadcrumbs, generateMonthBreadcrumbs } from './Breadcrumb';
 import { GlobalProgressBanner } from './GlobalProgressBanner';
 
 interface AppLayoutProps {
@@ -27,103 +26,106 @@ interface AppLayoutProps {
 
 export default function AppLayout({ children }: AppLayoutProps) {
   const [location] = useLocation();
-  const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
   const navItems = [
-    { path: "/", label: "History View", icon: History, active: location === "/" },
-    { path: "/event-cockpit", label: "Event Cockpit", icon: Zap, active: location === "/event-cockpit" },
-    { path: "/cleaner", label: "Cleanerrr", icon: Sparkles, active: location === "/cleaner" },
-    { path: "/tags-browser", label: "Tags Browser", icon: Tag, active: location === "/tags-browser" },
-    { path: "/tags-manager", label: "Tags Manager", icon: FolderKanban, active: location === "/tags-manager" },
+    { path: "/", label: "Home", icon: Tag },
+    { path: "/monthly", label: "Monthly View", icon: Calendar },
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* API Status Banner */}
-      <ApiStatusBanner />
-      
+    <div className="min-h-screen">
       {/* Global Analysis Progress Banner */}
       <GlobalProgressBanner />
       
       {/* Header Navigation */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
+      <header className="sticky top-0 z-40 bg-card">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
+          <div className="relative flex justify-between items-center h-16">
+            {/* Logo - Left */}
+            <div className="flex items-center">
               <Link href="/" className="flex items-center space-x-2 hover:opacity-80">
-                <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-red-500 rounded-full flex items-center justify-center">
+                <div className="w-8 h-8 bg-black border border-white rounded-full flex items-center justify-center">
                   <Bitcoin className="text-white w-4 h-4" />
                 </div>
-                <h1 className="text-xl font-bold text-slate-900">BitNews Analyzer</h1>
-              </Link>
-              
-              {/* Main Navigation */}
-              <nav className="hidden md:flex items-center space-x-1">
-                {navItems.map((item) => {
-                  const IconComponent = item.icon;
-                  const showText = item.active || hoveredItem === item.path;
-                  
-                  return (
-                    <Link 
-                      key={item.path} 
-                      href={item.path}
-                      onMouseEnter={() => setHoveredItem(item.path)}
-                      onMouseLeave={() => setHoveredItem(null)}
-                    >
-                      <Button
-                        variant={item.active ? "default" : "ghost"}
-                        size="sm"
-                        className={`flex items-center transition-all duration-200 ${
-                          showText ? "space-x-2 px-3" : "px-2"
-                        }`}
-                        title={!showText ? item.label : undefined}
-                      >
-                        <IconComponent className="w-4 h-4 flex-shrink-0" />
-                        {showText && (
-                          <span className="whitespace-nowrap">{item.label}</span>
-                        )}
-                      </Button>
-                    </Link>
-                  );
-                })}
-              </nav>
-              
-              {/* Dynamic Breadcrumb Navigation - Only show on non-home pages */}
-              {location !== "/" && location !== "/event-cockpit" && location !== "/cleaner" && location !== "/tags-browser" && location !== "/tags-manager" && (
-                <div className="hidden md:block">
-                  <Breadcrumb items={(() => {
-                    // Settings page
-                    if (location === "/settings") {
-                      return generateSettingsBreadcrumbs();
-                    }
-                    
-                    // Day analysis page (/day/YYYY-MM-DD)
-                    const dayMatch = location.match(/^\/day\/(\d{4}-\d{2}-\d{2})$/);
-                    if (dayMatch) {
-                      return generateDateBreadcrumbs(dayMatch[1]);
-                    }
-                    
-                    // Month view page (/month/YYYY/MM)
-                    const monthMatch = location.match(/^\/month\/(\d{4})\/(\d{1,2})$/);
-                    if (monthMatch) {
-                      const year = parseInt(monthMatch[1]);
-                      const month = parseInt(monthMatch[2]);
-                      return generateMonthBreadcrumbs(year, month);
-                    }
-                    
-                    // Fallback - should not reach here for home page
-                    return [];
-                  })()} />
+                <div className="flex flex-col">
+                  <h1 className="text-xl font-bold text-foreground leading-tight">The Origins</h1>
+                  <span className="text-[10px] text-muted-foreground leading-tight">News Analyser</span>
                 </div>
-              )}
+              </Link>
             </div>
             
+            {/* Main Navigation - Centered */}
+            <div className="absolute left-1/2 transform -translate-x-1/2">
+              <NavigationMenu className="hidden md:flex" delayDuration={0}>
+                <NavigationMenuList className="gap-1">
+                  {navItems.map((item) => {
+                    const isActive = location === item.path;
+                    
+                    return (
+                      <NavigationMenuItem key={item.path}>
+                        <Link href={item.path}>
+                          <NavigationMenuLink
+                            className={navigationMenuTriggerStyle({
+                              className: `${
+                                isActive ? "bg-accent text-accent-foreground" : ""
+                              }`,
+                            })}
+                          >
+                            {item.label}
+                          </NavigationMenuLink>
+                        </Link>
+                      </NavigationMenuItem>
+                    );
+                  })}
+                  
+                  {/* Manager Menu Item with Dropdown */}
+                  <NavigationMenuItem>
+                    <NavigationMenuTrigger>
+                      Manager
+                    </NavigationMenuTrigger>
+                    <NavigationMenuContent>
+                      <ul className="grid w-[280px] gap-1 p-2 bg-accent rounded-md">
+                        <li>
+                          <NavigationMenuLink asChild>
+                            <Link href="/admin" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-accent hover:bg-primary/10 hover:shadow-sm focus:bg-primary/10 focus:text-accent-foreground cursor-pointer group">
+                              <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Admin</div>
+                              <p className="line-clamp-2 text-xs leading-snug text-muted-foreground group-hover:text-foreground/80 transition-colors">
+                                Export data and settings.
+                              </p>
+                            </Link>
+                          </NavigationMenuLink>
+                        </li>
+                        <li>
+                          <NavigationMenuLink asChild>
+                            <Link href="/tags-manager" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-accent hover:bg-primary/10 hover:shadow-sm focus:bg-primary/10 focus:text-accent-foreground cursor-pointer group">
+                              <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Tag Manager</div>
+                              <p className="line-clamp-2 text-xs leading-snug text-muted-foreground group-hover:text-foreground/80 transition-colors">
+                                Organize and manage tags with drag-drop.
+                              </p>
+                            </Link>
+                          </NavigationMenuLink>
+                        </li>
+                        <li>
+                          <NavigationMenuLink asChild>
+                            <Link href="/events" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-accent hover:bg-primary/10 hover:shadow-sm focus:bg-primary/10 focus:text-accent-foreground cursor-pointer group">
+                              <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Events</div>
+                              <p className="line-clamp-2 text-xs leading-snug text-muted-foreground group-hover:text-foreground/80 transition-colors">
+                                View and change events.
+                              </p>
+                            </Link>
+                          </NavigationMenuLink>
+                        </li>
+                      </ul>
+                    </NavigationMenuContent>
+                  </NavigationMenuItem>
+                </NavigationMenuList>
+              </NavigationMenu>
+            </div>
+            
+            {/* Right Actions */}
             <div className="flex items-center space-x-4">
-              <StatusBarWarnings />
               <ApiStatusIndicator />
               <ApiMonitor />
-              <CSVImportDialog />
-              <SettingsPopup />
             </div>
           </div>
         </div>

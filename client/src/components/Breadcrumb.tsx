@@ -74,12 +74,3 @@ export function generateMonthBreadcrumbs(year: number, month: number): Breadcrum
     }
   ];
 }
-
-// Helper function to generate breadcrumbs for settings
-export function generateSettingsBreadcrumbs(): BreadcrumbItem[] {
-  return [
-    {
-      label: "Settings",
-    }
-  ];
-}

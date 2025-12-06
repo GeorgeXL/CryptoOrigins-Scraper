@@ -9,6 +9,8 @@ import {
   batchEvents,
   eventConflicts,
   tagMetadata,
+  tags,
+  pagesAndTags,
   type User, 
   type InsertUser,
   type HistoricalNewsAnalysis,
@@ -29,6 +31,10 @@ import {
   type InsertEventConflict,
   type TagMetadata,
   type InsertTagMetadata,
+  type Tag,
+  type InsertTag,
+  type PagesAndTags,
+  type InsertPagesAndTags,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, asc, and, or, gte, lte, count, sql, inArray } from "drizzle-orm";
@@ -201,11 +207,30 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateAnalysis(date: string, analysis: Partial<InsertHistoricalNewsAnalysis>): Promise<HistoricalNewsAnalysis> {
+    // Simple update - only update fields that are provided
+    const updateData: Record<string, any> = {
+      lastAnalyzed: new Date(),
+    };
+
+    // Only add fields that exist in the database and are provided
+    if (analysis.summary !== undefined) updateData.summary = analysis.summary;
+    if (analysis.reasoning !== undefined) updateData.reasoning = analysis.reasoning;
+    if (analysis.topArticleId !== undefined) updateData.topArticleId = analysis.topArticleId;
+    if (analysis.isManualOverride !== undefined) updateData.isManualOverride = analysis.isManualOverride;
+    if (analysis.tierUsed !== undefined) updateData.tierUsed = analysis.tierUsed;
+    if (analysis.tieredArticles !== undefined) updateData.tieredArticles = analysis.tieredArticles;
+    if (analysis.analyzedArticles !== undefined) updateData.analyzedArticles = analysis.analyzedArticles;
+    if (analysis.totalArticlesFetched !== undefined) updateData.totalArticlesFetched = analysis.totalArticlesFetched;
+    // Handle tags_version2 (can come as tags_version2 or tagsVersion2)
+    if (analysis.tagsVersion2 !== undefined) updateData.tagsVersion2 = analysis.tagsVersion2;
+    if ((analysis as any).tags_version2 !== undefined) updateData.tagsVersion2 = (analysis as any).tags_version2;
+
     const [updatedAnalysis] = await db
       .update(historicalNewsAnalyses)
-      .set({ ...analysis, lastAnalyzed: new Date() })
+      .set(updateData)
       .where(eq(historicalNewsAnalyses.date, date))
       .returning();
+    
     return updatedAnalysis;
   }
 
@@ -717,6 +742,228 @@ export class DatabaseStorage implements IStorage {
       gte(eventConflicts.sourceDate, startDate),
       lte(eventConflicts.sourceDate, endDate)
     ));
+  }
+
+  // ============================================================================
+  // Normalized Tags System Helper Functions
+  // ============================================================================
+
+  /**
+   * Get all tags for a specific analysis (page) from the join table
+   */
+  async getTagsForAnalysis(analysisId: string): Promise<Tag[]> {
+    const result = await db.select({
+      id: tags.id,
+      name: tags.name,
+      category: tags.category,
+      normalizedName: tags.normalizedName,
+      parentTagId: tags.parentTagId,
+      subcategoryPath: tags.subcategoryPath,
+      usageCount: tags.usageCount,
+      createdAt: tags.createdAt,
+      updatedAt: tags.updatedAt,
+    })
+      .from(tags)
+      .innerJoin(pagesAndTags, eq(tags.id, pagesAndTags.tagId))
+      .where(eq(pagesAndTags.analysisId, analysisId));
+    
+    return result;
+  }
+
+  /**
+   * Add a tag to an analysis (create join table entry)
+   */
+  async addTagToAnalysis(analysisId: string, tagId: string): Promise<PagesAndTags> {
+    const [result] = await db.insert(pagesAndTags).values({
+      analysisId,
+      tagId,
+    })
+      .onConflictDoNothing()
+      .returning();
+    
+    if (!result) {
+      // Tag already exists, fetch it
+      const existing = await db.select()
+        .from(pagesAndTags)
+        .where(and(
+          eq(pagesAndTags.analysisId, analysisId),
+          eq(pagesAndTags.tagId, tagId)
+        ))
+        .limit(1);
+      
+      if (existing.length > 0) {
+        return existing[0];
+      }
+      throw new Error(`Failed to add tag ${tagId} to analysis ${analysisId}`);
+    }
+    
+    // Update usage count
+    await this.updateTagUsageCount(tagId);
+    
+    return result;
+  }
+
+  /**
+   * Remove a tag from an analysis (delete join table entry)
+   */
+  async removeTagFromAnalysis(analysisId: string, tagId: string): Promise<void> {
+    await db.delete(pagesAndTags)
+      .where(and(
+        eq(pagesAndTags.analysisId, analysisId),
+        eq(pagesAndTags.tagId, tagId)
+      ));
+    
+    // Update usage count
+    await this.updateTagUsageCount(tagId);
+  }
+
+  /**
+   * Get all analyses (pages) that have a specific tag
+   */
+  async getAnalysesByTag(tagId: string): Promise<HistoricalNewsAnalysis[]> {
+    const result = await db.select({
+      id: historicalNewsAnalyses.id,
+      date: historicalNewsAnalyses.date,
+      summary: historicalNewsAnalyses.summary,
+      topArticleId: historicalNewsAnalyses.topArticleId,
+      lastAnalyzed: historicalNewsAnalyses.lastAnalyzed,
+      isManualOverride: historicalNewsAnalyses.isManualOverride,
+      aiProvider: historicalNewsAnalyses.aiProvider,
+      reasoning: historicalNewsAnalyses.reasoning,
+      articleTags: historicalNewsAnalyses.articleTags,
+      confidenceScore: historicalNewsAnalyses.confidenceScore,
+      sentimentScore: historicalNewsAnalyses.sentimentScore,
+      sentimentLabel: historicalNewsAnalyses.sentimentLabel,
+      topicCategories: historicalNewsAnalyses.topicCategories,
+      duplicateArticleIds: historicalNewsAnalyses.duplicateArticleIds,
+      totalArticlesFetched: historicalNewsAnalyses.totalArticlesFetched,
+      uniqueArticlesAnalyzed: historicalNewsAnalyses.uniqueArticlesAnalyzed,
+      tierUsed: historicalNewsAnalyses.tierUsed,
+      winningTier: historicalNewsAnalyses.winningTier,
+      tieredArticles: historicalNewsAnalyses.tieredArticles,
+      analyzedArticles: historicalNewsAnalyses.analyzedArticles,
+      isFlagged: historicalNewsAnalyses.isFlagged,
+      flagReason: historicalNewsAnalyses.flagReason,
+      flaggedAt: historicalNewsAnalyses.flaggedAt,
+      factCheckVerdict: historicalNewsAnalyses.factCheckVerdict,
+      factCheckConfidence: historicalNewsAnalyses.factCheckConfidence,
+      factCheckReasoning: historicalNewsAnalyses.factCheckReasoning,
+      factCheckedAt: historicalNewsAnalyses.factCheckedAt,
+      perplexityVerdict: historicalNewsAnalyses.perplexityVerdict,
+      perplexityConfidence: historicalNewsAnalyses.perplexityConfidence,
+      perplexityReasoning: historicalNewsAnalyses.perplexityReasoning,
+      perplexityCorrectDate: historicalNewsAnalyses.perplexityCorrectDate,
+      perplexityCorrectDateText: historicalNewsAnalyses.perplexityCorrectDateText,
+      perplexityCitations: historicalNewsAnalyses.perplexityCitations,
+      perplexityCheckedAt: historicalNewsAnalyses.perplexityCheckedAt,
+      reVerified: historicalNewsAnalyses.reVerified,
+      reVerifiedAt: historicalNewsAnalyses.reVerifiedAt,
+      reVerificationDate: historicalNewsAnalyses.reVerificationDate,
+      reVerificationSummary: historicalNewsAnalyses.reVerificationSummary,
+      reVerificationTier: historicalNewsAnalyses.reVerificationTier,
+      reVerificationArticles: historicalNewsAnalyses.reVerificationArticles,
+      reVerificationReasoning: historicalNewsAnalyses.reVerificationReasoning,
+      reVerificationStatus: historicalNewsAnalyses.reVerificationStatus,
+      reVerificationWinner: historicalNewsAnalyses.reVerificationWinner,
+      tags: historicalNewsAnalyses.tags,
+      tagNames: historicalNewsAnalyses.tagNames,
+      geminiApproved: historicalNewsAnalyses.geminiApproved,
+      perplexityApproved: historicalNewsAnalyses.perplexityApproved,
+      finalAnalysisCheckedAt: historicalNewsAnalyses.finalAnalysisCheckedAt,
+    })
+      .from(historicalNewsAnalyses)
+      .innerJoin(pagesAndTags, eq(historicalNewsAnalyses.id, pagesAndTags.analysisId))
+      .where(eq(pagesAndTags.tagId, tagId))
+      .orderBy(desc(historicalNewsAnalyses.date));
+    
+    return result;
+  }
+
+  /**
+   * Find a tag by name only (case-insensitive), regardless of category
+   */
+  async findTagByName(name: string): Promise<Tag | null> {
+    const { normalizeTagName } = await import("./services/tag-similarity");
+    const normalizedName = normalizeTagName(name);
+    
+    // First try exact name match
+    const exactMatch = await db.select()
+      .from(tags)
+      .where(eq(tags.name, name))
+      .limit(1);
+    
+    if (exactMatch.length > 0) {
+      return exactMatch[0];
+    }
+    
+    // Then try normalized name match (case-insensitive)
+    const normalizedMatch = await db.select()
+      .from(tags)
+      .where(eq(tags.normalizedName, normalizedName))
+      .limit(1);
+    
+    if (normalizedMatch.length > 0) {
+      return normalizedMatch[0];
+    }
+    
+    return null;
+  }
+
+  /**
+   * Find or create a tag in the tags table
+   */
+  async findOrCreateTag(tagData: { name: string; category: string; subcategoryPath?: string[] | null; parentTagId?: string | null }): Promise<Tag> {
+    // First, check if tag exists with this name (in any category)
+    const existingByName = await this.findTagByName(tagData.name);
+    if (existingByName) {
+      return existingByName;
+    }
+    
+    // Try to find by exact name+category match
+    const existing = await db.select()
+      .from(tags)
+      .where(and(
+        eq(tags.name, tagData.name),
+        eq(tags.category, tagData.category)
+      ))
+      .limit(1);
+    
+    if (existing.length > 0) {
+      return existing[0];
+    }
+    
+    // Create new tag
+    const { normalizeTagName } = await import("./services/tag-similarity");
+    const [newTag] = await db.insert(tags).values({
+      name: tagData.name,
+      category: tagData.category,
+      normalizedName: normalizeTagName(tagData.name),
+      subcategoryPath: tagData.subcategoryPath || null,
+      parentTagId: tagData.parentTagId || null,
+      usageCount: 0,
+    })
+      .returning();
+    
+    if (!newTag) {
+      throw new Error(`Failed to create tag ${tagData.name} in category ${tagData.category}`);
+    }
+    
+    return newTag;
+  }
+
+  /**
+   * Update tag usage count based on join table
+   */
+  async updateTagUsageCount(tagId: string): Promise<void> {
+    const countResult = await db.select({ count: sql<number>`count(*)` })
+      .from(pagesAndTags)
+      .where(eq(pagesAndTags.tagId, tagId));
+    
+    const count = Number(countResult[0]?.count || 0);
+    
+    await db.update(tags)
+      .set({ usageCount: count })
+      .where(eq(tags.id, tagId));
   }
 }
 

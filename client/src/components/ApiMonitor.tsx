@@ -5,7 +5,27 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Trash2, Activity, Zap, Clock, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { formatDistanceToNow } from 'date-fns';
+
+// Helper function to format time more concisely
+const formatTimeAgo = (timestamp: number): string => {
+  const formatted = formatDistanceToNow(new Date(timestamp), { addSuffix: true });
+  return formatted
+    .replace(/minutes?/g, 'mins')
+    .replace(/seconds?/g, 'secs')
+    .replace(/hours?/g, 'hrs')
+    .replace(/days?/g, 'days')
+    .replace(/months?/g, 'mos')
+    .replace(/years?/g, 'yrs');
+};
 
 interface ApiRequest {
   id: string;
@@ -17,6 +37,7 @@ interface ApiRequest {
   duration?: number;
   error?: string;
   requestData?: any;
+  responseData?: any; // AI model responses, summaries, selected articles, etc.
   responseSize?: number;
   context?: string;
   purpose?: string;
@@ -52,26 +73,35 @@ interface ApiStats {
 }
 
 const serviceColors = {
-  exa: 'bg-blue-100 text-blue-800 border-blue-200',
-  openai: 'bg-purple-100 text-purple-800 border-purple-200',
-  health: 'bg-gray-100 text-gray-800 border-gray-200',
-  perplexity: 'bg-orange-100 text-orange-800 border-orange-200',
-  'perplexity-cleaner': 'bg-indigo-100 text-indigo-800 border-indigo-200',
-  gemini: 'bg-green-100 text-green-800 border-green-200'
+  exa: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+  openai: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+  health: 'bg-muted text-muted-foreground border-border',
+  perplexity: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+  'perplexity-cleaner': 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
+  gemini: 'bg-green-500/20 text-green-400 border-green-500/30'
+};
+
+const serviceTextColors = {
+  exa: 'text-blue-400',
+  openai: 'text-purple-400',
+  health: 'text-muted-foreground',
+  perplexity: 'text-orange-400',
+  'perplexity-cleaner': 'text-indigo-400',
+  gemini: 'text-green-400'
 };
 
 const statusIcons = {
-  pending: <Loader2 className="w-3 h-3 animate-spin text-yellow-500" />,
-  success: <CheckCircle className="w-3 h-3 text-green-500" />,
-  error: <AlertCircle className="w-3 h-3 text-red-500" />,
-  cached: <Zap className="w-3 h-3 text-blue-500" />
+  pending: <Loader2 className="w-3 h-3 animate-spin text-yellow-400" />,
+  success: <CheckCircle className="w-3 h-3 text-green-400" />,
+  error: <AlertCircle className="w-3 h-3 text-red-400" />,
+  cached: <Zap className="w-3 h-3 text-blue-400" />
 };
 
 const statusColors = {
-  pending: 'bg-yellow-50 border-yellow-200',
-  success: 'bg-green-50 border-green-200',
-  error: 'bg-red-50 border-red-200',
-  cached: 'bg-blue-50 border-blue-200'
+  pending: 'bg-yellow-500/10 border-yellow-500/30',
+  success: 'bg-green-500/10 border-green-500/30',
+  error: 'bg-red-500/10 border-red-500/30',
+  cached: 'bg-blue-500/10 border-blue-500/30'
 };
 
 // Helper function to format context names
@@ -81,6 +111,19 @@ const formatContext = (context: string): string => {
     .replace(/\b\w/g, l => l.toUpperCase())
     .replace(/Api/g, 'API')
     .replace(/Ai/g, 'AI');
+};
+
+// Helper function to format API service names
+const formatApiName = (name: string): string => {
+  const nameMap: Record<string, string> = {
+    'openai': 'OpenAI',
+    'gemini': 'Gemini',
+    'perplexity': 'Perplexity',
+    'perplexity-cleaner': 'Perplexity Cleaner',
+    'exa': 'Exa',
+    'health': 'Health',
+  };
+  return nameMap[name.toLowerCase()] || name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
 };
 
 // Helper function to generate human-readable request summary
@@ -180,9 +223,9 @@ const renderRequestDetails = (request: ApiRequest): JSX.Element | null => {
           <div>
             <span className="font-medium">Verdict:</span> 
             <span className={`ml-2 px-2 py-0.5 rounded text-xs ${
-              data.verdict === 'verified' ? 'bg-green-100 text-green-800' :
-              data.verdict === 'contradicted' ? 'bg-red-100 text-red-800' :
-              'bg-amber-100 text-amber-800'
+              data.verdict === 'verified' ? 'bg-green-500/20 text-green-400' :
+              data.verdict === 'contradicted' ? 'bg-red-500/20 text-red-400' :
+              'bg-yellow-500/20 text-yellow-400'
             }`}>
               {data.verdict.toUpperCase()}
             </span>
@@ -197,7 +240,7 @@ const renderRequestDetails = (request: ApiRequest): JSX.Element | null => {
     return (
       <div className="space-y-1">
         {data.tier && (
-          <span className="inline-block bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-medium mr-2">
+          <span className="inline-block bg-blue-500/20 text-blue-400 px-2 py-1 rounded text-xs font-medium mr-2">
             {data.tier.toUpperCase()} TIER
           </span>
         )}
@@ -278,22 +321,23 @@ const renderRequestDetails = (request: ApiRequest): JSX.Element | null => {
 // Helper function to render success results
 const renderSuccessResult = (request: ApiRequest): JSX.Element | null => {
   const data = request.requestData || {};
+  const responseData = request.responseData || {};
   
   // Perplexity Cleaner success
   if (request.service === 'perplexity-cleaner') {
     return (
       <>
-        <div className="font-medium text-green-800 text-sm mb-1">✅ Resolution Complete</div>
+        <div className="font-medium text-green-400 text-sm mb-1">✅ Resolution Complete</div>
         {data.message && (
-          <div className="text-xs text-green-700">{data.message}</div>
+          <div className="text-xs text-green-300">{data.message}</div>
         )}
         {data.updatedDate && (
-          <div className="text-xs text-green-600 mt-1">
+          <div className="text-xs text-green-400 mt-1">
             Updated date: {data.updatedDate}
           </div>
         )}
         {data.newTier && (
-          <div className="text-xs text-green-600">
+          <div className="text-xs text-green-400">
             New tier: {data.newTier}
           </div>
         )}
@@ -305,25 +349,84 @@ const renderSuccessResult = (request: ApiRequest): JSX.Element | null => {
   if (request.service === 'perplexity') {
     return (
       <>
-        {data.verdict && (
-          <div className="font-medium text-green-800 text-sm mb-1">
+        {responseData.verdict && (
+          <div className="font-medium text-green-400 text-sm mb-1">
             Verdict: <span className={`${
-              data.verdict === 'verified' ? 'text-green-700' :
-              data.verdict === 'contradicted' ? 'text-red-700' :
-              'text-amber-700'
+              responseData.verdict === 'verified' ? 'text-green-300' :
+              responseData.verdict === 'contradicted' ? 'text-red-300' :
+              'text-yellow-300'
             }`}>
-              {data.verdict.toUpperCase()}
+              {responseData.verdict.toUpperCase()}
             </span>
           </div>
         )}
-        {data.confidence && (
-          <div className="text-xs text-green-600">
-            Confidence: {data.confidence}%
+        {responseData.confidence !== undefined && (
+          <div className="text-xs text-green-400">
+            Confidence: {responseData.confidence}%
           </div>
         )}
-        {data.correctDate && (
-          <div className="text-xs text-green-600 mt-1">
-            Suggested correct date: {data.correctDate}
+        {responseData.reasoning && (
+          <div className="text-xs text-green-300 mt-1 italic">
+            {responseData.reasoning}
+          </div>
+        )}
+        {responseData.correctDateText && (
+          <div className="text-xs text-green-400 mt-1">
+            Suggested correct date: {responseData.correctDateText}
+          </div>
+        )}
+        {responseData.status && (
+          <div className="text-xs text-blue-400 mt-1">
+            Status: {responseData.status} {responseData.matchedCount !== undefined && `(${responseData.matchedCount} articles matched)`}
+          </div>
+        )}
+        {responseData.validArticleIds && responseData.validArticleIds.length > 0 && (
+          <div className="text-xs text-green-400 mt-1">
+            Selected: {responseData.validArticleIds.slice(0, 3).join(', ')}{responseData.validArticleIds.length > 3 ? ` (+${responseData.validArticleIds.length - 3} more)` : ''}
+          </div>
+        )}
+        {responseData.text && (
+          <div className="text-xs text-muted-foreground mt-2 pt-2 border-t border-border">
+            <div className="font-medium mb-1">Response:</div>
+            <div className="font-mono text-xs bg-muted p-2 rounded max-h-32 overflow-y-auto">
+              {responseData.text}
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+  
+  // Gemini success
+  if (request.service === 'gemini') {
+    return (
+      <>
+        {responseData.approved !== undefined && (
+          <div className="font-medium text-green-400 text-sm mb-1">
+            {responseData.approved ? '✅ Approved' : '❌ Not Approved'}
+          </div>
+        )}
+        {responseData.reasoning && (
+          <div className="text-xs text-green-300 mt-1 italic">
+            {responseData.reasoning}
+          </div>
+        )}
+        {responseData.status && (
+          <div className="text-xs text-blue-400 mt-1">
+            Status: {responseData.status} {responseData.matchedCount !== undefined && `(${responseData.matchedCount} articles matched)`}
+          </div>
+        )}
+        {responseData.validArticleIds && responseData.validArticleIds.length > 0 && (
+          <div className="text-xs text-green-400 mt-1">
+            Selected: {responseData.validArticleIds.slice(0, 3).join(', ')}{responseData.validArticleIds.length > 3 ? ` (+${responseData.validArticleIds.length - 3} more)` : ''}
+          </div>
+        )}
+        {responseData.text && (
+          <div className="text-xs text-muted-foreground mt-2 pt-2 border-t border-border">
+            <div className="font-medium mb-1">Response:</div>
+            <div className="font-mono text-xs bg-muted p-2 rounded max-h-32 overflow-y-auto">
+              {responseData.text}
+            </div>
           </div>
         )}
       </>
@@ -334,44 +437,44 @@ const renderSuccessResult = (request: ApiRequest): JSX.Element | null => {
   if (request.service === 'openai' && request.tagName && request.context === 'tag-categorization') {
     return (
       <>
-        <div className="font-medium text-green-800 text-sm mb-2">✅ Tag Categorized</div>
+        <div className="font-medium text-green-400 text-sm mb-2">✅ Tag Categorized</div>
         <div className="space-y-1 text-xs">
           <div>
-            <span className="font-medium text-green-700">Tag:</span>{' '}
-            <span className="font-mono bg-green-100 px-1.5 py-0.5 rounded">{request.tagName}</span>
+            <span className="font-medium text-green-300">Tag:</span>{' '}
+            <span className="font-mono bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">{request.tagName}</span>
           </div>
           {request.tagCategory && (
             <div>
-              <span className="font-medium text-green-700">Category:</span>{' '}
-              <span className="bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded text-xs font-medium">
+              <span className="font-medium text-green-300">Category:</span>{' '}
+              <span className="bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded text-xs font-medium">
                 {request.tagCategory}
               </span>
             </div>
           )}
           {request.tagSubcategoryPath && request.tagSubcategoryPath.length > 0 && (
             <div>
-              <span className="font-medium text-green-700">Subcategory Path:</span>{' '}
-              <span className="text-green-600 font-mono">
+              <span className="font-medium text-green-300">Subcategory Path:</span>{' '}
+              <span className="text-green-400 font-mono">
                 {request.tagSubcategoryPath.join(' → ')}
               </span>
             </div>
           )}
           {request.tagConfidence !== undefined && (
             <div>
-              <span className="font-medium text-green-700">Confidence:</span>{' '}
+              <span className="font-medium text-green-300">Confidence:</span>{' '}
               <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                request.tagConfidence >= 0.8 ? 'bg-green-200 text-green-800' :
-                request.tagConfidence >= 0.6 ? 'bg-yellow-200 text-yellow-800' :
-                'bg-orange-200 text-orange-800'
+                request.tagConfidence >= 0.8 ? 'bg-green-500/20 text-green-400' :
+                request.tagConfidence >= 0.6 ? 'bg-yellow-500/20 text-yellow-400' :
+                'bg-orange-500/20 text-orange-400'
               }`}>
                 {(request.tagConfidence * 100).toFixed(1)}%
               </span>
             </div>
           )}
           {request.tagReasoning && (
-            <div className="mt-2 pt-2 border-t border-green-200">
-              <div className="font-medium text-green-700 mb-1">Reasoning:</div>
-              <div className="text-green-600 italic">{request.tagReasoning}</div>
+            <div className="mt-2 pt-2 border-t border-border">
+              <div className="font-medium text-green-300 mb-1">Reasoning:</div>
+              <div className="text-green-400 italic">{request.tagReasoning}</div>
             </div>
           )}
         </div>
@@ -383,16 +486,16 @@ const renderSuccessResult = (request: ApiRequest): JSX.Element | null => {
   if (request.service === 'exa') {
     return (
       <>
-        <div className="font-medium text-green-800 text-sm mb-1">
+        <div className="font-medium text-green-400 text-sm mb-1">
           📰 Found {request.responseSize || 0} articles
         </div>
         {data.result?.articlesFound && (
-          <div className="text-xs text-green-600">
+          <div className="text-xs text-green-300">
             Articles found: {data.result.articlesFound}
           </div>
         )}
         {data.result?.hasContent && (
-          <div className="text-xs text-green-600">
+          <div className="text-xs text-green-300">
             {data.result.hasContent ? '✅ Has article content' : '⚠️ No article content'}
           </div>
         )}
@@ -402,16 +505,57 @@ const renderSuccessResult = (request: ApiRequest): JSX.Element | null => {
   
   // OpenAI success
   if (request.service === 'openai') {
+    // Show response data if available
+    if (responseData.text) {
+      return (
+        <>
+          <div className="font-medium text-green-400 text-sm mb-1">
+            ✨ Response
+          </div>
+          <div className="text-xs text-muted-foreground mb-2">
+            <div className="font-mono bg-muted p-2 rounded max-h-32 overflow-y-auto">
+              {responseData.text}
+            </div>
+          </div>
+          {responseData.tokens && (
+            <div className="flex justify-between text-xs text-green-400">
+              <span>Tokens: {responseData.tokens.total || responseData.tokens}</span>
+              {responseData.model && <span>Model: {responseData.model}</span>}
+            </div>
+          )}
+        </>
+      );
+    }
+    if (responseData.content || responseData.parsed) {
+      return (
+        <>
+          <div className="font-medium text-green-400 text-sm mb-1">
+            ✨ JSON Response
+          </div>
+          <div className="text-xs text-muted-foreground mb-2">
+            <div className="font-mono bg-muted p-2 rounded max-h-32 overflow-y-auto">
+              {JSON.stringify(responseData.parsed || responseData.content, null, 2).substring(0, 500)}
+              {JSON.stringify(responseData.parsed || responseData.content, null, 2).length > 500 ? '...' : ''}
+            </div>
+          </div>
+          {responseData.tokens && (
+            <div className="flex justify-between text-xs text-green-400">
+              <span>Tokens: {responseData.tokens.total || responseData.tokens}</span>
+            </div>
+          )}
+        </>
+      );
+    }
     if (data.openaiResponse?.summary) {
       return (
         <>
-          <div className="font-medium text-green-800 text-sm mb-1">
+          <div className="font-medium text-green-400 text-sm mb-1">
             ✨ Generated Summary
           </div>
-          <div className="text-xs text-green-700 mb-2">
+          <div className="text-xs text-green-300 mb-2">
             "{data.openaiResponse.summary}"
           </div>
-          <div className="flex justify-between text-xs text-green-600">
+          <div className="flex justify-between text-xs text-green-400">
             <span>Length: {data.openaiResponse.length || data.openaiResponse.summary.length} chars</span>
             {data.attempt && <span>Attempt: {data.attempt}</span>}
             {data.openaiResponse.confidence && (
@@ -424,11 +568,11 @@ const renderSuccessResult = (request: ApiRequest): JSX.Element | null => {
     if (data.result?.isSignificant !== undefined) {
       return (
         <>
-          <div className="font-medium text-green-800 text-sm mb-1">
+          <div className="font-medium text-green-400 text-sm mb-1">
             {data.result.isSignificant ? '✅ SIGNIFICANT EVENT' : '❌ NOT SIGNIFICANT'}
           </div>
           {data.result.reasoning && (
-            <div className="text-xs text-green-600 mt-1">
+            <div className="text-xs text-green-300 mt-1">
               {data.result.reasoning}
             </div>
           )}
@@ -440,7 +584,7 @@ const renderSuccessResult = (request: ApiRequest): JSX.Element | null => {
   // Generic success
   if (request.responseSize !== undefined) {
     return (
-      <div className="text-xs text-green-700">
+      <div className="text-xs text-green-400">
         Returned {request.responseSize} result{request.responseSize !== 1 ? 's' : ''}
       </div>
     );
@@ -644,102 +788,114 @@ export default function ApiMonitor() {
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
         <Button variant="ghost" size="sm" className="relative">
-          <Activity className={`w-4 h-4 ${getConnectionColor()}`} />
-          {stats.requestsLastMinute > 0 && (
-            <div className="absolute -top-1 -right-1 w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
-          )}
+          <Activity className={`w-4 h-4 ${getConnectionColor()} ${stats.requestsLastMinute > 0 ? 'animate-heartbeat' : ''}`} />
         </Button>
       </DialogTrigger>
       
       <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden">
-        <DialogHeader>
+        <DialogHeader className="pb-3">
           <DialogTitle className="flex items-center gap-2">
             <Activity className={`w-5 h-5 ${getConnectionColor()}`} />
             API Request Monitor
-            <Badge variant="outline" className="ml-2">
+            <Badge 
+              variant="outline" 
+              className={`ml-2 ${
+                connectionStatus === 'connected' 
+                  ? 'bg-green-500/20 text-green-400 border-green-500/30' 
+                  : connectionStatus === 'connecting'
+                  ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+                  : 'bg-red-500/20 text-red-400 border-red-500/30'
+              }`}
+            >
               {connectionStatus}
             </Badge>
           </DialogTitle>
-          <DialogDescription>
-            Real-time monitoring of API requests including EXA, OpenAI, and health checks with detailed response information.
-          </DialogDescription>
         </DialogHeader>
         
         {/* Stats Overview */}
-        <div className="grid grid-cols-4 gap-3 mb-4">
-          <div className="bg-gray-50 p-3 rounded-lg">
-            <div className="text-sm text-gray-600">Requests</div>
-            <div className="text-lg font-semibold">{stats.totalRequests}</div>
-            <div className="text-xs text-gray-500">
+        <div className="grid grid-cols-4 gap-3 mb-2">
+          <div className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 border border-blue-500/20 rounded-lg p-4 backdrop-blur-sm">
+            <div className="text-xs text-muted-foreground mb-2 font-medium">Requests</div>
+            <div className="text-2xl font-bold text-foreground mb-1">{stats.totalRequests}</div>
+            <div className="text-xs text-muted-foreground">
               {stats.requestsLastMinute}/min • {stats.requestsLastHour}/hr
             </div>
           </div>
           
-          <div className="bg-gray-50 p-3 rounded-lg">
-            <div className="text-sm text-gray-600">Error Rate</div>
-            <div className={`text-lg font-semibold ${stats.errorRate > 0.15 ? 'text-red-600' : stats.errorRate > 0.05 ? 'text-yellow-600' : 'text-green-600'}`}>
+          <div className={`bg-gradient-to-br rounded-lg p-4 backdrop-blur-sm border ${
+            stats.errorRate > 0.15 
+              ? 'from-red-500/10 to-red-600/5 border-red-500/20' 
+              : stats.errorRate > 0.05 
+              ? 'from-yellow-500/10 to-yellow-600/5 border-yellow-500/20'
+              : 'from-green-500/10 to-green-600/5 border-green-500/20'
+          }`}>
+            <div className="text-xs text-muted-foreground mb-2 font-medium">Error Rate</div>
+            <div className={`text-2xl font-bold ${
+              stats.errorRate > 0.15 ? 'text-red-400' : 
+              stats.errorRate > 0.05 ? 'text-yellow-400' : 
+              'text-green-400'
+            }`}>
               {(stats.errorRate * 100).toFixed(1)}%
             </div>
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-muted-foreground mt-1">
               Cache: {(stats.cacheHitRate * 100).toFixed(1)}%
             </div>
           </div>
           
-          <div className="bg-gray-50 p-3 rounded-lg">
-            <div className="text-sm text-gray-600">Services</div>
-            <div className="text-xs space-y-1">
-              <div>EXA: {stats.serviceBreakdown.exa || 0}</div>
-              <div>OpenAI: {stats.serviceBreakdown.openai || 0}</div>
-              {(stats.serviceBreakdown as any).perplexity && (
-                <div>Perplexity: {(stats.serviceBreakdown as any).perplexity}</div>
-              )}
-              {(stats.serviceBreakdown as any)['perplexity-cleaner'] && (
-                <div>Cleaner: {(stats.serviceBreakdown as any)['perplexity-cleaner']}</div>
-              )}
+          <div className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 border border-purple-500/20 rounded-lg p-4 backdrop-blur-sm">
+            <div className="text-xs text-muted-foreground mb-2 font-medium">Services</div>
+            <div className="text-xs space-y-1 text-foreground">
+              <div>Exa: {(stats.serviceBreakdown as any).exa || stats.serviceBreakdown.exa || 0}</div>
+              <div>OpenAI: {(stats.serviceBreakdown as any).openai || stats.serviceBreakdown.openai || 0}</div>
+              <div>Gemini: {(stats.serviceBreakdown as any).gemini || 0}</div>
+              <div>Perplexity: {(stats.serviceBreakdown as any).perplexity || 0}</div>
+              {(stats.serviceBreakdown as any)['perplexity-cleaner'] ? (
+                <div>Perplexity Cleaner: {(stats.serviceBreakdown as any)['perplexity-cleaner']}</div>
+              ) : null}
             </div>
           </div>
           
-          <div className="bg-gray-50 p-3 rounded-lg">
-            <div className="text-sm text-gray-600">Quality</div>
-            <div className="text-lg font-semibold">
+          <div className="bg-gradient-to-br from-indigo-500/10 to-indigo-600/5 border border-indigo-500/20 rounded-lg p-4 backdrop-blur-sm">
+            <div className="text-xs text-muted-foreground mb-2 font-medium">Quality</div>
+            <div className="text-2xl font-bold text-foreground mb-1">
               {stats.retryRate ? (stats.retryRate * 100).toFixed(1) : '0.0'}%
             </div>
-            <div className="text-xs text-gray-500">Retry Rate</div>
+            <div className="text-xs text-muted-foreground">Retry Rate</div>
           </div>
         </div>
         
         {/* Error Breakdown - Only show if there are errors */}
         {stats.errorBreakdown && Object.values(stats.errorBreakdown).some(count => count > 0) && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
-            <div className="text-sm font-medium text-red-800 mb-2">Error Breakdown</div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mb-3">
+            <div className="text-sm font-medium text-red-400 mb-2">Error Breakdown</div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-red-300">
               {stats.errorBreakdown.validation > 0 && (
-                <div className="text-red-700">Validation: {stats.errorBreakdown.validation}</div>
+                <div>Validation: {stats.errorBreakdown.validation}</div>
               )}
               {stats.errorBreakdown.network > 0 && (
-                <div className="text-red-700">Network: {stats.errorBreakdown.network}</div>
+                <div>Network: {stats.errorBreakdown.network}</div>
               )}
               {stats.errorBreakdown['rate-limit'] > 0 && (
-                <div className="text-red-700">Rate Limit: {stats.errorBreakdown['rate-limit']}</div>
+                <div>Rate Limit: {stats.errorBreakdown['rate-limit']}</div>
               )}
               {stats.errorBreakdown.parsing > 0 && (
-                <div className="text-red-700">Parsing: {stats.errorBreakdown.parsing}</div>
+                <div>Parsing: {stats.errorBreakdown.parsing}</div>
               )}
               {stats.errorBreakdown.other > 0 && (
-                <div className="text-red-700">Other: {stats.errorBreakdown.other}</div>
+                <div>Other: {stats.errorBreakdown.other}</div>
               )}
             </div>
           </div>
         )}
         
         {/* Controls */}
-        <div className="flex justify-between items-center mb-3">
-          <h3 className="text-sm font-medium text-gray-700">Live Request Feed</h3>
+        <div className="flex justify-between items-center mb-1">
+          <h3 className="text-sm font-semibold text-foreground">Live Request Feed</h3>
           <Button 
             onClick={clearHistory} 
-            variant="outline" 
+            variant="ghost" 
             size="sm"
-            className="flex items-center gap-1"
+            className="flex items-center gap-1.5 h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
           >
             <Trash2 className="w-3 h-3" />
             Clear
@@ -748,102 +904,69 @@ export default function ApiMonitor() {
         
         {/* Request Feed */}
         <ScrollArea className="h-96">
-          <div className="space-y-2">
-            {requests.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                No API requests yet. Start using the app to see requests here.
-              </div>
-            ) : (
-              requests.map((request, index) => (
-                <div 
-                  key={`${request.id}-${index}-${request.timestamp}`}
-                  className={`border rounded-lg p-3 ${statusColors[request.status]}`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
+          {requests.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              No API requests yet. Start using the app to see requests here.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[40px]"></TableHead>
+                  <TableHead className="w-[90px]">Service</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="w-[80px]">Duration</TableHead>
+                  <TableHead className="w-[100px]">Time</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {requests.map((request, index) => (
+                  <TableRow 
+                    key={`${request.id}-${index}-${request.timestamp}`}
+                    className={`${statusColors[request.status]} hover:bg-muted/30`}
+                  >
+                    <TableCell className="py-2">
                       {statusIcons[request.status]}
-                      <Badge className={serviceColors[request.service]}>
-                        {request.service.toUpperCase()}
-                      </Badge>
-                      <span className="text-sm font-mono text-gray-700 truncate">
-                        {request.method} {request.endpoint}
+                    </TableCell>
+                    <TableCell className="py-2">
+                      <span className="text-xs font-medium text-foreground">
+                        {formatApiName(request.service)}
                       </span>
-                    </div>
-                    
-                    <div className="flex items-center gap-2 text-xs text-gray-500 shrink-0 ml-2">
-                      {request.duration && (
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
+                    </TableCell>
+                    <TableCell className="py-2">
+                      <div className="space-y-0.5">
+                        <div className="text-xs text-foreground">
+                          {getRequestSummary(request)}
+                        </div>
+                        <div className="text-xs text-muted-foreground font-mono">
+                          {request.method} {request.endpoint}
+                        </div>
+                        {request.error && (
+                          <div className="text-xs text-red-400 mt-1">
+                            {request.error}
+                          </div>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-2">
+                      {request.duration ? (
+                        <span className="text-xs text-muted-foreground">
                           {request.duration}ms
                         </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
                       )}
-                      <span>
-                        {formatDistanceToNow(new Date(request.timestamp), { addSuffix: true })}
+                    </TableCell>
+                    <TableCell className="py-2">
+                      <span className="text-xs text-muted-foreground">
+                        {formatTimeAgo(request.timestamp)}
                       </span>
-                    </div>
-                  </div>
-                  
-                  {request.error && (
-                    <div className="mt-2 text-xs text-red-600 bg-red-50 p-2 rounded border">
-                      {request.error}
-                    </div>
-                  )}
-                  
-                  {/* Human-readable request summary */}
-                  <div className="mt-2 text-sm font-medium text-gray-800">
-                    {getRequestSummary(request)}
-                  </div>
-                  
-                  {/* Enhanced context display */}
-                  {(request.context || request.purpose || request.triggeredBy) && (
-                    <div className="mt-2 text-xs text-gray-700 bg-gray-50 p-2 rounded border">
-                      {request.context && (
-                        <div className="font-medium text-blue-700 mb-1">
-                          {formatContext(request.context)}
-                        </div>
-                      )}
-                      {request.purpose && (
-                        <div className="text-gray-600 mb-1">
-                          {request.purpose}
-                        </div>
-                      )}
-                      {request.triggeredBy && (
-                        <div className="text-gray-500 text-xs">
-                          Triggered by: {request.triggeredBy}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  
-                  {/* Request data display - formatted by service type */}
-                  {request.requestData && (
-                    <div className="mt-2 text-xs text-gray-600">
-                      {renderRequestDetails(request)}
-                    </div>
-                  )}
-                  
-                  {/* Success/Error result summary */}
-                  {request.status === 'success' && request.requestData && (
-                    <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
-                      {renderSuccessResult(request)}
-                    </div>
-                  )}
-                  
-                  {request.status === 'error' && request.error && (
-                    <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
-                      <div className="font-medium text-red-800 text-sm mb-1">Error Details</div>
-                      <div className="text-xs text-red-700">{request.error}</div>
-                      {request.errorCategory && (
-                        <div className="mt-1 text-xs text-red-600">
-                          Category: <span className="font-medium">{request.errorCategory}</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </ScrollArea>
       </DialogContent>
     </Dialog>

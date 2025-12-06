@@ -254,7 +254,7 @@ export class NewsAnalyzerService {
     // Define schema for JSON response
     const result = await provider.generateJson({
       prompt,
-      model: 'gpt-4o-mini', // Default fallback, provider might ignore if using different model
+      model: 'gpt-5-mini', // Default fallback, provider might ignore if using different model
       temperature: 0.2
     });
 

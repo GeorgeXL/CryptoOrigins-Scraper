@@ -17,6 +17,12 @@ export interface IAiProvider {
   generateJson<T>(options: JsonCompletionOptions<T>): Promise<T>;
   
   /**
+   * Simple completion method that returns just the text
+   * (convenience wrapper around generateCompletion)
+   */
+  complete(prompt: string, options?: Partial<CompletionOptions>): Promise<string>;
+  
+  /**
    * Check if the provider is healthy/available
    */
   healthCheck(): Promise<boolean>;
@@ -36,6 +42,14 @@ export interface IAiProvider {
   
   // Final Analysis verification (Gemini and Perplexity)
   verifyEventDate?(summary: string, date: string): Promise<{ approved: boolean; reasoning: string }>;
+  
+  // Battle feature: Select relevant article IDs from a list of articles
+  // Returns object with articleIds array and status to distinguish errors from "no matches"
+  selectRelevantArticles?(articles: Array<{ id: string; title: string; summary?: string }>, date: string): Promise<{
+    articleIds: string[];
+    status: 'success' | 'no_matches' | 'error';
+    error?: string;
+  }>;
 }
 
 export interface CompletionOptions {
@@ -45,10 +59,13 @@ export interface CompletionOptions {
   maxTokens?: number;
   temperature?: number;
   stop?: string[];
+  context?: string; // Optional context for API monitoring
+  purpose?: string; // Optional purpose description for API monitoring
 }
 
 export interface JsonCompletionOptions<T> extends CompletionOptions {
   schema?: z.ZodType<T>; // Optional runtime validation
+  monitorId?: string; // Optional existing monitor request ID to update instead of creating new
 }
 
 export interface CompletionResult {

@@ -1,7 +1,9 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, RefreshCw, Bug } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertTriangle, RefreshCw, Bug, Home } from "lucide-react";
+import { Link } from "wouter";
 
 interface Props {
   children: ReactNode;
@@ -56,54 +58,69 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-slate-50 p-4 flex items-center justify-center">
-          <Card className="w-full max-w-2xl">
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2 text-red-600">
-                <AlertTriangle className="w-5 h-5" />
-                <span>Something went wrong</span>
-              </CardTitle>
+        <div className="min-h-screen w-full flex items-center justify-center bg-background p-4">
+          <Card className="w-full max-w-2xl border-border bg-card">
+            <CardHeader className="text-center">
+              <div className="flex justify-center mb-4">
+                <div className="rounded-full bg-destructive/10 dark:bg-destructive/20 p-3">
+                  <AlertTriangle className="h-12 w-12 text-destructive" />
+                </div>
+              </div>
+              <CardTitle className="text-3xl font-bold text-foreground">Something went wrong</CardTitle>
+              <CardDescription className="text-base mt-2 text-muted-foreground">
+                The application encountered an unexpected error
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <p className="text-slate-600">
-                The application encountered an unexpected error. Here are the details:
-              </p>
-              
               {this.state.error && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                  <h4 className="font-semibold text-red-800 mb-2">Error Message:</h4>
-                  <p className="text-red-700 font-mono text-sm">
+                <Alert variant="destructive" className="border-destructive/50 bg-destructive/10">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle className="text-destructive-foreground">Error Message</AlertTitle>
+                  <AlertDescription className="font-mono text-sm mt-2 text-destructive-foreground/90">
                     {this.state.error.message}
-                  </p>
-                </div>
+                  </AlertDescription>
+                </Alert>
               )}
 
               {this.state.errorInfo && (
-                <details className="bg-slate-100 border border-slate-200 rounded-lg p-4">
-                  <summary className="cursor-pointer font-semibold text-slate-700 flex items-center space-x-2">
-                    <Bug className="w-4 h-4" />
-                    <span>Technical Details (Click to expand)</span>
+                <details className="group">
+                  <summary className="cursor-pointer list-none">
+                    <div className="flex items-center justify-between p-4 bg-muted/50 dark:bg-muted/30 rounded-lg hover:bg-muted/70 dark:hover:bg-muted/50 transition-colors border border-border">
+                      <div className="flex items-center space-x-2">
+                        <Bug className="h-4 w-4 text-muted-foreground" />
+                        <span className="font-medium text-sm text-foreground">Technical Details</span>
+                      </div>
+                      <span className="text-xs text-muted-foreground group-open:hidden">Click to expand</span>
+                    </div>
                   </summary>
-                  <div className="mt-3 text-xs font-mono text-slate-600 whitespace-pre-wrap">
-                    {this.state.errorInfo.componentStack}
+                  <div className="mt-2 p-4 bg-muted/30 dark:bg-muted/20 rounded-lg border border-border">
+                    <div className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-words">
+                      {this.state.errorInfo.componentStack}
+                    </div>
                   </div>
                 </details>
               )}
-
-              <div className="flex space-x-3 pt-4">
-                <Button onClick={this.handleReset} variant="outline">
-                  Try Again
-                </Button>
-                <Button onClick={this.handleReload} className="flex items-center space-x-2">
-                  <RefreshCw className="w-4 h-4" />
-                  <span>Reload Page</span>
-                </Button>
-              </div>
-
-              <div className="text-sm text-slate-500 mt-4">
-                <p>If this problem persists, check the browser console for more details.</p>
-              </div>
             </CardContent>
+            <CardFooter className="flex flex-col sm:flex-row gap-3 justify-center">
+              <Button onClick={this.handleReset} variant="outline" className="w-full sm:w-auto">
+                Try Again
+              </Button>
+              <Button onClick={this.handleReload} className="w-full sm:w-auto">
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Reload Page
+              </Button>
+              <Link href="/">
+                <Button variant="ghost" className="w-full sm:w-auto">
+                  <Home className="w-4 h-4 mr-2" />
+                  Go Home
+                </Button>
+              </Link>
+            </CardFooter>
+            <div className="px-6 pb-6">
+              <p className="text-xs text-center text-muted-foreground">
+                If this problem persists, check the browser console for more details.
+              </p>
+            </div>
           </Card>
         </div>
       );

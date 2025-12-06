@@ -1,8 +1,6 @@
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
-import { VariantProps, cva } from "class-variance-authority"
-import { PanelLeft } from "lucide-react"
-
+import { cva, type VariantProps } from "class-variance-authority"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -22,6 +20,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { ViewVerticalIcon } from "@radix-ui/react-icons"
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state"
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
@@ -244,12 +243,12 @@ const Sidebar = React.forwardRef<
           className={cn(
             "fixed inset-y-0 z-10 hidden h-svh w-[--sidebar-width] transition-[left,right,width] duration-200 ease-linear md:flex",
             side === "left"
-              ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
+              ? "left-4 sm:left-6 lg:left-8 group-data-[collapsible=offcanvas]:-left-[calc(var(--sidebar-width)+1rem)] sm:group-data-[collapsible=offcanvas]:-left-[calc(var(--sidebar-width)+1.5rem)] lg:group-data-[collapsible=offcanvas]:-left-[calc(var(--sidebar-width)+2rem)]"
               : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
             // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)_+_theme(spacing.4)_+2px)]"
-              : "group-data-[collapsible=icon]:w-[--sidebar-width-icon] group-data-[side=left]:border-r group-data-[side=right]:border-l",
+              : "group-data-[collapsible=icon]:w-[--sidebar-width-icon]",
             className
           )}
           {...props}
@@ -286,7 +285,7 @@ const SidebarTrigger = React.forwardRef<
       }}
       {...props}
     >
-      <PanelLeft />
+      <ViewVerticalIcon />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   )
@@ -698,7 +697,7 @@ const SidebarMenuSub = React.forwardRef<
     ref={ref}
     data-sidebar="menu-sub"
     className={cn(
-      "mx-3.5 flex min-w-0 translate-x-px flex-col gap-1 border-l border-sidebar-border px-2.5 py-0.5",
+      "mx-3.5 flex min-w-0 translate-x-px flex-col gap-1 border-l border-input px-2.5 py-0.5",
       "group-data-[collapsible=icon]:hidden",
       className
     )}

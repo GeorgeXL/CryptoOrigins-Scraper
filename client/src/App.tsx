@@ -3,21 +3,19 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ThemeProvider } from "@/components/ThemeProvider";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { GlobalAnalysisProvider } from "@/contexts/GlobalAnalysisContext";
 
 import HomePage from "@/pages/HomePage";
 import MonthView from "@/pages/MonthView";
+import MonthlyView from "@/pages/MonthlyView";
 import DayAnalysis from "@/pages/DayAnalysis";
-import EventCockpit from "@/pages/EventCockpit";
-import Cleaner from "@/pages/Cleaner";
-import TagsBrowser from "@/pages/TagsBrowser";
-import TagsManager from "@/pages/TagsManager";
 import TagCleanupTool from "@/pages/TagCleanupTool";
+import TagManagerPage from "@/pages/TagManagerPage";
 import ConflictCockpit from "@/pages/ConflictCockpit";
-import Settings from "@/pages/Settings";
 import IsolatedLab from "@/pages/IsolatedLab";
+import Admin from "@/pages/Admin";
+import EventsManager from "@/pages/EventsManager";
 import NotFound from "@/pages/not-found";
 import AppLayout from "@/components/AppLayout";
 
@@ -26,17 +24,17 @@ function Router() {
     <AppLayout>
       <Switch>
         <Route path="/" component={HomePage} />
+        <Route path="/monthly" component={MonthlyView} />
         <Route path="/month/:year/:month" component={MonthView} />
         <Route path="/day/:date" component={DayAnalysis} />
-        <Route path="/event-cockpit" component={EventCockpit} />
-        <Route path="/cleaner" component={Cleaner} />
-        <Route path="/tags-browser" component={TagsBrowser} />
-        <Route path="/tags-manager" component={TagsManager} />
+        <Route path="/events" component={EventsManager} />
+        <Route path="/tags-browser" component={HomePage} />
         <Route path="/tags-cleanup" component={TagCleanupTool} />
+        <Route path="/tags-manager" component={TagManagerPage} />
         <Route path="/conflict/:sourceDate" component={ConflictCockpit} />
         <Route path="/violation/:date" component={ConflictCockpit} />
         <Route path="/fact-check/:date" component={ConflictCockpit} />
-        <Route path="/settings" component={Settings} />
+        <Route path="/admin" component={Admin} />
         <Route path="/lab/isolated" component={IsolatedLab} />
         <Route component={NotFound} />
       </Switch>
@@ -47,16 +45,14 @@ function Router() {
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="light" storageKey="bitcoin-news-theme">
-        <QueryClientProvider client={queryClient}>
-          <GlobalAnalysisProvider>
-            <TooltipProvider>
-              <Toaster />
-              <Router />
-            </TooltipProvider>
-          </GlobalAnalysisProvider>
-        </QueryClientProvider>
-      </ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <GlobalAnalysisProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Router />
+          </TooltipProvider>
+        </GlobalAnalysisProvider>
+      </QueryClientProvider>
     </ErrorBoundary>
   );
 }

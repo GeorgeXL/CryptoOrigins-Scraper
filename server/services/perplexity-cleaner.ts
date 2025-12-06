@@ -31,9 +31,21 @@ class PerplexityCleanerService {
 
       const correctDateText = contradictedAnalysis.perplexityCorrectDateText;
 
+      // Validate correctDateText is a valid date format before using it
+      let validCorrectDate: string | null = null;
       if (correctDateText) {
+        // Check if it's a valid date format (YYYY-MM-DD or contains YYYY-MM-DD)
+        const dateMatch = correctDateText.match(/\d{4}-\d{2}-\d{2}/);
+        if (dateMatch) {
+          validCorrectDate = dateMatch[0];
+        } else {
+          console.log(`[PerplexityCleaner] Invalid date format in correctDateText: "${correctDateText}", will find new event instead`);
+        }
+      }
+
+      if (validCorrectDate) {
         // Case 1: A corrected date is suggested - compare summaries and decide
-        await this.handleContradictionWithCorrection(contradictedAnalysis, correctDateText);
+        await this.handleContradictionWithCorrection(contradictedAnalysis, validCorrectDate);
         apiMonitor.updateRequest(monitorId, { status: 'success', duration: Date.now() - startTime });
         return { 
           success: true, 
@@ -342,20 +354,85 @@ class PerplexityCleanerService {
     tier: 'bitcoin' | 'crypto' | 'macro',
     validationReasoning: string
   ): Promise<void> {
-    // Generate new summary using OpenAI
-    const newSummary = await aiService.getProvider('openai').generateCompletion({
-      prompt: `Summarize the following article text in one sentence for a historical timeline: Title: "${article.title}" Text: "${article.text || article.summary || ''}"`,
-      model: 'gpt-3.5-turbo',
-      maxTokens: 100,
+    // Generate new summary using OpenAI with strict requirements
+    const articleText = (article.text || article.summary || '').substring(0, 2000);
+      const newSummary = await aiService.getProvider('openai').generateCompletion({
+        prompt: `Create a summary for a historical timeline entry from this article.
+
+Title: "${article.title}"
+Text: "${articleText}"
+
+CRITICAL REQUIREMENTS:
+1. ⚠️ CHARACTER COUNT IS MANDATORY: Summary MUST be EXACTLY 100-110 characters. Count every character including spaces. Verify the character count before responding. This is a strict requirement that cannot be violated.
+2. NO DATES anywhere in summary (no years, months, days, "On [date]", "In [year]")
+3. Use active voice and present tense: "Bitcoin reaches $1000" not "Bitcoin reached $1000"
+4. Focus on what actually HAPPENED, not what articles discussed
+5. NO ending punctuation (no periods/full stops, colons, semicolons, dashes). We are NOT interested in full stops at the end - do not include them.
+6. Be conversational yet professional
+7. Emphasize the actual event/outcome over the reporting
+
+IMPORTANT: After writing your summary, count the characters. If it's not between 100-110 characters, rewrite it until it is. Return ONLY the summary text, nothing else.`,
+      model: 'gpt-5-mini',
+      maxTokens: 150,
       temperature: 0.2
     });
 
+    // Validate and adjust length if needed (up to 3 rounds)
+    let finalSummary = newSummary.text.trim();
+    let length = finalSummary.length;
+    let adjustmentRound = 0;
+    const maxAdjustmentRounds = 3;
+    
+    while ((length < 100 || length > 110) && adjustmentRound < maxAdjustmentRounds) {
+      adjustmentRound++;
+      console.log(`⚠️ Summary length ${length} chars (round ${adjustmentRound}/${maxAdjustmentRounds}), adjusting: "${finalSummary}"`);
+      
+      if (length < 100) {
+        // Add more detail
+        const adjustPrompt = `⚠️ CRITICAL: The following summary is too short (${length} chars). You MUST expand it to exactly 100-110 characters. Count every character including spaces. Verify the character count before responding.
+
+Current: "${finalSummary}"
+
+Return ONLY the expanded summary (100-110 chars), nothing else.`;
+        const adjusted = await aiService.getProvider('openai').generateCompletion({
+          prompt: adjustPrompt,
+          model: 'gpt-5-mini',
+          maxTokens: 150,
+          temperature: 0.2
+        });
+        finalSummary = adjusted.text.trim();
+        length = finalSummary.length;
+      } else if (length > 110) {
+        // Trim it down
+        const adjustPrompt = `⚠️ CRITICAL: The following summary is too long (${length} chars). You MUST shorten it to exactly 100-110 characters. Count every character including spaces. Verify the character count before responding.
+
+Current: "${finalSummary}"
+
+Return ONLY the shortened summary (100-110 chars), nothing else.`;
+        const adjusted = await aiService.getProvider('openai').generateCompletion({
+          prompt: adjustPrompt,
+          model: 'gpt-5-mini',
+          maxTokens: 150,
+          temperature: 0.2
+        });
+        finalSummary = adjusted.text.trim();
+        length = finalSummary.length;
+      }
+    }
+    
+    // Final validation
+    if (length < 100 || length > 110) {
+      console.warn(`⚠️ Final summary still ${length} chars after ${adjustmentRound} adjustment rounds: "${finalSummary}"`);
+    } else {
+      console.log(`✅ Summary generated: ${length} chars (after ${adjustmentRound} round(s)) - "${finalSummary}"`);
+    }
+
     await storage.updateAnalysis(analysis.date, {
-      summary: newSummary.text,
+      summary: finalSummary,
       reasoning: `New event chosen by Perplexity/OpenAI after resolving contradiction. ${validationReasoning}. Original article URL: ${article.url}`,
       isManualOverride: false, // AI-driven automated cleanup, not manual entry
       perplexityVerdict: 'verified',
-      perplexityReasoning: `Original event was incorrect. New date-specific event selected from ${tier} tier: ${newSummary.text}`,
+      perplexityReasoning: `Original event was incorrect. New date-specific event selected from ${tier} tier: ${finalSummary}`,
       perplexityCorrectDateText: null, // Clear the incorrect suggestion
       topArticleId: article.id,
       tierUsed: tier,

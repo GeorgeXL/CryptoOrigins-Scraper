@@ -1,0 +1,40 @@
+{
+  "sessionId": "5a628f24-ba9a-49a4-9155-44a25e27de7f",
+  "state": {
+    "sessionId": "5a628f24-ba9a-49a4-9155-44a25e27de7f",
+    "status": "running",
+    "currentPass": 1,
+    "issuesFound": 0,
+    "issuesFixed": 0,
+    "issuesFlagged": 0,
+    "totalCost": 0,
+    "qualityScore": 0,
+    "startTime": "2025-11-30T11:45:16.104Z",
+    "lastUpdateTime": "2025-11-30T11:45:20.050Z",
+    "currentModule": "validator",
+    "progressMessage": "Validating tags for Bitcoin/Web3 relevance..."
+  },
+  "config": {
+    "maxPasses": 1,
+    "maxRuntimeHours": 4,
+    "maxBudget": 35,
+    "targetQuality": 95,
+    "convergenceThreshold": 0.5,
+    "convergencePasses": 3,
+    "autoApproveThreshold": 90,
+    "flagThreshold": 70,
+    "rejectThreshold": 50,
+    "batchSize": 100,
+    "parallelWorkers": 5,
+    "enableValidator": true,
+    "enableDeduper": true,
+    "enableGapFiller": true,
+    "enableCategoryFixer": true,
+    "enableQualityImprover": true,
+    "humanCheckpointEveryNPasses": 3,
+    "humanCheckpointTimeout": 60,
+    "testMode": true
+  },
+  "timestamp": "2025-11-30T11:47:20.052Z",
+  "moduleProgress": {}
+}

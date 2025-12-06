@@ -21,7 +21,7 @@ export interface CategorizationResult {
  */
 function getTaxonomyStructure(): string {
   return `
-TAXONOMY STRUCTURE (14 Main Categories):
+TAXONOMY STRUCTURE (11 Main Categories):
 
 1. 🪙 Bitcoin (bitcoin)
    - 1.1 Bitcoin (BTC) - The Currency
@@ -33,228 +33,165 @@ TAXONOMY STRUCTURE (14 Main Categories):
      - 1.2.5 Layer 2 & Scaling
      - 1.2.6 Mining & Consensus
    - 1.3 Bitcoin Forks
-   - 1.4 Bitcoin-Specific Services (wallets, lightning services, etc.)
+   - 1.4 Bitcoin Companies & Services
 
-2. 🔗 Blockchain Platforms (blockchain-platforms)
-   - 2.1 Smart Contract Platforms
-     - 2.1.1 Ethereum & EVM Chains
-     - 2.1.2 Alternative Layer 1s
-     - 2.1.3 Layer 2 Solutions
-   - 2.2 Platform Tokens
-   - 2.3 Consensus Mechanisms
-   - 2.4 Interoperability & Bridges
+2. 💰 Money & Economics (money-economics)
+   - 2.1 Other Cryptocurrencies (altcoins, payment coins, privacy coins, meme coins)
+   - 2.2 Stablecoins (USDT, USDC, DAI, etc.)
+   - 2.3 DeFi Tokens (Uniswap, Aave, Compound, etc.)
+   - 2.4 Metaverse & Gaming (NFT projects, gaming tokens)
+   - 2.5 Fiat Currencies (USD, EUR, CNY, etc.)
+   - 2.6 Commodities (Gold, oil, etc.)
+   - 2.7 Central Banks (Federal Reserve, ECB, etc.)
+   - 2.8 Prices & Values
 
-3. 💰 Digital Assets & Tokens (digital-assets)
-   - 3.1 Cryptocurrencies
-     - 3.1.1 Payment Coins
-     - 3.1.2 Privacy Coins
-     - 3.1.3 Meme Coins
-   - 3.2 Stablecoins
-   - 3.3 DeFi Tokens
-     - 3.3.1 DEX Tokens
-     - 3.3.2 Lending Protocol Tokens
-     - 3.3.3 Yield & Derivatives
-   - 3.4 NFTs & Digital Collectibles
-     - 3.4.1 NFT Standards
-     - 3.4.2 Major Collections
-     - 3.4.3 Digital Art & Metaverse Assets
-   - 3.5 Gaming & Metaverse Tokens
-   - 3.6 Governance Tokens
+3. ⚡ Technology Concepts (technology)
+   - 3.1 Blockchain & Core Concepts
+   - 3.2 DeFi & Web3 Concepts
+   - 3.3 Security & Privacy
+   - 3.4 Wallets & Storage
+   - 3.5 Technical Standards
 
-4. ⚡ Technology & Concepts (technology)
-   - 4.1 Blockchain Core Concepts
-     - 4.1.1 Cryptography & Security
-     - 4.1.2 Distributed Systems
-     - 4.1.3 Data Structures
-   - 4.2 DeFi Concepts
-     - 4.2.1 Automated Market Makers
-     - 4.2.2 Lending & Borrowing
-     - 4.2.3 Derivatives & Synthetic Assets
-     - 4.2.4 Yield Farming & Staking
-   - 4.3 Web3 & Decentralization
-     - 4.3.1 Decentralized Storage
-     - 4.3.2 Decentralized Identity
-     - 4.3.3 DAOs & Governance
-   - 4.4 Security & Privacy
-     - 4.4.1 Cryptographic Techniques
-     - 4.4.2 Privacy Technologies
-     - 4.4.3 Security Best Practices
-   - 4.5 Wallets & Key Management
-   - 4.6 Technical Standards & Protocols
+4. 🏢 Organizations & Companies (organizations)
+   - 4.1 Exchanges
+     - 4.1.1 Major Centralized Exchanges
+     - 4.1.2 Decentralized Exchanges (DEX)
+     - 4.1.3 Defunct Exchanges
+   - 4.2 Financial Institutions
+     - 4.2.1 Investment Banks
+     - 4.2.2 Commercial Banks
+     - 4.2.3 Asset Managers
+     - 4.2.4 Stock Exchanges
+   - 4.3 Mining Operations
+     - 4.3.1 Public Mining Companies
+     - 4.3.2 Mining Hardware Manufacturers
+     - 4.3.3 Mining Pools
+   - 4.4 Payment & Infrastructure
+     - 4.4.1 Payment Processors
+     - 4.4.2 Custody & Wallets
+     - 4.4.3 Blockchain Infrastructure
+     - 4.4.4 Stablecoin Issuers
+   - 4.5 DeFi Platforms
+   - 4.6 NFT Marketplaces
+   - 4.7 Technology Companies
+     - 4.7.1 Big Tech
+     - 4.7.2 Social Media & Communication
+     - 4.7.3 Fintech & Payments
+     - 4.7.4 E-commerce & Retail
+     - 4.7.5 Corporate Bitcoin Holders
+   - 4.8 Media & Analytics
+   - 4.9 Development & Research
+   - 4.10 Other Organizations
 
-5. 🏢 Companies & Organizations (organizations)
-   - 5.1 Exchanges
-     - 5.1.1 Centralized Exchanges
-     - 5.1.2 Decentralized Exchange Platforms
-     - 5.1.3 Defunct Exchanges
-   - 5.2 DeFi Protocols & Platforms
-     - 5.2.1 Lending Platforms
-     - 5.2.2 DEX Protocols
-     - 5.2.3 Derivatives Platforms
-   - 5.3 NFT & Gaming Platforms
-     - 5.3.1 NFT Marketplaces
-     - 5.3.2 Gaming Platforms
-     - 5.3.3 Metaverse Projects
-   - 5.4 Infrastructure & Services
-     - 5.4.1 Payment Processors
-     - 5.4.2 Custody Solutions
-     - 5.4.3 Node & API Providers
-     - 5.4.4 Oracles
-     - 5.4.5 Stablecoin Issuers
-   - 5.5 Mining & Hardware
-     - 5.5.1 Public Mining Companies
-     - 5.5.2 Hardware Manufacturers
-     - 5.5.3 Mining Pools
-   - 5.6 Financial Institutions
-     - 5.6.1 Crypto-Native Financial Services
-     - 5.6.2 Traditional Finance Integration
-       - Investment Banks
-       - Commercial Banks
-       - Asset Managers
-       - Stock Exchanges
-     - 5.6.3 Corporate Bitcoin/Crypto Holders
-   - 5.7 Technology Companies
-     - 5.7.1 Big Tech & Crypto
-     - 5.7.2 Social Media & Web3
-     - 5.7.3 Fintech Companies
-     - 5.7.4 E-commerce & Retail
-   - 5.8 Development & Research
-     - 5.8.1 Core Development Teams
-     - 5.8.2 Research Organizations
-     - 5.8.3 Venture Capital & Incubators
-   - 5.9 Media & Analytics
-     - 5.9.1 News & Media Outlets
-     - 5.9.2 Analytics Platforms
-     - 5.9.3 Data Providers
-   - 5.10 Industry Associations & Advocacy
+5. 👥 People (people)
+   - 5.1 Crypto & Tech Figures
+   - 5.2 Government Officials
+   - 5.3 Investors & Analysts
+   - 5.4 Controversial & Famous Figures
 
-6. 👥 People (people)
-   - 6.1 Founders & Developers
-     - 6.1.1 Bitcoin Contributors
-     - 6.1.2 Platform Founders
-     - 6.1.3 Protocol Developers
-   - 6.2 Business Leaders & Executives
-   - 6.3 Investors & Traders
-     - 6.3.1 Institutional Investors
-     - 6.3.2 Retail Influencers
-     - 6.3.3 Analysts & Researchers
-   - 6.4 Government & Regulators
-   - 6.5 Academics & Researchers
-   - 6.6 Media & Influencers
-   - 6.7 Controversial Figures
+6. ⚖️ Regulation & Government (regulation-law)
+   - 6.1 Regulatory Bodies
+   - 6.2 Laws & Frameworks
+   - 6.3 Government Initiatives
 
-7. ⚖️ Regulation & Law (regulation-law)
-   - 7.1 Regulatory Bodies
-     - 7.1.1 US Regulators
-     - 7.1.2 International Regulators
-     - 7.1.3 Self-Regulatory Organizations
-   - 7.2 Laws & Legal Frameworks
-     - 7.2.1 Securities Law
-     - 7.2.2 Tax Law
-     - 7.2.3 AML/KYC Regulations
-     - 7.2.4 Consumer Protection
-   - 7.3 Government Initiatives
-     - 7.3.1 CBDCs
-     - 7.3.2 National Crypto Strategies
-     - 7.3.3 Blockchain Adoption
-   - 7.4 Legal Cases & Precedents
+7. 🌍 Geography & Markets (markets-geography)
+   - 7.1 Countries & Regions
+   - 7.2 Cities & Special Locations
 
-8. 🌍 Markets & Geography (markets-geography)
-   - 8.1 Countries & Regions
-     - 8.1.1 Crypto-Friendly Jurisdictions
-     - 8.1.2 Major Markets
-     - 8.1.3 Banned/Restricted Regions
-   - 8.2 Cities & Crypto Hubs
-   - 8.3 Special Economic Zones
+8. 🎓 Education & Community (education-community)
+   - 8.1 Development Organizations
+   - 8.2 Community Forums & Platforms
+   - 8.3 Research & Academia
 
-9. 💵 Traditional Finance & Economics (traditional-finance)
-   - 9.1 Fiat Currencies
-   - 9.2 Central Banks
-   - 9.3 Commodities & Traditional Assets
-   - 9.4 Financial Instruments
-     - 9.4.1 ETFs & Investment Products
-     - 9.4.2 Futures & Options
-     - 9.4.3 Derivatives
-   - 9.5 Economic Concepts & Theory
+9. 🔒 Crime & Security (crime-security)
+   - 9.1 Dark Web & Criminal Marketplaces
+   - 9.2 Major Crimes & Scams
+     - 9.2.1 Ponzi Schemes
+     - 9.2.2 Major Hacks
+     - 9.2.3 Fraud Cases
+   - 9.3 Law Enforcement Actions
+   - 9.4 Security Concepts
 
-10. 📊 Markets & Trading (markets-trading)
-    - 10.1 Market Concepts
-      - 10.1.1 Price Discovery
+10. 🏷️ Topics & Themes (topics)
+    - 10.1 Market Topics
+      - 10.1.1 Price & Valuation
       - 10.1.2 Market Cycles
-      - 10.1.3 Trading Strategies
-    - 10.2 Market Events
-      - 10.2.1 Bull Markets
-      - 10.2.2 Bear Markets & Crashes
-      - 10.2.3 Halvings & Major Events
-    - 10.3 Market Data & Metrics
+      - 10.1.3 Trading Activity
+    - 10.2 Regulatory Topics
+    - 10.3 Adoption & Integration
+      - 10.3.1 Institutional Adoption
+      - 10.3.2 Retail Adoption
+      - 10.3.3 Government Adoption
+    - 10.4 Technology Topics
+    - 10.5 Mining Topics
+    - 10.6 Macroeconomic Topics
 
-11. 🔒 Security & Crime (security-crime)
-    - 11.1 Security Incidents
-      - 11.1.1 Exchange Hacks
-      - 11.1.2 Protocol Exploits
-      - 11.1.3 Bridge Attacks
-    - 11.2 Fraud & Scams
-      - 11.2.1 Ponzi Schemes
-      - 11.2.2 Rug Pulls
-      - 11.2.3 ICO Scams
-      - 11.2.4 Social Engineering
-    - 11.3 Dark Web & Criminal Use
-      - 11.3.1 Dark Markets
-      - 11.3.2 Ransomware
-      - 11.3.3 Money Laundering
-    - 11.4 Law Enforcement & Investigations
-    - 11.5 Security Tools & Practices
+11. 📝 Miscellaneous (miscellaneous)
+    - 11.1 Uncategorized
 
-12. 🎓 Education & Community (education-community)
-    - 12.1 Educational Resources
-      - 12.1.1 Online Courses & Certifications
-      - 12.1.2 Documentation & Wikis
-      - 12.1.3 Books & Publications
-    - 12.2 Community & Forums
-      - 12.2.1 Social Platforms
-      - 12.2.2 Developer Communities
-      - 12.2.3 Regional Communities
-    - 12.3 Events & Conferences
-    - 12.4 Academic Research & Institutions
+IMPORTANT CATEGORIZATION GUIDELINES:
 
-13. 📜 History & Culture (history-culture)
-    - 13.1 Historical Milestones
-      - 13.1.1 Pre-Bitcoin History
-      - 13.1.2 Bitcoin Era (2009-2015)
-      - 13.1.3 ICO Era (2016-2018)
-      - 13.1.4 DeFi Summer (2020)
-      - 13.1.5 NFT Boom (2021)
-      - 13.1.6 Recent Developments
-    - 13.2 Cultural Phenomena
-      - 13.2.1 Memes & Culture
-      - 13.2.2 Crypto Art & Expression
-      - 13.2.3 Community Movements
-    - 13.3 Philosophical & Social Aspects
+**Cryptocurrencies & Tokens:**
+- Ethereum, Litecoin, Ripple, Cardano, etc. → money-economics (2.1)
+- Stablecoins (USDT, USDC, DAI) → money-economics (2.2)
+- DeFi tokens (UNI, AAVE, COMP) → money-economics (2.3)
+- NFT projects, gaming tokens → money-economics (2.4)
 
-14. 📝 Miscellaneous (miscellaneous)
-    - 14.1 Uncategorized
+**Organizations:**
+- Exchanges (Binance, Coinbase) → organizations (4.1)
+- Banks, investment firms → organizations (4.2)
+- Payment companies (PayPal, Visa) → organizations (4.4.1)
+- Tech companies (Apple, Microsoft) → organizations (4.7)
+- Media companies (HBO, CNN) → organizations (4.8)
+- Sports teams (Liverpool, NFL) → organizations (4.10)
+
+**Topics (themes, not entities):**
+- "Bitcoin Price", "Regulation", "Adoption" → topics (10.x)
 
 INSTRUCTIONS:
 - Choose the most specific subcategory that accurately describes the tag
-- Use the exact category key (e.g., "bitcoin", "blockchain-platforms")
-- Provide the full subcategory path as an array (e.g., ["2.1", "2.1.1"] for nested subcategories)
-- If unsure, use "miscellaneous" with path ["14.1"]
+- Use the exact category key (e.g., "bitcoin", "money-economics", "organizations")
+- Provide the full subcategory path as an array (e.g., ["2.1"] or ["4.2", "4.2.1"])
+- If unsure, use "miscellaneous" with path ["11.1"]
 - Be precise with subcategory keys - they must match the structure exactly
 `;
 }
 
 /**
- * Categorize a single tag using AI
+ * Categorize a single tag using AI (without context - for backward compatibility)
+ * Uses Gemini by default
  */
 export async function categorizeTag(tagName: string, existingCategory?: string): Promise<CategorizationResult> {
+  return categorizeTagWithContext(tagName, [], existingCategory, 'gemini');
+}
+
+/**
+ * Categorize a single tag using AI with context from summaries
+ */
+export async function categorizeTagWithContext(
+  tagName: string,
+  summaries: string[],
+  existingCategory?: string,
+  providerName: 'openai' | 'gemini' = 'gemini'
+): Promise<CategorizationResult> {
   const taxonomyStructure = getTaxonomyStructure();
+  
+  // Use up to 3 summaries for context (to avoid token limits)
+  const contextSummaries = summaries.slice(0, 3);
+  const contextText = contextSummaries
+    .map((summary, idx) => `Summary ${idx + 1}:\n${summary}`)
+    .join('\n\n---\n\n');
+  
+  const contextSection = summaries.length > 0 
+    ? `\n\nCONTEXT - Here are news summaries where this tag appears:\n${contextText}\n\nUse the context above to understand how this tag is being used in the news summaries. This will help you categorize it accurately.`
+    : '';
   
   const prompt = `You are an expert at categorizing cryptocurrency and blockchain-related tags into a hierarchical taxonomy.
 
 ${taxonomyStructure}
 
 Tag to categorize: "${tagName}"
-${existingCategory ? `Current category: "${existingCategory}"` : ''}
+${existingCategory ? `Current category: "${existingCategory}"` : ''}${contextSection}
 
 Analyze this tag and determine:
 1. The most appropriate main category (use the category key, e.g., "bitcoin", "blockchain-platforms")
@@ -301,25 +238,30 @@ Return ONLY a JSON object in this exact format:
   "reasoning": "Brief explanation of why this categorization fits"
 }`;
 
+  // Determine model name based on provider
+  const modelName = providerName === 'gemini' ? 'gemini-2.0-flash' : 'gpt-4o-mini';
+  const endpoint = providerName === 'gemini' ? '/models/generateContent' : '/chat/completions';
+  
   // Log to API monitor
   const monitorId = apiMonitor.logRequest({
-    service: 'openai',
-    endpoint: '/chat/completions',
+    service: providerName,
+    endpoint,
     method: 'POST',
     status: 'pending',
     context: 'tag-categorization',
     purpose: `Categorizing tag: "${tagName}"`,
     requestData: { 
-      model: 'gpt-4o-mini',
+      model: modelName,
       tagName,
-      existingCategory 
+      existingCategory,
+      hasContext: summaries.length > 0
     },
     tagName,
     tagCategory: existingCategory
   });
 
   try {
-    const provider = aiService.getProvider('openai');
+    const provider = aiService.getProvider(providerName);
     
     // Define Zod schema for validation
     const categorizationSchema = z.object({
@@ -335,6 +277,9 @@ Return ONLY a JSON object in this exact format:
       systemPrompt: 'You are a precise categorization assistant. Always return valid JSON.',
       schema: categorizationSchema,
       temperature: 0.3, // Lower temperature for more consistent categorization
+      monitorId, // Pass existing monitor ID so provider updates instead of creating new
+      context: 'tag-categorization',
+      purpose: `Categorizing tag: "${tagName}"`
     });
 
     const duration = Date.now() - startTime;
@@ -365,7 +310,7 @@ Return ONLY a JSON object in this exact format:
     // Fallback to miscellaneous if categorization fails
     const fallbackResult = {
       category: 'miscellaneous',
-      subcategoryPath: ['14.1'],
+      subcategoryPath: ['11.1'],
       confidence: 0.1,
       reasoning: `Categorization failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     };
@@ -424,5 +369,135 @@ export async function categorizeTags(
   }
 
   return results;
+}
+
+/**
+ * Fix subcategory path for a tag that already has the correct category
+ * This is used when category is correct but path is wrong (e.g., category="people" but path=["14.1"])
+ */
+export async function fixSubcategoryPath(
+  tagName: string,
+  lockedCategory: string,
+  currentPath: string[],
+  providerName: 'openai' | 'gemini' = 'gemini'
+): Promise<string[]> {
+  const taxonomyStructure = getTaxonomyStructure();
+  
+  // Get the category number from the category key
+  const categoryToNumber: Record<string, string> = {
+    "bitcoin": "1",
+    "blockchain-platforms": "2",
+    "digital-assets": "3",
+    "technology": "4",
+    "organizations": "5",
+    "people": "6",
+    "regulation-law": "7",
+    "markets-geography": "8",
+    "traditional-finance": "9",
+    "markets-trading": "10",
+    "security-crime": "11",
+    "education-community": "12",
+    "history-culture": "13",
+    "miscellaneous": "14",
+  };
+  
+  const categoryNumber = categoryToNumber[lockedCategory] || "14";
+  
+  const prompt = `You are an expert at categorizing cryptocurrency and blockchain-related tags into a hierarchical taxonomy.
+
+${taxonomyStructure}
+
+Tag to categorize: "${tagName}"
+IMPORTANT: This tag is ALREADY correctly categorized in the "${lockedCategory}" category (Category ${categoryNumber}).
+Your task is ONLY to determine the correct subcategory path WITHIN this category.
+
+CRITICAL RULES:
+1. The category is LOCKED to "${lockedCategory}" - DO NOT change it
+2. The subcategory path MUST start with "${categoryNumber}." (e.g., ["${categoryNumber}.1"] or ["${categoryNumber}.1", "${categoryNumber}.1.1"])
+3. Choose the most specific subcategory that accurately describes the tag
+4. If unsure, use the most general subcategory for this category (e.g., "${categoryNumber}.1" if it exists)
+5. Be precise with subcategory keys - they must match the taxonomy structure exactly
+
+Return ONLY a JSON object in this exact format:
+{
+  "subcategoryPath": ["${categoryNumber}.X", "${categoryNumber}.X.Y"],
+  "confidence": 0.95,
+  "reasoning": "Brief explanation of why this subcategory path fits"
+}`;
+
+  const modelName = providerName === 'gemini' ? 'gemini-2.0-flash' : 'gpt-4o-mini';
+  const endpoint = providerName === 'gemini' ? '/models/generateContent' : '/chat/completions';
+  
+  const monitorId = apiMonitor.logRequest({
+    service: providerName,
+    endpoint,
+    method: 'POST',
+    status: 'pending',
+    context: 'tag-path-fix',
+    purpose: `Fixing path for tag: "${tagName}" in category "${lockedCategory}"`,
+    requestData: { 
+      model: modelName,
+      tagName,
+      lockedCategory 
+    },
+    tagName,
+    tagCategory: lockedCategory
+  });
+
+  try {
+    const provider = aiService.getProvider(providerName);
+    
+    const pathFixSchema = z.object({
+      subcategoryPath: z.array(z.string()),
+      confidence: z.number().min(0).max(1),
+      reasoning: z.string().optional(),
+    });
+
+    const startTime = Date.now();
+    const result = await provider.generateJson<{ subcategoryPath: string[]; confidence: number; reasoning?: string }>({
+      prompt,
+      systemPrompt: 'You are a precise categorization assistant. Always return valid JSON. The category is locked - only fix the path.',
+      schema: pathFixSchema,
+      temperature: 0.3,
+    });
+
+    const duration = Date.now() - startTime;
+
+    // Validate the path starts with the correct category number
+    if (!result.subcategoryPath || result.subcategoryPath.length === 0) {
+      throw new Error('Invalid path result');
+    }
+
+    const firstPathSegment = result.subcategoryPath[0];
+    if (!firstPathSegment.startsWith(categoryNumber + '.')) {
+      console.warn(`⚠️  Path "${result.subcategoryPath.join(' > ')}" doesn't start with "${categoryNumber}." for category "${lockedCategory}". Using fallback.`);
+      // Fallback to most general subcategory
+      return [`${categoryNumber}.1`];
+    }
+
+    apiMonitor.updateRequest(monitorId, {
+      status: 'success',
+      duration,
+      tagSubcategoryPath: result.subcategoryPath,
+      tagConfidence: result.confidence,
+      tagReasoning: result.reasoning,
+    });
+
+    return result.subcategoryPath;
+  } catch (error) {
+    console.error(`Error fixing path for tag "${tagName}":`, error);
+    
+    // Fallback to most general subcategory for the category
+    const fallbackPath = [`${categoryNumber}.1`];
+    
+    apiMonitor.updateRequest(monitorId, {
+      status: 'error',
+      error: error instanceof Error ? error.message : 'Unknown error',
+      errorCategory: 'other',
+      tagSubcategoryPath: fallbackPath,
+    });
+    
+    return fallbackPath;
+  }
 }
 

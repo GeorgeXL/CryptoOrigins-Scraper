@@ -10,6 +10,7 @@ export interface ApiRequest {
   duration?: number;
   error?: string;
   requestData?: any;
+  responseData?: any; // AI model responses, summaries, selected articles, etc.
   responseSize?: number;
   retryAttempt?: number;
   errorCategory?: 'validation' | 'network' | 'rate-limit' | 'parsing' | 'other';
@@ -27,7 +28,7 @@ export interface ApiRequest {
 
 class ApiMonitor extends EventEmitter {
   private requests: ApiRequest[] = [];
-  private maxHistorySize = 100;
+  private maxHistorySize = 500; // Increased to capture more requests during battle processing
 
   logRequest(request: Omit<ApiRequest, 'id' | 'timestamp'>): string {
     const apiRequest: ApiRequest = {

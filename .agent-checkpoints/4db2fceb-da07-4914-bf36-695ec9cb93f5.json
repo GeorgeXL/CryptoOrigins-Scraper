@@ -1,0 +1,42 @@
+{
+  "sessionId": "4db2fceb-da07-4914-bf36-695ec9cb93f5",
+  "state": {
+    "sessionId": "4db2fceb-da07-4914-bf36-695ec9cb93f5",
+    "status": "running",
+    "currentPass": 1,
+    "issuesFound": 0,
+    "issuesFixed": 0,
+    "issuesFlagged": 0,
+    "totalCost": 0.035,
+    "qualityScore": 0,
+    "startTime": "2025-11-30T12:05:21.648Z",
+    "lastUpdateTime": "2025-11-30T12:05:30.068Z",
+    "currentModule": "gap-filler",
+    "progressMessage": "Finding and filling timeline gaps..."
+  },
+  "config": {
+    "maxPasses": 2,
+    "maxRuntimeHours": 4,
+    "maxBudget": 35,
+    "targetQuality": 95,
+    "convergenceThreshold": 0.5,
+    "convergencePasses": 3,
+    "autoApproveThreshold": 90,
+    "flagThreshold": 70,
+    "rejectThreshold": 50,
+    "batchSize": 100,
+    "parallelWorkers": 5,
+    "enableValidator": true,
+    "enableDeduper": true,
+    "enableGapFiller": true,
+    "enableCategoryFixer": true,
+    "enableQualityImprover": true,
+    "humanCheckpointEveryNPasses": 3,
+    "humanCheckpointTimeout": 60,
+    "testMode": true,
+    "useTestTables": true,
+    "maxBudgetUSD": 5
+  },
+  "timestamp": "2025-11-30T12:07:24.807Z",
+  "moduleProgress": {}
+}

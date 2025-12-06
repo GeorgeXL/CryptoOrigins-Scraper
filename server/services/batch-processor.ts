@@ -160,13 +160,12 @@ Context: These events are part of a curated collection focusing on ${groupName.t
 
     try {
       const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-5-mini",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt }
         ],
-        temperature: 0.3,
-        max_tokens: 300
+        max_completion_tokens: 1000
       });
 
       const duration = Date.now() - startTime;
@@ -238,13 +237,15 @@ ${groupContext}
 TASK: Enhance manual Bitcoin event summaries to be more accurate, engaging, and historically precise.
 
 CRITICAL REQUIREMENTS:
-1. Summary MUST be EXACTLY 100-110 characters (strict requirement)
+1. ⚠️ CHARACTER COUNT IS MANDATORY: Summary MUST be EXACTLY 100-110 characters. Count every character including spaces. Verify the character count before responding. This is a strict requirement that cannot be violated.
 2. NO DATES anywhere in summary (no years, months, days, "On [date]", "In [year]")
 3. Use active voice and present tense: "Bitcoin reaches $1000" not "Bitcoin reached $1000"
 4. Focus on what actually HAPPENED, not what articles discussed
-5. NO ending punctuation (no periods, colons, semicolons, dashes)
+5. NO ending punctuation (no periods/full stops, colons, semicolons, dashes). We are NOT interested in full stops at the end - do not include them.
 6. Be conversational yet professional
 7. Emphasize the actual event/outcome over the reporting
+
+IMPORTANT: After writing your summary, count the characters. If it's not between 100-110 characters, rewrite it until it is.
 
 VOICE GUIDELINES:
 - Active, engaging, factual
@@ -255,7 +256,7 @@ VOICE GUIDELINES:
 
 FORBIDDEN:
 - ANY DATES: "On October 12", "In 2009", "2024", months, years, etc.
-- Ending punctuation: . : ; -
+- Ending punctuation: . : ; - (We are NOT interested in full stops/periods at the end - do not include them)
 - Passive voice: "was announced" → use "announces"
 - Past tense: "reached" → use "reaches"
 - Speculation or opinion words

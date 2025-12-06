@@ -1,0 +1,40 @@
+{
+  "sessionId": "82acf1a6-d59f-4cff-ac2a-bfbae2892ec4",
+  "state": {
+    "sessionId": "82acf1a6-d59f-4cff-ac2a-bfbae2892ec4",
+    "status": "error",
+    "currentPass": 1,
+    "issuesFound": 0,
+    "issuesFixed": 0,
+    "issuesFlagged": 0,
+    "totalCost": 2.3099999999999996,
+    "qualityScore": 0,
+    "startTime": "2025-11-30T11:20:57.213Z",
+    "lastUpdateTime": "2025-11-30T11:22:21.364Z",
+    "error": "this.gemini.complete is not a function"
+  },
+  "config": {
+    "maxPasses": 2,
+    "maxRuntimeHours": 4,
+    "maxBudget": 35,
+    "targetQuality": 95,
+    "convergenceThreshold": 0.5,
+    "convergencePasses": 3,
+    "autoApproveThreshold": 90,
+    "flagThreshold": 70,
+    "rejectThreshold": 50,
+    "batchSize": 100,
+    "parallelWorkers": 5,
+    "enableValidator": true,
+    "enableDeduper": true,
+    "enableGapFiller": true,
+    "enableCategoryFixer": true,
+    "enableQualityImprover": true,
+    "humanCheckpointEveryNPasses": 3,
+    "humanCheckpointTimeout": 60,
+    "testMode": true,
+    "testLimit": 5
+  },
+  "timestamp": "2025-11-30T11:22:21.367Z",
+  "moduleProgress": {}
+}

@@ -12,6 +12,9 @@ interface CSVImportDialogProps {
   open?: boolean;
   onClose?: () => void;
   onImportComplete?: () => void;
+  buttonVariant?: "default" | "destructive" | "outline" | "secondary" | "ghost" | "link";
+  buttonSize?: "default" | "sm" | "lg" | "icon";
+  showLabel?: boolean;
 }
 
 interface ImportResult {
@@ -21,7 +24,14 @@ interface ImportResult {
   errors: string[];
 }
 
-export default function CSVImportDialog({ open: controlledOpen, onClose: controlledOnClose, onImportComplete }: CSVImportDialogProps = {}) {
+export default function CSVImportDialog({ 
+  open: controlledOpen, 
+  onClose: controlledOnClose, 
+  onImportComplete,
+  buttonVariant = "ghost",
+  buttonSize = "sm",
+  showLabel = false
+}: CSVImportDialogProps = {}) {
   const [internalOpen, setInternalOpen] = useState(false);
   
   // Use controlled state if provided, otherwise use internal state
@@ -224,8 +234,9 @@ export default function CSVImportDialog({ open: controlledOpen, onClose: control
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="sm" title="Import Bitcoin Events">
+        <Button variant={buttonVariant} size={buttonSize} title="Import Bitcoin Events">
           <Upload className="w-4 h-4" />
+          {showLabel && <span className="ml-2">Import Bitcoin Events</span>}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto" aria-describedby="import-description">

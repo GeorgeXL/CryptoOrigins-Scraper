@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { 
   ChevronLeft, 
@@ -15,8 +16,10 @@ import {
   X,
   CheckCircle,
   ArrowRight,
-  Database
+  Database,
+  GitCompare
 } from 'lucide-react';
+import { calculateTextSimilarity, getSimilarityInfo } from '@/utils/text-similarity';
 
 interface BatchEvent {
   id: string;
@@ -27,6 +30,7 @@ interface BatchEvent {
   originalGroup: string;
   enhancedSummary?: string;
   enhancedReasoning?: string;
+  databaseSummary?: string | null;
   status: 'pending' | 'enhanced' | 'approved' | 'rejected';
   aiProvider?: string;
   processedAt?: string;
@@ -67,6 +71,7 @@ export default function EventCockpit() {
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [selectedEvents, setSelectedEvents] = useState<Set<string>>(new Set());
+  const [similarityFilter, setSimilarityFilter] = useState<'all' | 'similar' | 'somewhat' | 'different'>('all');
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -213,6 +218,37 @@ export default function EventCockpit() {
     }
   });
 
+  // Replace Real Summary mutation
+  const replaceRealSummaryMutation = useMutation({
+    mutationFn: async (eventIds: string[]) => {
+      const response = await fetch('/api/event-cockpit/replace-real-summaries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventIds })
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to replace real summaries');
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setSelectedEvents(new Set());
+      queryClient.invalidateQueries({ queryKey: ['/api/event-cockpit', selectedBatchId] });
+      toast({
+        title: '✅ Real Summaries Replaced',
+        description: `Successfully replaced ${data.updated} real summaries with enhanced summaries${data.skipped ? ` (${data.skipped} skipped)` : ''}`
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: error.message || 'Failed to replace real summaries'
+      });
+    }
+  });
+
   // Set first batch as default
   useEffect(() => {
     if (batches && batches.length > 0 && !selectedBatchId) {
@@ -249,6 +285,33 @@ export default function EventCockpit() {
   const getDisplaySummary = (event: BatchEvent) => {
     return event.enhancedSummary || event.originalSummary;
   };
+
+  // Filter events based on similarity comparison
+  const filteredEvents = useMemo(() => {
+    if (!cockpitData?.events) return [];
+    if (similarityFilter === 'all') return cockpitData.events;
+
+    return cockpitData.events.filter(event => {
+      // Only filter events that have both enhancedSummary and databaseSummary
+      if (!event.enhancedSummary || !event.databaseSummary) {
+        // For "different" filter, include events without both summaries
+        return similarityFilter === 'different';
+      }
+
+      const similarity = calculateTextSimilarity(event.enhancedSummary, event.databaseSummary);
+      
+      switch (similarityFilter) {
+        case 'similar':
+          return similarity >= 0.7;
+        case 'somewhat':
+          return similarity >= 0.4 && similarity < 0.7;
+        case 'different':
+          return similarity < 0.4;
+        default:
+          return true;
+      }
+    });
+  }, [cockpitData?.events, similarityFilter]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -344,6 +407,15 @@ export default function EventCockpit() {
                   {selectedEvents.size} events selected
                 </span>
                 <Button
+                  onClick={() => replaceRealSummaryMutation.mutate(Array.from(selectedEvents))}
+                  disabled={replaceRealSummaryMutation.isPending}
+                  className="bg-blue-600 hover:bg-blue-700"
+                  data-testid="replace-real-summary"
+                >
+                  <Database className="h-4 w-4 mr-2" />
+                  {replaceRealSummaryMutation.isPending ? 'Replacing...' : 'Replace Real Summary'}
+                </Button>
+                <Button
                   onClick={() => approveMutation.mutate(Array.from(selectedEvents))}
                   disabled={approveMutation.isPending}
                   className="bg-green-600 hover:bg-green-700"
@@ -358,28 +430,54 @@ export default function EventCockpit() {
 
           {/* Pagination Controls */}
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={!cockpitData.pagination.hasPrev}
-                data-testid="prev-page"
-              >
-                <ChevronLeft className="h-4 w-4" />
-                Previous
-              </Button>
-              <span className="text-sm text-muted-foreground">
-                Page {cockpitData.pagination.currentPage} of {cockpitData.pagination.totalPages}
-              </span>
-              <Button
-                variant="outline"
-                onClick={() => setCurrentPage(p => p + 1)}
-                disabled={!cockpitData.pagination.hasNext}
-                data-testid="next-page"
-              >
-                Next
-                <ChevronRight className="h-4 w-4" />
-              </Button>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={!cockpitData.pagination.hasPrev}
+                  data-testid="prev-page"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Page {cockpitData.pagination.currentPage} of {cockpitData.pagination.totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  onClick={() => setCurrentPage(p => p + 1)}
+                  disabled={!cockpitData.pagination.hasNext}
+                  data-testid="next-page"
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+              
+              {/* Similarity Filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Filter by similarity:</span>
+                <Select value={similarityFilter} onValueChange={(value: 'all' | 'similar' | 'somewhat' | 'different') => {
+                  setSimilarityFilter(value);
+                  setCurrentPage(1); // Reset to first page when filter changes
+                }}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="All events" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All events</SelectItem>
+                    <SelectItem value="similar">Similar (≥70%)</SelectItem>
+                    <SelectItem value="somewhat">Somewhat Similar (40-70%)</SelectItem>
+                    <SelectItem value="different">Different (&lt;40%)</SelectItem>
+                  </SelectContent>
+                </Select>
+                {similarityFilter !== 'all' && (
+                  <span className="text-xs text-muted-foreground">
+                    ({filteredEvents.length} of {cockpitData?.events?.length || 0} events)
+                  </span>
+                )}
+              </div>
             </div>
             
             {selectedEvents.size > 0 && (
@@ -404,8 +502,20 @@ export default function EventCockpit() {
           <div className="space-y-4">
             {isLoading ? (
               <div className="text-center py-8">Loading events...</div>
+            ) : filteredEvents.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <p>No events match the selected filter.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSimilarityFilter('all')}
+                  className="mt-2"
+                >
+                  Show All Events
+                </Button>
+              </div>
             ) : (
-              cockpitData.events.map(event => (
+              filteredEvents.map(event => (
                 <Card key={event.id} className="relative">
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
@@ -530,6 +640,54 @@ export default function EventCockpit() {
                                 <p className="text-xs text-muted-foreground italic">
                                   {event.originalSummary}
                                 </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        
+                        {/* Real Summary from historical_news_analyses */}
+                        {event.databaseSummary && (
+                          <div className="pt-2 border-t mt-2 space-y-2">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-medium text-muted-foreground">Real Summary:</span>
+                              <span className={`text-xs px-1 py-0.5 rounded ${
+                                event.databaseSummary.length >= 100 && event.databaseSummary.length <= 110
+                                  ? 'bg-green-50 text-green-600'
+                                  : 'bg-red-50 text-red-600'
+                              }`}>
+                                {event.databaseSummary.length} chars
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-700">
+                              {event.databaseSummary}
+                            </p>
+                            
+                            {/* Similarity Comparison */}
+                            {event.enhancedSummary && event.databaseSummary && (
+                              <div className="pt-2 border-t mt-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <GitCompare className="w-3 h-3 text-muted-foreground" />
+                                  <span className="text-xs font-medium text-muted-foreground">Comparison:</span>
+                                </div>
+                                {(() => {
+                                  const similarity = calculateTextSimilarity(
+                                    event.enhancedSummary,
+                                    event.databaseSummary
+                                  );
+                                  const similarityInfo = getSimilarityInfo(similarity);
+                                  return (
+                                    <div className="flex items-center gap-2">
+                                      <Badge 
+                                        className={`${similarityInfo.bgColor} ${similarityInfo.color} border-0`}
+                                      >
+                                        {similarityInfo.label}
+                                      </Badge>
+                                      <span className="text-xs text-muted-foreground">
+                                        {similarityInfo.percentage}% similar
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             )}
                           </div>
