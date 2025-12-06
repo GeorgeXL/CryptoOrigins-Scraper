@@ -56,8 +56,28 @@ export default async function handler(req: any, res: any) {
         env: {
           NODE_ENV: process.env.NODE_ENV,
           VERCEL: process.env.VERCEL,
+          DATABASE_URL: process.env.DATABASE_URL ? 'SET' : 'MISSING',
+          SUPABASE_URL: process.env.SUPABASE_URL ? 'SET' : 'MISSING',
         }
       });
+    }
+
+    // Debug endpoint to check app creation
+    if (req?.query?.debug === "1") {
+      try {
+        const { app } = await getOrCreateApp();
+        return res.status(200).json({
+          ok: true,
+          message: "App created successfully",
+          hasApp: !!app
+        });
+      } catch (error) {
+        return res.status(500).json({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined
+        });
+      }
     }
 
     const { app } = await getOrCreateApp();

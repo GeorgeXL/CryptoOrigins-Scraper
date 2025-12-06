@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +49,7 @@ const MONTH_NUMBERS: Record<string, number> = {
 
 export default function MonthlyView() {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [openYear, setOpenYear] = useState<number | null>(null);
@@ -236,7 +238,7 @@ export default function MonthlyView() {
                 onDateSelect={toggleDateSelection}
                 onDateDeselect={toggleDateSelection}
                 onRowClick={(date) => {
-                  // Could open detail modal here if needed
+                  navigate(`/day/${date}?from=monthly`);
                 }}
                 emptyMessage={`No analyses found for ${selectedMonth} ${selectedYear}`}
                 showCheckbox={true}
