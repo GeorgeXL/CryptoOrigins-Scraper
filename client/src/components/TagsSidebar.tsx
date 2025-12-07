@@ -56,6 +56,7 @@ interface TagsSidebarProps {
   mode?: "sidebar" | "inline";
   showCategories?: boolean;
   showOverview?: boolean;
+  showSearch?: boolean;
   // Quality check props
   qualityCheckItems?: QualityCheckItem[];
   selectedQualityCheck?: string | null;
@@ -78,6 +79,7 @@ export function TagsSidebar({
   mode = "sidebar",
   showCategories = true,
   showOverview = true,
+  showSearch = true,
   qualityCheckItems,
   selectedQualityCheck,
   onQualityCheckSelect,
@@ -160,31 +162,33 @@ export function TagsSidebar({
   return (
     <Sidebar collapsible={isInline ? "none" : undefined} className={isInline ? "rounded-xl bg-sidebar/40" : undefined}>
       <SidebarHeader className="pt-0">
-        <SidebarGroup className="py-0 px-2">
-          <SidebarGroupContent className="relative">
-            <Label htmlFor="sidebar-search" className="sr-only">
-              Search
-            </Label>
-            <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 select-none opacity-50" />
-            <SidebarInput
-              id="sidebar-search"
-              placeholder="Search"
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              className="pl-8 pr-8"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => onSearchChange("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-              >
-                <X className="size-4" />
-                <span className="sr-only">Clear search</span>
-              </button>
-            )}
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {showSearch && (
+          <SidebarGroup className="py-0 px-2">
+            <SidebarGroupContent className="relative">
+              <Label htmlFor="sidebar-search" className="sr-only">
+                Search
+              </Label>
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 select-none opacity-50" />
+              <SidebarInput
+                id="sidebar-search"
+                placeholder="Search"
+                value={searchQuery}
+                onChange={(e) => onSearchChange(e.target.value)}
+                className="pl-8 pr-8"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => onSearchChange("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                >
+                  <X className="size-4" />
+                  <span className="sr-only">Clear search</span>
+                </button>
+              )}
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarHeader>
       <SidebarContent>
         {showOverview && (

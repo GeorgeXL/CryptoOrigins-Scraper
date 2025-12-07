@@ -246,36 +246,42 @@ export function AnalysesTable({
                 </Button>
               )}
             </div>
-            <div className="flex items-center space-x-2">
-              {bulkActions.actions?.map((action, index) => (
-                <Button
-                  key={index}
-                  variant={action.variant || "outline"}
-                  size={action.size || "sm"}
-                  disabled={action.disabled}
-                  onClick={async () => {
-                    const dates = selectAllMatching 
-                      ? analyses.map(a => a.date) 
-                      : Array.from(selectedDates);
-                    await action.onClick(dates);
-                  }}
-                >
-                  {action.icon}
-                  {action.label}
-                </Button>
-              ))}
-              {bulkActions.customActions}
-              {bulkActions.onClearSelection && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={bulkActions.onClearSelection}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              )}
-            </div>
+            {(bulkActions.actions?.length > 0 || bulkActions.customActions || bulkActions.onClearSelection || (onDateDeselect && selectedDates.size > 0)) && (
+              <div className="flex items-center space-x-2">
+                {bulkActions.actions?.map((action, index) => (
+                  <Button
+                    key={index}
+                    variant={action.variant || "outline"}
+                    size={action.size || "sm"}
+                    disabled={action.disabled}
+                    onClick={async () => {
+                      const dates = selectAllMatching 
+                        ? analyses.map(a => a.date) 
+                        : Array.from(selectedDates);
+                      await action.onClick(dates);
+                    }}
+                  >
+                    {action.icon}
+                    {action.label}
+                  </Button>
+                ))}
+                {bulkActions.customActions}
+                {(bulkActions.onClearSelection || (onDateDeselect && selectedDates.size > 0)) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={bulkActions.onClearSelection || (() => {
+                      // Default clear behavior: deselect all selected dates
+                      selectedDates.forEach(date => onDateDeselect?.(date));
+                    })}
+                    className="text-muted-foreground hover:text-foreground"
+                    title="Clear selection"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -98,7 +98,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
                         <li>
                           <NavigationMenuLink asChild>
                             <Link href="/tags-manager" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-accent hover:bg-primary/10 hover:shadow-sm focus:bg-primary/10 focus:text-accent-foreground cursor-pointer group">
-                              <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Tag Manager</div>
+                              <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Tags</div>
                               <p className="line-clamp-2 text-xs leading-snug text-muted-foreground group-hover:text-foreground/80 transition-colors">
                                 Organize and manage tags with drag-drop.
                               </p>
@@ -107,7 +107,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
                         </li>
                         <li>
                           <NavigationMenuLink asChild>
-                            <Link href="/events" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-accent hover:bg-primary/10 hover:shadow-sm focus:bg-primary/10 focus:text-accent-foreground cursor-pointer group">
+                            <Link href="/events-manager" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-accent hover:bg-primary/10 hover:shadow-sm focus:bg-primary/10 focus:text-accent-foreground cursor-pointer group">
                               <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Events</div>
                               <p className="line-clamp-2 text-xs leading-snug text-muted-foreground group-hover:text-foreground/80 transition-colors">
                                 View and change events.

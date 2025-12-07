@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
+import { TaggingDropdown } from "@/components/TaggingDropdown";
 import { 
   Dialog,
   DialogContent,
@@ -68,6 +70,7 @@ import { supabase } from "@/lib/supabase";
 import { Link } from "wouter";
 import { EditTagDialog } from "@/components/TagsManager/EditTagDialog";
 import { DeleteDialog } from "@/components/TagsManager/DeleteDialog";
+import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { getCategoryDisplayMeta } from "@shared/taxonomy";
 import { TagsSidebar, QualityCheckItem } from "@/components/TagsSidebar";
 import {
@@ -182,8 +185,17 @@ export default function EventsManager() {
   const [showManageTags, setShowManageTags] = useState(false);
   const [bulkTagName, setBulkTagName] = useState("");
   const [bulkTagCategory, setBulkTagCategory] = useState("crypto");
-  const [isReanalyzing, setIsReanalyzing] = useState(false);
-  const [isCategorizing, setIsCategorizing] = useState(false);
+  const { 
+    isReanalyzing, 
+    reanalyzeDates, 
+    redoSummaries,
+    cancelAnalysis,
+    selectionRequest,
+    isSelectionDialogOpen,
+    setIsSelectionDialogOpen,
+    confirmSelection,
+    progress
+  } = useBulkReanalyze();
 
   // Quality check state
   const [selectedQualityCheck, setSelectedQualityCheck] = useState<string | null>(null);
@@ -205,73 +217,13 @@ export default function EventsManager() {
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
-  // Fetch empty summaries count
+  // Fetch empty summaries (via backend to avoid client-side RLS/cache issues)
   const { data: emptySummaryData, isLoading: emptySummaryLoading } = useQuery<{ entries: any[]; totalCount: number }>({
     queryKey: ['events-manager-empty-summaries'],
     queryFn: async () => {
-      if (!supabase) {
-        console.warn('Supabase not configured for empty summary check');
-        return { entries: [], totalCount: 0 };
-      }
-      
-      let allData: any[] = [];
-      let from = 0;
-      const batchSize = 1000;
-      let hasMore = true;
-
-      while (hasMore) {
-        const { data: batchData, error: batchError } = await supabase
-          .from("historical_news_analyses")
-          .select("date, summary")
-          .range(from, from + batchSize - 1);
-
-        if (batchError) {
-          console.error('Error fetching summaries:', batchError);
-          throw batchError;
-        }
-
-        if (batchData && batchData.length > 0) {
-          allData = allData.concat(batchData);
-          from += batchSize;
-          hasMore = batchData.length === batchSize;
-        } else {
-          hasMore = false;
-        }
-      }
-
-      const minValidDate = new Date('2009-01-03');
-      const filteredData = allData.filter(entry => new Date(entry.date) >= minValidDate);
-      const emptySummary = filteredData.filter(entry => !entry.summary || entry.summary.trim() === '');
-      
-      // Also find missing dates (gaps in the date range)
-      const existingDates = new Set(filteredData.map(e => e.date));
-      const dates = filteredData.map(e => e.date).sort();
-      const missingDates: any[] = [];
-      
-      if (dates.length > 0) {
-        const minDate = new Date('2009-01-03');
-        const maxDate = new Date(dates[dates.length - 1]);
-        const currentDate = new Date(minDate);
-        
-        while (currentDate <= maxDate) {
-          const dateStr = currentDate.toISOString().split('T')[0];
-          if (!existingDates.has(dateStr)) {
-            missingDates.push({
-              date: dateStr,
-              summary: '',
-            });
-          }
-          currentDate.setDate(currentDate.getDate() + 1);
-        }
-      }
-
-      const allEmpty = [...emptySummary, ...missingDates];
-      console.log(`Empty summaries: ${emptySummary.length}, Missing dates: ${missingDates.length}, Total: ${allEmpty.length}`);
-
-      return {
-        entries: allEmpty,
-        totalCount: allEmpty.length
-      };
+      const res = await fetch('/api/quality-check/empty-summaries');
+      if (!res.ok) throw new Error('Failed to fetch empty summaries');
+      return res.json();
     },
     staleTime: 1000 * 60 * 5,
   });
@@ -1029,6 +981,8 @@ export default function EventsManager() {
     queryKey: ['supabase-tags-analyses', Array.from(selectedEntities).sort().join(','), showUntagged, debouncedSearchQuery, currentPage, pageSize],
     refetchOnMount: true,
     refetchOnWindowFocus: false,
+    // Only fetch when user has made a selection (entities, untagged, or search query)
+    enabled: selectedEntities.size > 0 || showUntagged || debouncedSearchQuery.length > 0,
     queryFn: async () => {
       if (!supabase) throw new Error("Supabase not configured");
 
@@ -1261,6 +1215,35 @@ export default function EventsManager() {
     }
   };
 
+  // Select/deselect all on current page for quality violations
+  const toggleSelectAllQualityViolations = () => {
+    // If currently selecting all matching, clear everything
+    if (selectAllMatching) {
+      setSelectAllMatching(false);
+      setSelectedDates(new Set());
+      return;
+    }
+
+    // Check if all items on current page are selected (ignore other pages)
+    const allPageSelected = paginatedQualityViolations.length > 0 && paginatedQualityViolations.every(v => selectedDates.has(v.date));
+    
+    if (allPageSelected) {
+      // Deselect all on current page
+      setSelectedDates(prev => {
+        const next = new Set(prev);
+        paginatedQualityViolations.forEach(v => next.delete(v.date));
+        return next;
+      });
+    } else {
+      // Select all on current page
+      setSelectedDates(prev => {
+        const next = new Set(prev);
+        paginatedQualityViolations.forEach(v => next.add(v.date));
+        return next;
+      });
+    }
+  };
+
   // Toggle individual date selection
   const toggleDateSelection = (date: string) => {
     if (selectAllMatching) {
@@ -1318,6 +1301,12 @@ export default function EventsManager() {
     }
 
     return filteredAnalyses.map(a => a.date);
+  };
+
+  // Helper to fetch all matching quality violation dates
+  const fetchAllQualityViolationDates = (): string[] => {
+    // Return all dates from filtered quality violations (already filtered by selectedQualityCheck/selectedVeriBadge)
+    return filteredQualityViolations.map(v => v.date);
   };
 
   // Bulk add tags mutation
@@ -1751,6 +1740,7 @@ export default function EventsManager() {
               selectedEntities={selectedEntities}
               showUntagged={showUntagged}
               searchQuery={searchQuery}
+              showSearch={false}
               mode="inline"
               showCategories={false}
               showOverview={false}
@@ -1814,129 +1804,13 @@ export default function EventsManager() {
                         : VIOLATION_TYPES.find(t => t.id === selectedQualityCheck)?.label || 'Quality Check'}
                     </h2>
                     <Badge variant="secondary" className="font-normal">
-                      {filteredQualityViolations.length.toLocaleString()} {selectedVeriBadge ? 'entr' : 'issue'}{filteredQualityViolations.length !== 1 ? 'ies' : 'y'}
+                      {filteredQualityViolations.length.toLocaleString()} {selectedVeriBadge 
+                        ? `entr${filteredQualityViolations.length !== 1 ? 'ies' : 'y'}`
+                        : `issue${filteredQualityViolations.length !== 1 ? 's' : ''}`}
                     </Badge>
                   </div>
                   {/* Action buttons based on quality check type */}
                   <div className="flex items-center gap-2">
-                    {selectedQualityCheck === 'empty-summary' && (
-                      <Button
-                        variant="default"
-                        size="sm"
-                        disabled={isReanalyzing || filteredQualityViolations.length === 0}
-                        onClick={async () => {
-                          setIsReanalyzing(true);
-                          const dates = filteredQualityViolations.map(v => v.date);
-                          let processed = 0;
-                          for (const date of dates) {
-                            try {
-                              await fetch(`/api/analysis/date/${date}`, { method: 'POST' });
-                              processed++;
-                            } catch (err) {
-                              console.error(`Failed to analyze ${date}:`, err);
-                            }
-                          }
-                          setIsReanalyzing(false);
-                          queryClient.invalidateQueries({ queryKey: ['empty-summary-entries'] });
-                          queryClient.invalidateQueries({ queryKey: ['quality-violations'] });
-                          toast({
-                            title: "Analysis complete",
-                            description: `Analyzed ${processed} date(s)`,
-                          });
-                        }}
-                      >
-                        {isReanalyzing ? (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        ) : (
-                          <RefreshCw className="w-4 h-4 mr-2" />
-                        )}
-                        Analyse All Days
-                      </Button>
-                    )}
-                    {(selectedQualityCheck === 'too-short' || selectedQualityCheck === 'too-long') && (
-                      <Select
-                        onValueChange={async (action) => {
-                          if (action === 'adjust-length') {
-                            setIsReanalyzing(true);
-                            try {
-                              const response = await fetch('/api/quality-check/bulk-adjust-length', { method: 'POST' });
-                              const result = await response.json();
-                              toast({
-                                title: "Length adjustment complete",
-                                description: `Updated ${result.updated} summaries`,
-                              });
-                              queryClient.invalidateQueries({ queryKey: ['quality-violations'] });
-                            } catch (err) {
-                              toast({
-                                title: "Error",
-                                description: "Failed to adjust lengths",
-                                variant: "destructive",
-                              });
-                            }
-                            setIsReanalyzing(false);
-                          } else if (action === 'regenerate') {
-                            setIsReanalyzing(true);
-                            try {
-                              const response = await fetch('/api/quality-check/bulk-regenerate-summaries', { method: 'POST' });
-                              const result = await response.json();
-                              toast({
-                                title: "Regeneration complete",
-                                description: `Updated ${result.updated} summaries`,
-                              });
-                              queryClient.invalidateQueries({ queryKey: ['quality-violations'] });
-                            } catch (err) {
-                              toast({
-                                title: "Error",
-                                description: "Failed to regenerate summaries",
-                                variant: "destructive",
-                              });
-                            }
-                            setIsReanalyzing(false);
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="w-[200px]" disabled={isReanalyzing}>
-                          <SelectValue placeholder="Select bulk action" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="adjust-length">Adjust Length</SelectItem>
-                          <SelectItem value="regenerate">Regenerate Summaries</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    )}
-                    {selectedQualityCheck === 'ends-period' && (
-                      <Button
-                        variant="default"
-                        size="sm"
-                        disabled={isReanalyzing || filteredQualityViolations.length === 0}
-                        onClick={async () => {
-                          setIsReanalyzing(true);
-                          try {
-                            const response = await fetch('/api/quality-check/bulk-remove-periods', { method: 'POST' });
-                            const result = await response.json();
-                            toast({
-                              title: "Periods removed",
-                              description: `Updated ${result.updated} summaries`,
-                            });
-                            queryClient.invalidateQueries({ queryKey: ['quality-violations'] });
-                          } catch (err) {
-                            toast({
-                              title: "Error",
-                              description: "Failed to remove periods",
-                              variant: "destructive",
-                            });
-                          }
-                          setIsReanalyzing(false);
-                        }}
-                      >
-                        {isReanalyzing ? (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        ) : (
-                          <X className="w-4 h-4 mr-2" />
-                        )}
-                        Remove All Periods
-                      </Button>
-                    )}
                   </div>
                 </div>
 
@@ -1994,7 +1868,7 @@ export default function EventsManager() {
                     setPageSize(size);
                     setQualityCheckPage(1);
                   }}
-                  onSelectAll={toggleSelectAll}
+                  onSelectAll={toggleSelectAllQualityViolations}
                   selectAllMatching={selectAllMatching}
                   pageSizeOptions={PAGE_SIZE_OPTIONS}
                   showPagination={true}
@@ -2007,38 +1881,122 @@ export default function EventsManager() {
                       setSelectedDates(new Set());
                       setSelectAllMatching(false);
                     },
+                    customActions: (
+                      <>
+                        {/* Re-analyze Dropdown or Stop Button */}
+                        {isReanalyzing ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={cancelAnalysis}
+                            title="Stop bulk analysis"
+                          >
+                            <StopCircle className="w-4 h-4 mr-2" />
+                            Stop ({progress.completed}/{progress.total})
+                          </Button>
+                        ) : (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                title="Re-analyze (R)"
+                              >
+                                <RefreshCw className="w-4 h-4 mr-2" />
+                                Re-analyze
+                                <ChevronDown className="w-4 h-4 ml-2" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={async () => {
+                                  const dates = selectAllMatching 
+                                    ? await fetchAllQualityViolationDates()
+                                    : Array.from(selectedDates);
+                                  await reanalyzeDates(dates);
+                                }}
+                              >
+                                <RefreshCw className="w-4 h-4 mr-2" />
+                                Analyse Days
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={async () => {
+                                  const dates = selectAllMatching 
+                                    ? await fetchAllQualityViolationDates()
+                                    : Array.from(selectedDates);
+                                  await redoSummaries(dates);
+                                }}
+                              >
+                                <FileText className="w-4 h-4 mr-2" />
+                                Redo Summaries
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+
+                        {/* Tagging Dropdown */}
+                        <TaggingDropdown
+                          selectedDates={Array.from(selectedDates)}
+                          selectAllMatching={selectAllMatching}
+                          onDatesResolve={fetchAllQualityViolationDates}
+                        />
+
+                        {/* Manage Tags Button */}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowManageTags(true)}
+                        >
+                          <Tags className="w-4 h-4 mr-2" />
+                          Manage Tags
+                        </Button>
+                      </>
+                    ),
                   }}
                 />
               </>
             ) : (
               <>
-                {/* Default Events Manager View */}
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center space-x-3">
-                    <h2 className="text-lg font-semibold text-foreground">
-                      {showUntagged ? "Untagged Analyses" : "Events Manager"}
-                    </h2>
-                    <Badge variant="secondary" className="font-normal">
-                      {totalCount.toLocaleString()} result{totalCount !== 1 ? 's' : ''}
-                    </Badge>
+                {/* Show placeholder when no selection is made */}
+                {selectedEntities.size === 0 && !showUntagged && !debouncedSearchQuery ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-center">
+                    <Filter className="w-12 h-12 text-muted-foreground mb-4" />
+                    <h3 className="text-lg font-semibold text-foreground mb-2">
+                      Select tags to view analyses
+                    </h3>
+                    <p className="text-sm text-muted-foreground max-w-md">
+                      Please pick a tag to see the analyses
+                    </p>
                   </div>
-                  {totalCount > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleCopyToClipboard}
-                      disabled={selectAllMatching || selectedDates.size > 50}
-                      className="flex items-center space-x-2"
-                      data-testid="button-copy-txt"
-                    >
-                      <Copy className="w-4 h-4" />
-                      <span>Copy TXT</span>
-                    </Button>
-                  )}
-                </div>
+                ) : (
+                  <>
+                    {/* Default Events Manager View */}
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center space-x-3">
+                        <h2 className="text-lg font-semibold text-foreground">
+                          {showUntagged ? "Untagged Analyses" : "Events Manager"}
+                        </h2>
+                        <Badge variant="secondary" className="font-normal">
+                          {totalCount.toLocaleString()} result{totalCount !== 1 ? 's' : ''}
+                        </Badge>
+                      </div>
+                      {totalCount > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleCopyToClipboard}
+                          disabled={selectAllMatching || selectedDates.size > 50}
+                          className="flex items-center space-x-2"
+                          data-testid="button-copy-txt"
+                        >
+                          <Copy className="w-4 h-4" />
+                          <span>Copy TXT</span>
+                        </Button>
+                      )}
+                    </div>
 
-                {/* Analysis Table */}
-                <AnalysesTable
+                    {/* Analysis Table */}
+                    <AnalysesTable
                   analyses={paginatedAnalyses}
                   isLoading={isLoading}
                   selectedDates={selectedDates}
@@ -2055,13 +2013,13 @@ export default function EventsManager() {
                   onRowClick={(date) => setLocation(`/day/${date}`)}
                   onTagClick={(tagName) => setSearchQuery(tagName)}
                   emptyMessage={
-                showUntagged
-                  ? "No untagged analyses found"
-                  : selectedEntities.size > 0
-                  ? "No analyses match the selected entities"
-                  : debouncedSearchQuery
-                  ? "No analyses match your search"
-                  : "No tagged analyses found"
+                    showUntagged
+                      ? "No untagged analyses found"
+                      : selectedEntities.size > 0
+                      ? "No analyses match the selected entities"
+                      : debouncedSearchQuery
+                      ? "No analyses match your search"
+                      : "No tagged analyses found"
                   }
                   showCheckbox={true}
                   pageSize={pageSize}
@@ -2088,106 +2046,63 @@ export default function EventsManager() {
                     },
                     customActions: (
                       <>
-                        {/* Re-analyze Dropdown */}
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={isReanalyzing}
-                              title="Re-analyze (R)"
-                            >
-                              <RefreshCw className={`w-4 h-4 mr-2 ${isReanalyzing ? 'animate-spin' : ''}`} />
-                              Re-analyze
-                              <ChevronDown className="w-4 h-4 ml-2" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={async () => {
-                                setIsReanalyzing(true);
-                                const dates = selectAllMatching 
-                                  ? paginatedAnalyses.map(a => a.date) 
-                                  : Array.from(selectedDates);
-                                
-                                for (const date of dates) {
-                                  try {
-                                    await fetch(`/api/analysis/date/${date}`, { method: 'POST' });
-                                  } catch (err) {
-                                    console.error(`Failed to analyze ${date}:`, err);
-                                  }
-                                }
-                                setIsReanalyzing(false);
-                            queryClient.invalidateQueries({ queryKey: ['analyses'] });
-                                toast({
-                                  title: "Re-analysis complete",
-                                  description: `Analyzed ${dates.length} date(s)`,
-                                });
-                              }}
-                              disabled={isReanalyzing}
-                            >
-                              <RefreshCw className="w-4 h-4 mr-2" />
-                              Analyse Days
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={async () => {
-                                setIsReanalyzing(true);
-                                const dates = selectAllMatching 
-                                  ? paginatedAnalyses.map(a => a.date) 
-                                  : Array.from(selectedDates);
-                                
-                                for (const date of dates) {
-                                  try {
-                                    await fetch(`/api/analysis/date/${date}/redo-summary`, { method: 'POST' });
-                                  } catch (err) {
-                                    console.error(`Failed to redo summary for ${date}:`, err);
-                                  }
-                                }
-                                setIsReanalyzing(false);
-                            queryClient.invalidateQueries({ queryKey: ['analyses'] });
-                                toast({
-                                  title: "Summaries updated",
-                                  description: `Redid summaries for ${dates.length} date(s)`,
-                                });
-                              }}
-                              disabled={isReanalyzing}
-                            >
-                              <FileText className="w-4 h-4 mr-2" />
-                              Redo Summaries
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        {/* Re-analyze Dropdown or Stop Button */}
+                        {isReanalyzing ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={cancelAnalysis}
+                            title="Stop bulk analysis"
+                          >
+                            <StopCircle className="w-4 h-4 mr-2" />
+                            Stop ({progress.completed}/{progress.total})
+                          </Button>
+                        ) : (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                title="Re-analyze (R)"
+                              >
+                                <RefreshCw className="w-4 h-4 mr-2" />
+                                Re-analyze
+                                <ChevronDown className="w-4 h-4 ml-2" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={async () => {
+                                  const dates = selectAllMatching 
+                                    ? await fetchAllMatchingDates()
+                                    : Array.from(selectedDates);
+                                  await reanalyzeDates(dates);
+                                }}
+                              >
+                                <RefreshCw className="w-4 h-4 mr-2" />
+                                Analyse Days
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={async () => {
+                                  const dates = selectAllMatching 
+                                    ? await fetchAllMatchingDates()
+                                    : Array.from(selectedDates);
+                                  await redoSummaries(dates);
+                                }}
+                              >
+                                <FileText className="w-4 h-4 mr-2" />
+                                Redo Summaries
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
 
-                        {/* Auto Tagging Button */}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={isCategorizing}
-                          onClick={async () => {
-                            setIsCategorizing(true);
-                            try {
-                              await fetch('/api/tags/categorize/start', { method: 'POST' });
-                              toast({
-                                title: "Auto Tagging started",
-                                description: "AI is categorizing tags in the background",
-                              });
-                            } catch (err) {
-                              toast({
-                                title: "Error",
-                                description: "Failed to start auto tagging",
-                                variant: "destructive",
-                              });
-                            }
-                            setIsCategorizing(false);
-                          }}
-                        >
-                          {isCategorizing ? (
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          ) : (
-                            <SiOpenai className="w-4 h-4 mr-2" />
-                          )}
-                          Auto Tagging
-                        </Button>
+                        {/* Tagging Dropdown */}
+                        <TaggingDropdown
+                          selectedDates={Array.from(selectedDates)}
+                          selectAllMatching={selectAllMatching}
+                          onDatesResolve={fetchAllMatchingDates}
+                        />
 
                         {/* Manage Tags Button */}
                         <Button
@@ -2202,6 +2117,8 @@ export default function EventsManager() {
                     ),
                   }}
                 />
+                  </>
+                )}
               </>
             )}
               </Card>
@@ -2567,6 +2484,22 @@ export default function EventsManager() {
             }}
             isLoading={deleteTagMutation.isPending}
           />
+
+          {/* Article Selection Dialog for Bulk Re-analyze */}
+          {selectionRequest && (
+            <ArticleSelectionDialog
+              open={isSelectionDialogOpen}
+              onOpenChange={setIsSelectionDialogOpen}
+              date={selectionRequest.date}
+              selectionMode={selectionRequest.selectionData.selectionMode}
+              tieredArticles={selectionRequest.selectionData.tieredArticles || { bitcoin: [], crypto: [], macro: [] }}
+              geminiSelectedIds={selectionRequest.selectionData.geminiSelectedIds}
+              perplexitySelectedIds={selectionRequest.selectionData.perplexitySelectedIds}
+              intersectionIds={selectionRequest.selectionData.intersectionIds}
+              openaiSuggestedId={selectionRequest.selectionData.openaiSuggestedId}
+              onConfirm={confirmSelection}
+            />
+          )}
           </div>
         </div>
       </div>

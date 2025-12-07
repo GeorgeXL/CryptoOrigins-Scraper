@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
+import { TaggingDropdown } from "@/components/TaggingDropdown";
 import { 
   Dialog,
   DialogContent,
@@ -68,6 +70,7 @@ import { supabase } from "@/lib/supabase";
 import { Link } from "wouter";
 import { EditTagDialog } from "@/components/TagsManager/EditTagDialog";
 import { DeleteDialog } from "@/components/TagsManager/DeleteDialog";
+import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { getCategoryDisplayMeta } from "@shared/taxonomy";
 import { TagsSidebar } from "@/components/TagsSidebar";
 import {
@@ -155,8 +158,17 @@ export default function TagsBrowser() {
   const [showManageTags, setShowManageTags] = useState(false);
   const [bulkTagName, setBulkTagName] = useState("");
   const [bulkTagCategory, setBulkTagCategory] = useState("crypto");
-  const [isReanalyzing, setIsReanalyzing] = useState(false);
-  const [isCategorizing, setIsCategorizing] = useState(false);
+  const { 
+    isReanalyzing, 
+    reanalyzeDates, 
+    redoSummaries,
+    cancelAnalysis,
+    selectionRequest,
+    isSelectionDialogOpen,
+    setIsSelectionDialogOpen,
+    confirmSelection,
+    progress
+  } = useBulkReanalyze();
 
   // Fetch flat tags from new v2 endpoint for frontend grouping
   const { data: catalogV2Data, error: catalogError } = useQuery<{
@@ -1175,106 +1187,63 @@ export default function TagsBrowser() {
                 },
                 customActions: (
                   <>
-                    {/* Re-analyze Dropdown */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={isReanalyzing}
-                          title="Re-analyze (R)"
-                        >
-                          <RefreshCw className={`w-4 h-4 mr-2 ${isReanalyzing ? 'animate-spin' : ''}`} />
-                          Re-analyze
-                          <ChevronDown className="w-4 h-4 ml-2" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={async () => {
-                            setIsReanalyzing(true);
-                            const dates = selectAllMatching 
-                              ? paginatedAnalyses.map(a => a.date) 
-                              : Array.from(selectedDates);
-                            
-                            for (const date of dates) {
-                              try {
-                                await fetch(`/api/analysis/date/${date}`, { method: 'POST' });
-                              } catch (err) {
-                                console.error(`Failed to analyze ${date}:`, err);
-                              }
-                            }
-                            setIsReanalyzing(false);
-                            queryClient.invalidateQueries({ queryKey: ['analyses'] });
-                            toast({
-                              title: "Re-analysis complete",
-                              description: `Analyzed ${dates.length} date(s)`,
-                            });
-                          }}
-                          disabled={isReanalyzing}
-                        >
-                          <RefreshCw className="w-4 h-4 mr-2" />
-                          Analyse Days
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={async () => {
-                            setIsReanalyzing(true);
-                            const dates = selectAllMatching 
-                              ? paginatedAnalyses.map(a => a.date) 
-                              : Array.from(selectedDates);
-                            
-                            for (const date of dates) {
-                              try {
-                                await fetch(`/api/analysis/date/${date}/redo-summary`, { method: 'POST' });
-                              } catch (err) {
-                                console.error(`Failed to redo summary for ${date}:`, err);
-                              }
-                            }
-                            setIsReanalyzing(false);
-                            queryClient.invalidateQueries({ queryKey: ['analyses'] });
-                            toast({
-                              title: "Summaries updated",
-                              description: `Redid summaries for ${dates.length} date(s)`,
-                            });
-                          }}
-                          disabled={isReanalyzing}
-                        >
-                          <FileText className="w-4 h-4 mr-2" />
-                          Redo Summaries
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {/* Re-analyze Dropdown or Stop Button */}
+                    {isReanalyzing ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={cancelAnalysis}
+                        title="Stop bulk analysis"
+                      >
+                        <StopCircle className="w-4 h-4 mr-2" />
+                        Stop ({progress.completed}/{progress.total})
+                      </Button>
+                    ) : (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            title="Re-analyze (R)"
+                          >
+                            <RefreshCw className="w-4 h-4 mr-2" />
+                            Re-analyze
+                            <ChevronDown className="w-4 h-4 ml-2" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={async () => {
+                              const dates = selectAllMatching 
+                                ? await fetchAllMatchingDates()
+                                : Array.from(selectedDates);
+                              await reanalyzeDates(dates);
+                            }}
+                          >
+                            <RefreshCw className="w-4 h-4 mr-2" />
+                            Analyse Days
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={async () => {
+                              const dates = selectAllMatching 
+                                ? await fetchAllMatchingDates()
+                                : Array.from(selectedDates);
+                              await redoSummaries(dates);
+                            }}
+                          >
+                            <FileText className="w-4 h-4 mr-2" />
+                            Redo Summaries
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
 
-                    {/* Auto Tagging Button */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={isCategorizing}
-                      onClick={async () => {
-                        setIsCategorizing(true);
-                        try {
-                          await fetch('/api/tags/categorize/start', { method: 'POST' });
-                          toast({
-                            title: "Auto Tagging started",
-                            description: "AI is categorizing tags in the background",
-                          });
-                        } catch (err) {
-                          toast({
-                            title: "Error",
-                            description: "Failed to start auto tagging",
-                            variant: "destructive",
-                          });
-                        }
-                        setIsCategorizing(false);
-                      }}
-                    >
-                      {isCategorizing ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      ) : (
-                        <SiOpenai className="w-4 h-4 mr-2" />
-                      )}
-                      Auto Tagging
-                    </Button>
+                    {/* Tagging Dropdown */}
+                    <TaggingDropdown
+                      selectedDates={Array.from(selectedDates)}
+                      selectAllMatching={selectAllMatching}
+                      onDatesResolve={fetchAllMatchingDates}
+                    />
 
                     {/* Manage Tags Button */}
                     <Button
@@ -1652,6 +1621,22 @@ export default function TagsBrowser() {
             }}
             isLoading={deleteTagMutation.isPending}
           />
+
+          {/* Article Selection Dialog for Bulk Re-analyze */}
+          {selectionRequest && (
+            <ArticleSelectionDialog
+              open={isSelectionDialogOpen}
+              onOpenChange={setIsSelectionDialogOpen}
+              date={selectionRequest.date}
+              selectionMode={selectionRequest.selectionData.selectionMode}
+              tieredArticles={selectionRequest.selectionData.tieredArticles || { bitcoin: [], crypto: [], macro: [] }}
+              geminiSelectedIds={selectionRequest.selectionData.geminiSelectedIds}
+              perplexitySelectedIds={selectionRequest.selectionData.perplexitySelectedIds}
+              intersectionIds={selectionRequest.selectionData.intersectionIds}
+              openaiSuggestedId={selectionRequest.selectionData.openaiSuggestedId}
+              onConfirm={confirmSelection}
+            />
+          )}
           </div>
         </div>
       </div>

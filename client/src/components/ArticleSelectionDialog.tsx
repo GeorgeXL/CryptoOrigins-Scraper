@@ -162,7 +162,7 @@ export function ArticleSelectionDialog({
     return (
       <Card
         key={article.id}
-        className={`group cursor-pointer transition-all duration-200 hover:scale-[1.02] hover:shadow-lg ${
+        className={`group cursor-pointer transition-all duration-200 hover:scale-[1.02] hover:shadow-lg w-full ${
           status.isSelected 
             ? 'ring-2 ring-green-500/50 shadow-lg shadow-green-500/20' 
             : 'hover:ring-1 hover:ring-border'
@@ -174,8 +174,8 @@ export function ArticleSelectionDialog({
         }}
       >
         <CardContent className="p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1 space-y-3">
+          <div className="flex items-start justify-between gap-4 w-full">
+            <div className="flex-1 space-y-3 min-w-0">
               <div className="flex items-start gap-3">
                 {status.isSelected && (
                   <div className="flex-shrink-0 mt-1">
@@ -184,14 +184,14 @@ export function ArticleSelectionDialog({
                     </div>
                   </div>
                 )}
-                <div className="flex-1">
-                  <h4 className={`font-semibold leading-tight mb-2 ${
+                <div className="flex-1 min-w-0">
+                  <h4 className={`font-semibold leading-tight mb-2 break-words ${
                     status.isSelected ? 'text-green-300' : 'text-foreground'
                   }`}>
                     {article.title}
                   </h4>
                   {article.summary && (
-                    <p className="text-sm text-muted-foreground leading-relaxed line-clamp-3 mb-3">
+                    <p className="text-sm text-muted-foreground leading-relaxed line-clamp-3 mb-3 break-words">
                       {article.summary}
                     </p>
                   )}
@@ -277,7 +277,7 @@ export function ArticleSelectionDialog({
     }
 
     return (
-      <div className="space-y-4">
+      <div className="space-y-4 w-full">
         {displayArticles.map((article) => renderArticle(article, tier))}
       </div>
     );
@@ -285,7 +285,7 @@ export function ArticleSelectionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[90vh] flex flex-col bg-background border-border text-foreground shadow-2xl">
+      <DialogContent className="max-w-5xl max-h-[90vh] flex flex-col bg-background border-border text-foreground shadow-2xl overflow-hidden">
         <DialogHeader className="space-y-4 pb-4 border-b border-border">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 space-y-2">
@@ -376,14 +376,14 @@ export function ArticleSelectionDialog({
             </TabsTrigger>
           </TabsList>
 
-          <div className="mt-4 flex-1 overflow-y-auto pr-2 min-h-0">
-            <TabsContent value="bitcoin" className="mt-0">
+          <div className="mt-4 flex-1 overflow-y-auto overflow-x-hidden pr-2 min-h-0 max-h-[calc(90vh-300px)]">
+            <TabsContent value="bitcoin" className="mt-0 space-y-4">
               {renderTier('bitcoin', tieredArticles.bitcoin)}
             </TabsContent>
-            <TabsContent value="crypto" className="mt-0">
+            <TabsContent value="crypto" className="mt-0 space-y-4">
               {renderTier('crypto', tieredArticles.crypto)}
             </TabsContent>
-            <TabsContent value="macro" className="mt-0">
+            <TabsContent value="macro" className="mt-0 space-y-4">
               {renderTier('macro', tieredArticles.macro)}
             </TabsContent>
           </div>

@@ -33,6 +33,10 @@ export const historicalNewsAnalyses = pgTable("historical_news_analyses", {
   isFlagged: boolean("is_flagged").default(false),
   flagReason: text("flag_reason"),
   flaggedAt: timestamp("flagged_at"),
+  isOrphan: boolean("is_orphan").default(false), // Marks entries where neither Perplexity nor Gemini found relevant articles
+  geminiApproved: boolean("gemini_approved"), // Whether Gemini approved this article
+  perplexityApproved: boolean("perplexity_approved"), // Whether Perplexity approved this article
+  finalAnalysisCheckedAt: timestamp("final_analysis_checked_at"), // When final analysis verification was performed
   factCheckVerdict: text("fact_check_verdict"), // 'verified', 'contradicted', 'uncertain'
   factCheckConfidence: numeric("fact_check_confidence", { precision: 5, scale: 2 }), // 0-100
   factCheckReasoning: text("fact_check_reasoning"),

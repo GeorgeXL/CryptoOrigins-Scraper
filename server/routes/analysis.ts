@@ -205,6 +205,9 @@ function parsePerplexityDate(dateText: string | null): string | null {
     try {
       const { date } = req.params;
       const { aiProvider = 'openai', forceReanalysis = false } = req.body;
+      // Fallback: also honor ?force=true|1 query param for bulk buttons that might not send JSON body
+      const forceFromQuery = req.query.force === 'true' || req.query.force === '1';
+      const isForce = Boolean(forceReanalysis || forceFromQuery);
       const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
       const userAgent = req.get('User-Agent') || 'unknown';
       const referer = req.get('Referer') || 'no-referer';
@@ -214,12 +217,12 @@ function parsePerplexityDate(dateText: string | null): string | null {
       }
 
       console.log(`🚀 [${requestId}] POST /api/analysis/date/${date} - RECEIVED`);
-      console.log(`📊 [${requestId}] Request details: force=${forceReanalysis}, aiProvider=${aiProvider}`);
+      console.log(`📊 [${requestId}] Request details: force=${isForce}, aiProvider=${aiProvider}`);
       console.log(`🌐 [${requestId}] Source: ${referer}`);
       console.log(`🖥️ [${requestId}] User-Agent: ${userAgent.substring(0, 50)}...`);
 
       // DATABASE DEDUPLICATION: Check if analysis already exists (unless forcing reanalysis)
-      if (!forceReanalysis) {
+      if (!isForce) {
         console.log(`🔍 [${requestId}] Checking if analysis already exists for ${date}...`);
         const existingAnalysis = await storage.getAnalysisByDate(date);
         if (existingAnalysis) {
@@ -240,6 +243,29 @@ function parsePerplexityDate(dateText: string | null): string | null {
         console.log(`➡️ [${requestId}] No existing analysis found, proceeding with new analysis...`);
       } else {
         console.log(`🔄 [${requestId}] Force reanalysis requested, skipping database check...`);
+        
+        // Clear existing tags when re-analyzing
+        try {
+          const existingAnalysis = await storage.getAnalysisByDate(date);
+          if (existingAnalysis) {
+            console.log(`🏷️ [${requestId}] Clearing existing tags for ${date}...`);
+            
+            // Clear tags_version2 array and old tags JSONB field
+            await storage.updateAnalysis(date, {
+              tags: [],
+              tagsVersion2: []
+            });
+            
+            // Clear normalized tags (pages_and_tags join table)
+            const { pagesAndTags } = await import('@shared/schema');
+            const { eq } = await import('drizzle-orm');
+            await db.delete(pagesAndTags).where(eq(pagesAndTags.analysisId, existingAnalysis.id));
+            
+            console.log(`✅ [${requestId}] Tags cleared for ${date}`);
+          }
+        } catch (tagClearError) {
+          console.warn(`⚠️ [${requestId}] Failed to clear tags, continuing anyway:`, tagClearError);
+        }
       }
 
       // Import analyse day function
@@ -268,29 +294,40 @@ function parsePerplexityDate(dateText: string | null): string | null {
         }
       } catch (analysisError) {
         console.error(`💥 [${requestId}] Error during analysis, but attempting to save any fetched articles...`, analysisError);
+        console.error(`   Error stack:`, (analysisError as Error).stack);
         
-        // Even if analysis failed, try to save any articles that were fetched
-        // This ensures articles are preserved for manual review
-        // Note: tieredArticles might be empty if error occurred before fetching
-        analysisResult = {
-          summary: '',
-          topArticleId: 'none',
-          reasoning: `Analysis failed: ${(analysisError as Error).message}. Articles were still saved for manual review.`,
-          winningTier: 'none',
-          tieredArticles: tieredArticles,
-          aiProvider: 'openai',
-          confidenceScore: 0,
-          sentimentScore: 0,
-          sentimentLabel: 'neutral',
-          topicCategories: [],
-          duplicateArticleIds: [],
-          totalArticlesFetched: (tieredArticles.bitcoin?.length || 0) + (tieredArticles.crypto?.length || 0) + (tieredArticles.macro?.length || 0),
-          uniqueArticlesAnalyzed: 0,
-          perplexityVerdict: 'uncertain',
-          perplexityApproved: false,
-          geminiApproved: false,
-          factCheckVerdict: 'uncertain'
-        };
+        // Check if the error occurred after perplexity/gemini (meaning we might have selection data)
+        // If analysisResult already has requiresSelection, preserve it
+        const hasSelectionData = analysisResult && 'requiresSelection' in analysisResult && (analysisResult as any).requiresSelection;
+        
+        if (hasSelectionData) {
+          console.log(`   ⚠️ [${requestId}] Error occurred but selection data exists, preserving it`);
+          console.log(`   Selection mode: ${(analysisResult as any).selectionMode}`);
+          // Keep the existing analysisResult with requiresSelection - don't overwrite it
+        } else {
+          // Even if analysis failed, try to save any articles that were fetched
+          // This ensures articles are preserved for manual review
+          // Note: tieredArticles might be empty if error occurred before fetching
+          analysisResult = {
+            summary: '',
+            topArticleId: 'none',
+            reasoning: `Analysis failed: ${(analysisError as Error).message}. Articles were still saved for manual review.`,
+            winningTier: 'none',
+            tieredArticles: tieredArticles,
+            aiProvider: 'openai',
+            confidenceScore: 0,
+            sentimentScore: 0,
+            sentimentLabel: 'neutral',
+            topicCategories: [],
+            duplicateArticleIds: [],
+            totalArticlesFetched: (tieredArticles.bitcoin?.length || 0) + (tieredArticles.crypto?.length || 0) + (tieredArticles.macro?.length || 0),
+            uniqueArticlesAnalyzed: 0,
+            perplexityVerdict: 'uncertain',
+            perplexityApproved: false,
+            geminiApproved: false,
+            factCheckVerdict: 'uncertain'
+          };
+        }
       }
       
       // CRITICAL: Always use tieredArticles from analysisResult if available (even after error handling)
@@ -300,8 +337,28 @@ function parsePerplexityDate(dateText: string | null): string | null {
       }
 
       // Check if user selection is required
+      // Safety check: ensure analysisResult exists
+      if (!analysisResult) {
+        console.error(`💥 [${requestId}] analysisResult is undefined! This should not happen.`);
+        return res.status(500).json({ 
+          error: 'Analysis failed unexpectedly',
+          requiresSelection: false 
+        });
+      }
+      
       if (analysisResult.requiresSelection) {
         console.log(`🔄 [${requestId}] User selection required (mode: ${analysisResult.selectionMode})`);
+        console.log(`   📊 Selection data:`, {
+          geminiCount: analysisResult.geminiSelectedIds?.length || 0,
+          perplexityCount: analysisResult.perplexitySelectedIds?.length || 0,
+          intersectionCount: analysisResult.intersectionIds?.length || 0,
+          openaiSuggested: analysisResult.openaiSuggestedId,
+          tieredArticlesCount: {
+            bitcoin: tieredArticles?.bitcoin?.length || 0,
+            crypto: tieredArticles?.crypto?.length || 0,
+            macro: tieredArticles?.macro?.length || 0
+          }
+        });
         try {
           // Save the analysis state with articles but no summary yet
           const initialAnalysisData: Partial<InsertHistoricalNewsAnalysis> = {
@@ -339,7 +396,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
         }
         
         // Return selection data to frontend
-        return res.json({
+        const responseData = {
           requiresSelection: true,
           selectionMode: analysisResult.selectionMode,
           tieredArticles: tieredArticles,
@@ -348,7 +405,9 @@ function parsePerplexityDate(dateText: string | null): string | null {
           intersectionIds: analysisResult.intersectionIds || [],
           openaiSuggestedId: analysisResult.openaiSuggestedId,
           date: date
-        });
+        };
+        console.log(`📤 [${requestId}] Sending selection response to frontend`);
+        return res.json(responseData);
       }
 
       // Check if AIs didn't agree
@@ -1949,6 +2008,47 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
         violations: violations.length
       });
     } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // Empty summaries (server-side, bypasses any client RLS issues)
+  router.get("/api/quality-check/empty-summaries", async (_req, res) => {
+    try {
+      const analyses = await storage.getAllAnalyses();
+      const minValidDate = new Date('2009-01-03');
+
+      const existingDates = new Set<string>();
+      const emptyEntries: { date: string; summary: string }[] = [];
+
+      for (const a of analyses) {
+        existingDates.add(a.date);
+        const isEmpty = !a.summary || a.summary.trim() === '';
+        if (isEmpty) {
+          emptyEntries.push({ date: a.date, summary: a.summary || '' });
+        }
+      }
+
+      // also add missing dates between minValidDate and max existing
+      const sortedDates = Array.from(existingDates).sort();
+      if (sortedDates.length > 0) {
+        const maxDate = new Date(sortedDates[sortedDates.length - 1]);
+        const cursor = new Date(minValidDate);
+        while (cursor <= maxDate) {
+          const ds = cursor.toISOString().split('T')[0];
+          if (!existingDates.has(ds)) {
+            emptyEntries.push({ date: ds, summary: '' });
+          }
+          cursor.setDate(cursor.getDate() + 1);
+        }
+      }
+
+      res.json({
+        entries: emptyEntries,
+        totalCount: emptyEntries.length
+      });
+    } catch (error) {
+      console.error("❌ Error fetching empty summaries:", error);
       res.status(500).json({ error: (error as Error).message });
     }
   });

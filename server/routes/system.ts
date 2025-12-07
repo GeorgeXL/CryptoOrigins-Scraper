@@ -419,4 +419,161 @@ router.get("/api/raw-data-viewer", async (req, res) => {
   }
 });
 
+// Check for missing dates endpoint (read-only)
+router.get("/api/system/check-missing-dates", async (req, res) => {
+  try {
+    console.log('🔍 Checking for missing dates...');
+    
+    // Get all existing dates from the database
+    const allAnalyses = await storage.getAllAnalyses();
+    const existingDates = new Set(allAnalyses.map(a => a.date));
+    console.log(`📊 Found ${existingDates.size} existing dates in database`);
+    
+    // Generate expected date range: 2009-01-03 to 2024-12-31
+    const startDate = new Date('2009-01-03');
+    const endDate = new Date('2024-12-31');
+    const expectedDates: string[] = [];
+    
+    const currentDate = new Date(startDate);
+    while (currentDate <= endDate) {
+      const dateStr = currentDate.toISOString().split('T')[0];
+      expectedDates.push(dateStr);
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    // Find missing dates
+    const missingDates = expectedDates.filter(date => !existingDates.has(date));
+    console.log(`❌ Found ${missingDates.length} missing dates`);
+    
+    res.json({
+      success: true,
+      hasMissingDates: missingDates.length > 0,
+      missingCount: missingDates.length,
+      totalExpected: expectedDates.length,
+      totalExisting: existingDates.size,
+      missingDates: missingDates.slice(0, 10) // Return first 10 for reference
+    });
+    
+  } catch (error) {
+    console.error('❌ Error checking missing dates:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      hasMissingDates: null
+    });
+  }
+});
+
+// Backfill missing dates endpoint
+router.post("/api/system/backfill-missing-dates", async (req, res) => {
+  try {
+    console.log('🔄 Starting backfill of missing dates...');
+    
+    // Get all existing dates from the database
+    const allAnalyses = await storage.getAllAnalyses();
+    const existingDates = new Set(allAnalyses.map(a => a.date));
+    console.log(`📊 Found ${existingDates.size} existing dates in database`);
+    
+    // Generate expected date range: 2009-01-03 to 2024-12-31
+    const startDate = new Date('2009-01-03');
+    const endDate = new Date('2024-12-31');
+    const expectedDates: string[] = [];
+    
+    const currentDate = new Date(startDate);
+    while (currentDate <= endDate) {
+      const dateStr = currentDate.toISOString().split('T')[0];
+      expectedDates.push(dateStr);
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    console.log(`📅 Expected date range: ${expectedDates.length} days (${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]})`);
+    
+    // Find missing dates
+    const missingDates = expectedDates.filter(date => !existingDates.has(date));
+    console.log(`❌ Found ${missingDates.length} missing dates`);
+    
+    if (missingDates.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No missing dates found. All dates are present in the database.',
+        created: 0,
+        totalExpected: expectedDates.length,
+        totalExisting: existingDates.size
+      });
+    }
+    
+    // Create placeholder rows for missing dates
+    const placeholderRows: InsertHistoricalNewsAnalysis[] = missingDates.map(date => ({
+      date,
+      summary: '', // Empty summary - will be filled when analyzed
+      topArticleId: 'none',
+      reasoning: 'Placeholder row - awaiting analysis',
+      winningTier: 'none',
+      tieredArticles: { bitcoin: [], crypto: [], macro: [] },
+      aiProvider: 'openai',
+      confidenceScore: '0',
+      sentimentScore: '0',
+      sentimentLabel: 'neutral',
+      topicCategories: [],
+      duplicateArticleIds: [],
+      totalArticlesFetched: 0,
+      uniqueArticlesAnalyzed: 0,
+      perplexityVerdict: 'uncertain',
+      perplexityApproved: false,
+      geminiApproved: false,
+      factCheckVerdict: 'uncertain',
+      isOrphan: false
+    }));
+    
+    // Insert missing rows (handle duplicates gracefully)
+    let created = 0;
+    let skipped = 0;
+    let errors = 0;
+    
+    for (const row of placeholderRows) {
+      try {
+        // Check if it exists (race condition protection)
+        const existing = await storage.getAnalysisByDate(row.date);
+        if (existing) {
+          skipped++;
+          continue;
+        }
+        
+        await storage.createAnalysis(row);
+        created++;
+      } catch (error: any) {
+        // If it's a unique constraint violation, it means another process created it
+        if (error?.code === '23505' || error?.message?.includes('unique')) {
+          skipped++;
+        } else {
+          console.error(`Error creating row for ${row.date}:`, error);
+          errors++;
+        }
+      }
+    }
+    
+    console.log(`✅ Backfill complete: ${created} created, ${skipped} skipped (already exist), ${errors} errors`);
+    
+    res.json({
+      success: true,
+      message: `Backfill complete: Created ${created} placeholder rows for missing dates.`,
+      created,
+      skipped,
+      errors,
+      totalMissing: missingDates.length,
+      totalExpected: expectedDates.length,
+      totalExisting: existingDates.size,
+      missingDates: missingDates.slice(0, 10) // Return first 10 for reference
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in backfill-missing-dates:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      message: 'Failed to backfill missing dates'
+    });
+  }
+});
+
 export default router;

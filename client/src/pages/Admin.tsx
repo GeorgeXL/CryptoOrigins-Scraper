@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import CSVImportDialog from "@/components/CSVImportDialog";
-import { Upload, Loader2, Download, FileText } from "lucide-react";
+import { Upload, Loader2, Download, FileText, Database, CheckCircle2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 
@@ -17,6 +17,9 @@ export default function Admin() {
   const { toast } = useToast();
   const [isExporting, setIsExporting] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
+  const [isBackfilling, setIsBackfilling] = useState(false);
+  const [hasMissingDates, setHasMissingDates] = useState<boolean | null>(null);
+  const [isCheckingMissingDates, setIsCheckingMissingDates] = useState(false);
 
 
   // Export Functions - using Supabase directly for reliability
@@ -251,6 +254,73 @@ export default function Admin() {
     }
   };
 
+  // Check for missing dates
+  const checkMissingDates = async () => {
+    setIsCheckingMissingDates(true);
+    try {
+      const response = await fetch('/api/system/check-missing-dates', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to check for missing dates');
+      }
+
+      const data = await response.json();
+      setHasMissingDates(data.hasMissingDates);
+    } catch (error) {
+      console.error('Check missing dates failed:', error);
+      // On error, assume we don't know, so allow the button to be clicked
+      setHasMissingDates(null);
+    } finally {
+      setIsCheckingMissingDates(false);
+    }
+  };
+
+  // Check on mount
+  useEffect(() => {
+    checkMissingDates();
+  }, []);
+
+  const handleBackfillMissingDates = async () => {
+    setIsBackfilling(true);
+    try {
+      const response = await fetch('/api/system/backfill-missing-dates', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || errorData.message || 'Failed to backfill missing dates');
+      }
+
+      const data = await response.json();
+      
+      // Update state after backfill - recheck to get accurate status
+      await checkMissingDates();
+      
+      toast({
+        title: "Backfill Complete",
+        description: data.message || `Created ${data.created} placeholder rows for missing dates.`,
+      });
+    } catch (error) {
+      console.error('Backfill failed:', error);
+      toast({
+        title: "Backfill Failed",
+        description: error instanceof Error ? error.message : "Failed to backfill missing dates. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsBackfilling(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -310,6 +380,39 @@ export default function Admin() {
             </Button>
             <p className="text-sm text-muted-foreground">
               Export all historical Bitcoin news analyses. Choose between CSV (for spreadsheets) or TXT (for reading) format.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Database Maintenance Section */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Database className="w-5 h-5" />
+              <CardTitle>Database Maintenance</CardTitle>
+            </div>
+            <CardDescription>
+              Backfill missing date rows in the database
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={handleBackfillMissingDates}
+              disabled={isBackfilling || isCheckingMissingDates || hasMissingDates === false}
+            >
+              {isBackfilling || isCheckingMissingDates ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : hasMissingDates === false ? (
+                <CheckCircle2 className="w-4 h-4 mr-2 text-green-600" />
+              ) : (
+                <Database className="w-4 h-4 mr-2" />
+              )}
+              {isBackfilling ? 'Backfilling...' : isCheckingMissingDates ? 'Checking...' : hasMissingDates === false ? 'All Dates Present' : 'Create Missing Date Rows'}
+            </Button>
+            <p className="text-sm text-muted-foreground">
+              Creates placeholder rows for dates that are missing from the database (2009-01-03 to 2024-12-31). This ensures all dates have entries even if they haven't been analyzed yet.
             </p>
           </CardContent>
         </Card>

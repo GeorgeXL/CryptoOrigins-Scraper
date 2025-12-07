@@ -131,27 +131,50 @@ TAXONOMY STRUCTURE (11 Main Categories):
 
 IMPORTANT CATEGORIZATION GUIDELINES:
 
+**People:**
+- Government officials, politicians → people (5.2)
+- CEOs, tech founders, crypto figures → people (5.1 or 5.3)
+- Always categorize PEOPLE as "people" category, NOT as organizations or geography!
+
+**Organizations & Companies:**
+- Exchanges (Binance, Coinbase) → organizations (4.1)
+- Banks, investment firms (JPMorgan, Goldman Sachs, Berkshire Hathaway) → organizations (4.2)
+- Payment companies (PayPal, Visa) → organizations (4.4.1)
+- Tech companies (Apple, Microsoft, Amazon) → organizations (4.7)
+- Media companies (HBO, CNN) → organizations (4.8)
+- Sports teams (Liverpool, NFL) → organizations (4.10)
+
 **Cryptocurrencies & Tokens:**
 - Ethereum, Litecoin, Ripple, Cardano, etc. → money-economics (2.1)
 - Stablecoins (USDT, USDC, DAI) → money-economics (2.2)
 - DeFi tokens (UNI, AAVE, COMP) → money-economics (2.3)
 - NFT projects, gaming tokens → money-economics (2.4)
 
-**Organizations:**
-- Exchanges (Binance, Coinbase) → organizations (4.1)
-- Banks, investment firms → organizations (4.2)
-- Payment companies (PayPal, Visa) → organizations (4.4.1)
-- Tech companies (Apple, Microsoft) → organizations (4.7)
-- Media companies (HBO, CNN) → organizations (4.8)
-- Sports teams (Liverpool, NFL) → organizations (4.10)
+**Technology & Standards:**
+- Technical standards (BEP-2, ERC-20, SegWit) → technology (3.5)
+- DeFi concepts (liquidity pools, AMMs) → technology (3.2)
+- Blockchain concepts → technology (3.1)
+
+**Geography:**
+- Countries, regions, cities → markets-geography (7.1 or 7.2)
+- NOT for people or organizations!
 
 **Topics (themes, not entities):**
 - "Bitcoin Price", "Regulation", "Adoption" → topics (10.x)
 
+CRITICAL RULES:
+1. The category key is "markets-geography" (NOT "geography-markets")
+2. People names → people category (5.x)
+3. Company names → organizations category (4.x)
+4. Technical terms → technology category (3.x)
+5. Countries/cities → markets-geography category (7.x)
+
 INSTRUCTIONS:
 - Choose the most specific subcategory that accurately describes the tag
-- Use the exact category key (e.g., "bitcoin", "money-economics", "organizations")
+- Use the EXACT category key: "markets-geography" (never "geography-markets")
 - Provide the full subcategory path as an array (e.g., ["2.1"] or ["4.2", "4.2.1"])
+- The path should ONLY contain subcategories within ONE main category
+- Never mix paths from different categories (e.g., ["1.2.6", "4.3.2"] is INVALID)
 - If unsure, use "miscellaneous" with path ["11.1"]
 - Be precise with subcategory keys - they must match the structure exactly
 `;
@@ -200,34 +223,40 @@ Analyze this tag and determine:
 
 CRITICAL RULES FOR CATEGORIZATION:
 
-1. **Numbers and Currency Values:**
-   - Tags that are pure numbers, currency amounts (e.g., "$902", "$7,450", "$60 billion", "$3,000"), or price values should be categorized as:
-     * "markets-trading" with subcategory path ["10.3"] (Market Data & Metrics) if they represent market data, prices, or trading metrics
-     * "miscellaneous" with subcategory path ["14.1"] if the value is unclear or doesn't fit market data
-   - DO NOT categorize numbers or currency amounts as "technology" - they are NOT technology concepts
+1. **Category Keys - USE EXACT KEYS:**
+   - markets-geography (✅ CORRECT - for countries, cities, regions)
+   - NEVER use "geography-markets" (❌ WRONG)
+   - Use only these 11 exact category keys: bitcoin, money-economics, technology, organizations, people, regulation-law, markets-geography, education-community, crime-security, topics, miscellaneous
 
-2. **Technology Category:**
-   - The "technology" category (4. ⚡ Technology & Concepts) is ONLY for:
-     * Technical concepts (cryptography, consensus mechanisms, protocols)
-     * DeFi concepts (AMMs, lending, staking)
-     * Web3 concepts (decentralized storage, DAOs)
-     * Security/privacy technologies
-     * Wallets and key management
-     * Technical standards and protocols
-   - Numbers, prices, amounts, or currency values are NEVER technology
+2. **People vs Organizations:**
+   - PEOPLE (names of individuals) → people (5.x)
+     * Examples: "Bernanke", "Satoshi Nakamoto", "Elon Musk", "Janet Yellen"
+   - ORGANIZATIONS (companies, institutions) → organizations (4.x)
+     * Examples: "Amazon", "Berkshire Hathaway", "Federal Reserve", "JPMorgan"
+   - Never categorize people as organizations or geography!
 
-3. **General Rules:**
-   - Choose the most specific subcategory that accurately describes the tag
-   - If the tag doesn't clearly fit any category, use "miscellaneous" with subcategory path ["14.1"]
-   - Be precise with subcategory paths - they must match the taxonomy structure exactly
-   - Confidence should reflect how certain you are about the categorization
+3. **Technology & Standards:**
+   - Technical standards (BEP-2, ERC-20, SegWit, BIP) → technology (3.5)
+   - Blockchain concepts → technology (3.1)
+   - DeFi concepts → technology (3.2)
+   - NOT for numbers or currency amounts
 
-4. **Examples:**
-   - "$902" → "markets-trading" ["10.3"] (market data/metric)
-   - "$60 billion" → "markets-trading" ["10.3"] (market data/metric)
-   - "$3,000" → "markets-trading" ["10.3"] (likely a price)
-   - "Lightning Network" → "technology" ["4.1.2"] (distributed systems)
-   - "Proof of Stake" → "technology" ["4.1.2"] (consensus mechanism)
+4. **Numbers and Currency Values:**
+   - Pure numbers or currency amounts (e.g., "$902", "$60 billion") → topics (10.1.1) for price-related
+   - Or miscellaneous (11.1) if unclear
+
+5. **Subcategory Paths:**
+   - Paths must be within ONE category only
+   - VALID: ["4.2", "4.2.3"] (within organizations)
+   - INVALID: ["1.2.6", "4.3.2"] (mixing bitcoin and organizations)
+   - If unsure, use just the top-level subcategory (e.g., ["4.2"] not ["4.2", "4.2.3"])
+
+6. **Examples:**
+   - "BEP-2" → "technology" ["3.5"] (technical standard)
+   - "Berkshire Hathaway" → "organizations" ["4.2", "4.2.3"] (asset manager)
+   - "Bernanke" → "people" ["5.2"] (government official)
+   - "United States" → "markets-geography" ["7.1"] (country)
+   - "Lightning Network" → "technology" ["3.1"] (blockchain concept)
    - "Bitcoin" → "bitcoin" ["1.1"] (the currency)
 
 Return ONLY a JSON object in this exact format:
@@ -274,7 +303,7 @@ Return ONLY a JSON object in this exact format:
     const startTime = Date.now();
     const result = await provider.generateJson<CategorizationResult>({
       prompt,
-      systemPrompt: 'You are a precise categorization assistant. Always return valid JSON.',
+      systemPrompt: 'You are a precise categorization assistant. Always return valid JSON. CRITICAL: Use "markets-geography" NOT "geography-markets". Categorize people as "people", organizations as "organizations", technical standards as "technology".',
       schema: categorizationSchema,
       temperature: 0.3, // Lower temperature for more consistent categorization
       monitorId, // Pass existing monitor ID so provider updates instead of creating new
@@ -386,19 +415,16 @@ export async function fixSubcategoryPath(
   // Get the category number from the category key
   const categoryToNumber: Record<string, string> = {
     "bitcoin": "1",
-    "blockchain-platforms": "2",
-    "digital-assets": "3",
-    "technology": "4",
-    "organizations": "5",
-    "people": "6",
-    "regulation-law": "7",
-    "markets-geography": "8",
-    "traditional-finance": "9",
-    "markets-trading": "10",
-    "security-crime": "11",
-    "education-community": "12",
-    "history-culture": "13",
-    "miscellaneous": "14",
+    "money-economics": "2",
+    "technology": "3",
+    "organizations": "4",
+    "people": "5",
+    "regulation-law": "6",
+    "markets-geography": "7",
+    "education-community": "8",
+    "crime-security": "9",
+    "topics": "10",
+    "miscellaneous": "11",
   };
   
   const categoryNumber = categoryToNumber[lockedCategory] || "14";

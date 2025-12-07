@@ -58,8 +58,11 @@ import {
   AlertTriangle,
   CheckCircle,
   Loader2,
+  Trash,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { useAutoTagging } from '@/hooks/useAutoTagging';
+import { SiOpenai } from 'react-icons/si';
 
 interface Tag {
   id: string;
@@ -493,6 +496,7 @@ function DragOverlayTag({ tag }: { tag: Tag }) {
 export function TagManager() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { startAutoTagging, isCategorizing } = useAutoTagging();
   
   // State
   const [searchQuery, setSearchQuery] = useState('');
@@ -560,6 +564,7 @@ export function TagManager() {
 
   // Quality check state
   const [showQualityCheck, setShowQualityCheck] = useState(false);
+  const [isDeletingUnused, setIsDeletingUnused] = useState(false);
 
   // Fetch tags from Supabase directly
   const { data: allTagsData, isLoading: isTagsLoading } = useQuery({
@@ -1011,6 +1016,40 @@ export function TagManager() {
     setDeleteConfirmDialog({ open: false, tag: null });
   };
 
+  // Handle delete unused tags
+  const handleDeleteUnusedTags = async () => {
+    if (!qualityCheck?.unusedTags.length) return;
+    
+    setIsDeletingUnused(true);
+    try {
+      const response = await fetch('/api/tags/delete-unused', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      if (!response.ok) throw new Error('Failed to delete unused tags');
+      
+      const result = await response.json();
+      
+      toast({
+        title: "Unused tags deleted",
+        description: `Successfully deleted ${result.deletedCount} unused tags`,
+      });
+      
+      // Refresh data
+      queryClient.invalidateQueries({ queryKey: ['/api/tags/filter-tree'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/tags/quality-check'] });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete unused tags",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeletingUnused(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-4">
@@ -1075,16 +1114,34 @@ export function TagManager() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Tags without subcategory path */}
               <div className="rounded-lg border border-border bg-background p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  {qualityCheck.tagsWithoutPath.length > 0 ? (
-                    <AlertTriangle className="w-4 h-4 text-orange-500" />
-                  ) : (
-                    <CheckCircle className="w-4 h-4 text-green-500" />
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-2">
+                    {qualityCheck.tagsWithoutPath.length > 0 ? (
+                      <AlertTriangle className="w-4 h-4 text-orange-500" />
+                    ) : (
+                      <CheckCircle className="w-4 h-4 text-green-500" />
+                    )}
+                    <span className="text-sm font-medium">Tags without subcategory</span>
+                    <Badge variant={qualityCheck.tagsWithoutPath.length > 0 ? "destructive" : "secondary"}>
+                      {qualityCheck.tagsWithoutPath.length}
+                    </Badge>
+                  </div>
+                  {qualityCheck.tagsWithoutPath.length > 0 && (
+                    <Button 
+                      variant="outline"
+                      size="sm"
+                      disabled={isCategorizing}
+                      onClick={startAutoTagging}
+                      className="h-7"
+                    >
+                      {isCategorizing ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <SiOpenai className="w-3.5 h-3.5 mr-1.5" />
+                      )}
+                      Auto Sorting
+                    </Button>
                   )}
-                  <span className="text-sm font-medium">Tags without subcategory</span>
-                  <Badge variant={qualityCheck.tagsWithoutPath.length > 0 ? "destructive" : "secondary"}>
-                    {qualityCheck.tagsWithoutPath.length}
-                  </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground mb-2">
                   Tags at root level without a subcategory path
@@ -1108,16 +1165,34 @@ export function TagManager() {
 
               {/* Unused tags */}
               <div className="rounded-lg border border-border bg-background p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  {qualityCheck.unusedTags.length > 0 ? (
-                    <AlertTriangle className="w-4 h-4 text-orange-500" />
-                  ) : (
-                    <CheckCircle className="w-4 h-4 text-green-500" />
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-2">
+                    {qualityCheck.unusedTags.length > 0 ? (
+                      <AlertTriangle className="w-4 h-4 text-orange-500" />
+                    ) : (
+                      <CheckCircle className="w-4 h-4 text-green-500" />
+                    )}
+                    <span className="text-sm font-medium">Unused tags</span>
+                    <Badge variant={qualityCheck.unusedTags.length > 0 ? "destructive" : "secondary"}>
+                      {qualityCheck.unusedTags.length}
+                    </Badge>
+                  </div>
+                  {qualityCheck.unusedTags.length > 0 && (
+                    <Button 
+                      variant="destructive"
+                      size="sm"
+                      disabled={isDeletingUnused}
+                      onClick={handleDeleteUnusedTags}
+                      className="h-7"
+                    >
+                      {isDeletingUnused ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <Trash className="w-3.5 h-3.5 mr-1.5" />
+                      )}
+                      Delete Unused
+                    </Button>
                   )}
-                  <span className="text-sm font-medium">Unused tags</span>
-                  <Badge variant={qualityCheck.unusedTags.length > 0 ? "destructive" : "secondary"}>
-                    {qualityCheck.unusedTags.length}
-                  </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground mb-2">
                   Tags in database but never used in summaries

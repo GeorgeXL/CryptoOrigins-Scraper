@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ChevronRight, RefreshCw, FileText, Tags, ChevronDown } from "lucide-react";
+import { Loader2, ChevronRight, RefreshCw, FileText, Tags, ChevronDown, StopCircle } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,6 +35,9 @@ import {
 } from "@/components/ui/collapsible";
 import { AnalysesTable, HistoricalNewsAnalysis } from "@/components/AnalysesTable";
 import { supabase } from "@/lib/supabase";
+import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
+import { TaggingDropdown } from "@/components/TaggingDropdown";
+import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 
 const YEARS = Array.from({ length: 16 }, (_, i) => 2009 + i); // 2009-2024
 const MONTHS = [
@@ -56,8 +59,17 @@ export default function MonthlyView() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
-  const [isReanalyzing, setIsReanalyzing] = useState(false);
-  const [isCategorizing, setIsCategorizing] = useState(false);
+  const { 
+    isReanalyzing, 
+    reanalyzeDates, 
+    redoSummaries,
+    cancelAnalysis,
+    selectionRequest,
+    isSelectionDialogOpen,
+    setIsSelectionDialogOpen,
+    confirmSelection,
+    progress
+  } = useBulkReanalyze();
   const [showManageTags, setShowManageTags] = useState(false);
 
   // Generate date range for selected month/year
@@ -261,102 +273,59 @@ export default function MonthlyView() {
                   },
                   customActions: (
                     <>
-                      {/* Re-analyze Dropdown */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={isReanalyzing}
-                            title="Re-analyze"
-                          >
-                            <RefreshCw className={`w-4 h-4 mr-2 ${isReanalyzing ? 'animate-spin' : ''}`} />
-                            Re-analyze
-                            <ChevronDown className="w-4 h-4 ml-2" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            onClick={async () => {
-                              setIsReanalyzing(true);
-                              const dates = Array.from(selectedDates);
-                              
-                              for (const date of dates) {
-                                try {
-                                  await fetch(`/api/analysis/date/${date}`, { method: 'POST' });
-                                } catch (err) {
-                                  console.error(`Failed to analyze ${date}:`, err);
-                                }
-                              }
-                              setIsReanalyzing(false);
-                              queryClient.invalidateQueries({ queryKey: ['monthly-analyses'] });
-                              toast({
-                                title: "Re-analysis complete",
-                                description: `Analyzed ${dates.length} date(s)`,
-                              });
-                            }}
-                            disabled={isReanalyzing}
-                          >
-                            <RefreshCw className="w-4 h-4 mr-2" />
-                            Analyse Days
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={async () => {
-                              setIsReanalyzing(true);
-                              const dates = Array.from(selectedDates);
-                              
-                              for (const date of dates) {
-                                try {
-                                  await fetch(`/api/analysis/date/${date}/redo-summary`, { method: 'POST' });
-                                } catch (err) {
-                                  console.error(`Failed to redo summary for ${date}:`, err);
-                                }
-                              }
-                              setIsReanalyzing(false);
-                              queryClient.invalidateQueries({ queryKey: ['monthly-analyses'] });
-                              toast({
-                                title: "Summaries updated",
-                                description: `Redid summaries for ${dates.length} date(s)`,
-                              });
-                            }}
-                            disabled={isReanalyzing}
-                          >
-                            <FileText className="w-4 h-4 mr-2" />
-                            Redo Summaries
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      {/* Re-analyze Dropdown or Stop Button */}
+                      {isReanalyzing ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={cancelAnalysis}
+                          title="Stop bulk analysis"
+                        >
+                          <StopCircle className="w-4 h-4 mr-2" />
+                          Stop ({progress.completed}/{progress.total})
+                        </Button>
+                      ) : (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              title="Re-analyze"
+                            >
+                              <RefreshCw className="w-4 h-4 mr-2" />
+                              Re-analyze
+                              <ChevronDown className="w-4 h-4 ml-2" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={async () => {
+                                const dates = Array.from(selectedDates);
+                                await reanalyzeDates(dates);
+                              }}
+                            >
+                              <RefreshCw className="w-4 h-4 mr-2" />
+                              Analyse Days
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={async () => {
+                                const dates = Array.from(selectedDates);
+                                await redoSummaries(dates);
+                              }}
+                            >
+                              <FileText className="w-4 h-4 mr-2" />
+                              Redo Summaries
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
 
-                      {/* Auto Tagging Button */}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={isCategorizing}
-                        onClick={async () => {
-                          setIsCategorizing(true);
-                          try {
-                            await fetch('/api/tags/categorize/start', { method: 'POST' });
-                            toast({
-                              title: "Auto Tagging started",
-                              description: "AI is categorizing tags in the background",
-                            });
-                          } catch (err) {
-                            toast({
-                              title: "Error",
-                              description: "Failed to start auto tagging",
-                              variant: "destructive",
-                            });
-                          }
-                          setIsCategorizing(false);
-                        }}
-                      >
-                        {isCategorizing ? (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        ) : (
-                          <SiOpenai className="w-4 h-4 mr-2" />
-                        )}
-                        Auto Tagging
-                      </Button>
+                      {/* Tagging Dropdown */}
+                      <TaggingDropdown
+                        selectedDates={Array.from(selectedDates)}
+                        selectAllMatching={false}
+                        onDatesResolve={() => analyses.map(a => a.date)}
+                      />
 
                       {/* Manage Tags Button */}
                       <Button
@@ -374,6 +343,22 @@ export default function MonthlyView() {
             </>
           )}
         </Card>
+
+        {/* Article Selection Dialog for Bulk Re-analyze */}
+        {selectionRequest && (
+          <ArticleSelectionDialog
+            open={isSelectionDialogOpen}
+            onOpenChange={setIsSelectionDialogOpen}
+            date={selectionRequest.date}
+            selectionMode={selectionRequest.selectionData.selectionMode}
+            tieredArticles={selectionRequest.selectionData.tieredArticles || { bitcoin: [], crypto: [], macro: [] }}
+            geminiSelectedIds={selectionRequest.selectionData.geminiSelectedIds}
+            perplexitySelectedIds={selectionRequest.selectionData.perplexitySelectedIds}
+            intersectionIds={selectionRequest.selectionData.intersectionIds}
+            openaiSuggestedId={selectionRequest.selectionData.openaiSuggestedId}
+            onConfirm={confirmSelection}
+          />
+        )}
       </div>
     </div>
     </SidebarProvider>

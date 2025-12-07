@@ -27,7 +27,7 @@ function Router() {
         <Route path="/monthly" component={MonthlyView} />
         <Route path="/month/:year/:month" component={MonthView} />
         <Route path="/day/:date" component={DayAnalysis} />
-        <Route path="/events" component={EventsManager} />
+        <Route path="/events-manager" component={EventsManager} />
         <Route path="/tags-browser" component={HomePage} />
         <Route path="/tags-cleanup" component={TagCleanupTool} />
         <Route path="/tags-manager" component={TagManagerPage} />

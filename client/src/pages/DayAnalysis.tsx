@@ -23,6 +23,8 @@ import {
 import { VeriBadge } from "@/components/VeriBadge";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { useToast } from "@/hooks/use-toast";
+import { useTagging } from "@/hooks/useTagging";
+import { SiOpenai } from "react-icons/si";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -162,6 +164,7 @@ interface DayAnalysisData {
 export default function DayAnalysis() {
   const { date } = useParams();
   const { toast } = useToast();
+  const { startContextTagging, isContextTagging } = useTagging();
   const [isEditing, setIsEditing] = React.useState(false);
   const [editedSummary, setEditedSummary] = React.useState('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = React.useState(false);
@@ -176,6 +179,7 @@ export default function DayAnalysis() {
   const [selectionDialogOpen, setSelectionDialogOpen] = React.useState(false);
   const [selectionData, setSelectionData] = React.useState<any>(null);
   const [activeTab, setActiveTab] = React.useState<string>('');
+  const [showRedoSummaryDialog, setShowRedoSummaryDialog] = React.useState(false);
   const articlesPerPage = 10;
   const { triggerHealthCheck } = useApiHealthCheck();
   const { aiProvider } = useAiProvider();
@@ -319,12 +323,9 @@ export default function DayAnalysis() {
   const { data: allTags } = useQuery<Array<{ name: string; category: string; subcategory_path: string[] | null }>>({
     queryKey: ['all-tags'],
     queryFn: async () => {
-      if (!supabase) return [];
-      const { data, error } = await supabase
-        .from('tags')
-        .select('name, category, subcategory_path')
-        .order('name');
-      if (error) throw error;
+      const response = await fetch('/api/tags');
+      if (!response.ok) throw new Error('Failed to fetch tags');
+      const data = await response.json();
       return data || [];
     },
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
@@ -581,6 +582,12 @@ export default function DayAnalysis() {
       return;
     }
     
+    // Show confirmation dialog
+    setShowRedoSummaryDialog(true);
+  };
+
+  const confirmRedoSummary = () => {
+    setShowRedoSummaryDialog(false);
     redoSummaryMutation.mutate();
   };
 
@@ -1513,6 +1520,20 @@ export default function DayAnalysis() {
                       <Button 
                         variant="ghost" 
                         size="sm" 
+                        onClick={() => date && startContextTagging([date])}
+                        disabled={isContextTagging || !date}
+                        className="h-6 w-6 p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                        title="Extract tags from summary and article using AI"
+                      >
+                        {isContextTagging ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <SiOpenai className="w-3.5 h-3.5" />
+                        )}
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
                         onClick={() => setIsAddTagDialogOpen(true)}
                         className="h-6 w-6 p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                         title="Add tag from list"
@@ -1775,6 +1796,25 @@ export default function DayAnalysis() {
         </Card>
       )}
 
+      {/* Redo Summary Confirmation Dialog */}
+      <AlertDialog open={showRedoSummaryDialog} onOpenChange={setShowRedoSummaryDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Redo Summary</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will regenerate the summary for this date. <strong>All tags will be removed</strong> from this analysis. 
+              Are you sure you want to continue?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmRedoSummary} className="bg-destructive text-white hover:bg-destructive/90">
+              Yes, Remove Tags and Redo Summary
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Article Selection Dialog */}
       {selectionData && (
         <ArticleSelectionDialog
@@ -1890,40 +1930,54 @@ export default function DayAnalysis() {
             )}
             
             {/* Existing tags list */}
-            <div className="space-y-1">
-              {filteredTags?.slice(tagPage * tagsPerPage, (tagPage + 1) * tagsPerPage).map((tag) => {
-                const isAlreadyAdded = dayData?.analysis?.tagsVersion2?.includes(tag.name);
-                // Derive main category from subcategory_path (like in tag manager)
-                // Handle both snake_case (from Supabase) and camelCase formats
-                const subcategoryPath = (tag as any).subcategory_path || (tag as any).subcategoryPath || null;
-                const mainCategoryKey = getCategoryKeyFromPath(Array.isArray(subcategoryPath) ? subcategoryPath : null, tag.category);
-                const categoryDisplay = mainCategoryKey ? getCategoryDisplayMeta(mainCategoryKey) : { name: tag.category };
-                return (
-                  <Button
-                    key={`${tag.name}-${tag.category}`}
-                    variant="ghost"
-                    className={`w-full justify-start ${isAlreadyAdded ? 'opacity-50' : ''}`}
-                    disabled={isAlreadyAdded}
-                    onClick={() => {
-                      if (!isAlreadyAdded) {
-                        addTagMutation.mutate(tag.name);
-                        setTagSearchQuery('');
-                        setIsAddTagDialogOpen(false);
-                      }
-                    }}
-                  >
-                    <Tag className="w-4 h-4 mr-2 text-muted-foreground" />
-                    <span>{tag.name}</span>
-                    <span className="ml-auto text-xs text-muted-foreground">{categoryDisplay.name}</span>
-                    {isAlreadyAdded && <CheckCircle className="w-3 h-3 ml-2 text-green-500" />}
-                  </Button>
-                );
-              })}
-              {filteredTags?.length === 0 && tagSearchQuery && (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  No existing tags found. Press Enter to create a new tag.
-                </p>
-              )}
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-muted-foreground px-1">
+                {tagSearchQuery 
+                  ? `Search results (${filteredTags?.length || 0})`
+                  : `All tags (${allTags?.length || 0})`
+                }
+              </div>
+              <div className="space-y-1 max-h-[300px] overflow-y-auto border rounded-md p-2 bg-muted/30">
+                {filteredTags && filteredTags.length > 0 ? (
+                  filteredTags.slice(tagPage * tagsPerPage, (tagPage + 1) * tagsPerPage).map((tag) => {
+                    const isAlreadyAdded = dayData?.analysis?.tagsVersion2?.includes(tag.name);
+                    // Derive main category from subcategory_path (like in tag manager)
+                    // Handle both snake_case (from Supabase) and camelCase formats
+                    const subcategoryPath = (tag as any).subcategory_path || (tag as any).subcategoryPath || null;
+                    const mainCategoryKey = getCategoryKeyFromPath(Array.isArray(subcategoryPath) ? subcategoryPath : null, tag.category);
+                    const categoryDisplay = mainCategoryKey ? getCategoryDisplayMeta(mainCategoryKey) : { name: tag.category };
+                    return (
+                      <Button
+                        key={`${tag.name}-${tag.category}`}
+                        variant="ghost"
+                        className={`w-full justify-start ${isAlreadyAdded ? 'opacity-50' : ''}`}
+                        disabled={isAlreadyAdded}
+                        onClick={() => {
+                          if (!isAlreadyAdded) {
+                            addTagMutation.mutate(tag.name);
+                            setTagSearchQuery('');
+                            setIsAddTagDialogOpen(false);
+                          }
+                        }}
+                      >
+                        <Tag className="w-4 h-4 mr-2 text-muted-foreground" />
+                        <span>{tag.name}</span>
+                        <span className="ml-auto text-xs text-muted-foreground">{categoryDisplay.name}</span>
+                        {isAlreadyAdded && <CheckCircle className="w-3 h-3 ml-2 text-green-500" />}
+                      </Button>
+                    );
+                  })
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-4">
+                    {tagSearchQuery 
+                      ? `No existing tags found matching "${tagSearchQuery}". Press Enter to create a new tag.`
+                      : allTags && allTags.length === 0
+                        ? "No tags available. Start typing to create a new tag."
+                        : "Start typing to search for tags or create a new one."
+                    }
+                  </p>
+                )}
+              </div>
             </div>
             
             {/* Pagination */}

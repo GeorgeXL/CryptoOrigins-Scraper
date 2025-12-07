@@ -217,13 +217,27 @@ export class DatabaseStorage implements IStorage {
     if (analysis.reasoning !== undefined) updateData.reasoning = analysis.reasoning;
     if (analysis.topArticleId !== undefined) updateData.topArticleId = analysis.topArticleId;
     if (analysis.isManualOverride !== undefined) updateData.isManualOverride = analysis.isManualOverride;
+    if (analysis.isOrphan !== undefined) updateData.isOrphan = analysis.isOrphan;
     if (analysis.tierUsed !== undefined) updateData.tierUsed = analysis.tierUsed;
+    if (analysis.winningTier !== undefined) updateData.winningTier = analysis.winningTier;
     if (analysis.tieredArticles !== undefined) updateData.tieredArticles = analysis.tieredArticles;
     if (analysis.analyzedArticles !== undefined) updateData.analyzedArticles = analysis.analyzedArticles;
     if (analysis.totalArticlesFetched !== undefined) updateData.totalArticlesFetched = analysis.totalArticlesFetched;
+    if (analysis.uniqueArticlesAnalyzed !== undefined) updateData.uniqueArticlesAnalyzed = analysis.uniqueArticlesAnalyzed;
+    if (analysis.aiProvider !== undefined) updateData.aiProvider = analysis.aiProvider;
+    if (analysis.confidenceScore !== undefined) updateData.confidenceScore = analysis.confidenceScore;
+    if (analysis.sentimentScore !== undefined) updateData.sentimentScore = analysis.sentimentScore;
+    if (analysis.sentimentLabel !== undefined) updateData.sentimentLabel = analysis.sentimentLabel;
+    if (analysis.topicCategories !== undefined) updateData.topicCategories = analysis.topicCategories;
+    if (analysis.duplicateArticleIds !== undefined) updateData.duplicateArticleIds = analysis.duplicateArticleIds;
     // Handle tags_version2 (can come as tags_version2 or tagsVersion2)
     if (analysis.tagsVersion2 !== undefined) updateData.tagsVersion2 = analysis.tagsVersion2;
     if ((analysis as any).tags_version2 !== undefined) updateData.tagsVersion2 = (analysis as any).tags_version2;
+    // Handle verification fields - these trigger the veri_badge calculation
+    if (analysis.geminiApproved !== undefined) updateData.geminiApproved = analysis.geminiApproved;
+    if (analysis.perplexityApproved !== undefined) updateData.perplexityApproved = analysis.perplexityApproved;
+    if (analysis.perplexityVerdict !== undefined) updateData.perplexityVerdict = analysis.perplexityVerdict;
+    if (analysis.factCheckVerdict !== undefined) updateData.factCheckVerdict = analysis.factCheckVerdict;
 
     const [updatedAnalysis] = await db
       .update(historicalNewsAnalyses)

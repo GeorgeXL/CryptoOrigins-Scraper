@@ -596,6 +596,7 @@ const renderSuccessResult = (request: ApiRequest): JSX.Element | null => {
 export default function ApiMonitor() {
   const [isOpen, setIsOpen] = useState(false);
   const [requests, setRequests] = useState<ApiRequest[]>([]);
+  const [hasPendingRequests, setHasPendingRequests] = useState(false); // Track pending requests for button status
   const [stats, setStats] = useState<ApiStats>({
     totalRequests: 0,
     requestsLastHour: 0,
@@ -609,6 +610,7 @@ export default function ApiMonitor() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const fetchStatsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const connectWebSocket = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -631,7 +633,7 @@ export default function ApiMonitor() {
         if (data.type === 'init') {
           setStats(data.stats);
           setRequests(data.recentRequests || []);
-        } else if (data.type === 'request') {
+        } else         if (data.type === 'request') {
           setRequests(prev => {
             // Check if request already exists to prevent duplicates
             const existsIndex = prev.findIndex(r => r.id === data.data.id);
@@ -639,10 +641,15 @@ export default function ApiMonitor() {
               // Update existing instead of adding duplicate
               const updated = [...prev];
               updated[existsIndex] = { ...updated[existsIndex], ...data.data };
+              // Update pending status
+              setHasPendingRequests(updated.some(r => r.status === 'pending'));
               return updated;
             }
             // Add new request
-            return [data.data, ...prev.slice(0, 49)]; // Keep last 50
+            const updated = [data.data, ...prev.slice(0, 49)]; // Keep last 50
+            // Update pending status
+            setHasPendingRequests(updated.some(r => r.status === 'pending'));
+            return updated;
           });
           // Throttle stats fetching to prevent excessive requests
           if (fetchStatsTimeoutRef.current) {
@@ -672,6 +679,8 @@ export default function ApiMonitor() {
                 ...data.data,
                 requestData: mergedRequestData
               };
+              // Update pending status
+              setHasPendingRequests(updated.some(r => r.status === 'pending'));
               return updated;
             }
             return prev; // If not found, don't add it
@@ -728,13 +737,34 @@ export default function ApiMonitor() {
       if (response.ok) {
         const data = await response.json();
         setRequests(data);
+        // Update pending status
+        setHasPendingRequests(data.some((r: ApiRequest) => r.status === 'pending'));
       }
     } catch (error) {
       console.error('Failed to fetch API requests:', error);
     }
   };
+  
+  // Lightweight check for pending requests (even when dialog is closed)
+  const checkPendingRequests = async () => {
+    try {
+      const response = await fetch('/api/monitor/requests?limit=50');
+      if (response.ok) {
+        const data = await response.json();
+        // Check if any requests are pending
+        const hasPending = Array.isArray(data) && data.some((r: ApiRequest) => r.status === 'pending');
+        setHasPendingRequests(hasPending);
+      }
+    } catch (error) {
+      // Silently fail - don't spam console
+    }
+  };
 
   useEffect(() => {
+    // Always check for pending requests (even when dialog is closed)
+    checkPendingRequests();
+    pendingCheckIntervalRef.current = setInterval(checkPendingRequests, 3000); // Check every 3 seconds
+    
     if (isOpen) {
       // Try WebSocket first
       connectWebSocket();
@@ -764,6 +794,9 @@ export default function ApiMonitor() {
     }
     
     return () => {
+      if (pendingCheckIntervalRef.current) {
+        clearInterval(pendingCheckIntervalRef.current);
+      }
       if (wsRef.current) {
         wsRef.current.close();
       }
@@ -784,11 +817,22 @@ export default function ApiMonitor() {
     }
   };
 
+  // Determine button color: green when idle, red when active
+  const getButtonColor = () => {
+    if (hasPendingRequests) {
+      return 'text-red-500'; // Red when active
+    }
+    return 'text-green-500'; // Green when idle
+  };
+  
+  // Determine if button should pulse: only when active
+  const shouldPulse = hasPendingRequests;
+
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
         <Button variant="ghost" size="sm" className="relative">
-          <Activity className={`w-4 h-4 ${getConnectionColor()} ${stats.requestsLastMinute > 0 ? 'animate-heartbeat' : ''}`} />
+          <Activity className={`w-4 h-4 ${getButtonColor()} ${shouldPulse ? 'animate-pulse' : ''}`} />
         </Button>
       </DialogTrigger>
       

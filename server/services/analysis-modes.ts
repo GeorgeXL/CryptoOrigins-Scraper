@@ -104,10 +104,11 @@ export async function analyzeDay(options: AnalysisModeOptions): Promise<Analysis
   
   if (allArticles.length === 0) {
     console.log(`❌ [ANALYSE DAY] No articles found in any tier for ${date}`);
+    console.log(`   🔄 Returning selection data for user to choose (Orphan mode - no articles found)`);
     return {
       summary: '',
       topArticleId: 'none',
-      reasoning: 'No articles found in any tier for this date.',
+      reasoning: 'No articles found in any tier for this date. User selection required.',
       winningTier: 'none',
       tieredArticles,
       aiProvider: 'openai',
@@ -117,7 +118,16 @@ export async function analyzeDay(options: AnalysisModeOptions): Promise<Analysis
       topicCategories: [],
       duplicateArticleIds: [],
       totalArticlesFetched: 0,
-      uniqueArticlesAnalyzed: 0
+      uniqueArticlesAnalyzed: 0,
+      perplexityVerdict: 'uncertain',
+      perplexityApproved: false,
+      geminiApproved: false,
+      factCheckVerdict: 'uncertain',
+      requiresSelection: true,
+      selectionMode: 'orphan',
+      geminiSelectedIds: [],
+      perplexitySelectedIds: [],
+      intersectionIds: []
     };
   }
   
@@ -278,31 +288,42 @@ export async function analyzeDay(options: AnalysisModeOptions): Promise<Analysis
       throw new Error('No valid candidate articles found in intersection');
     }
     
-    const openaiSuggestedIdOrUrl = await selectBestArticleWithOpenAI(candidateArticles, date, tieredArticles, requestId);
-    
-    // Convert OpenAI's suggestion (might be URL or ID) to article ID
-    const openaiSuggestedArticleId = convertToArticleId(openaiSuggestedIdOrUrl);
-    
-    // Verify the suggested article exists
-    let suggestedArticle = openaiSuggestedArticleId ? articleMap.get(openaiSuggestedArticleId) : null;
-    
-    if (!suggestedArticle) {
-      console.error(`❌ [ANALYSE DAY] OpenAI suggested article ${openaiSuggestedIdOrUrl} (converted: ${openaiSuggestedArticleId}) not found in articleMap!`);
-      // Fallback to first candidate
-      suggestedArticle = candidateArticles[0];
-      console.log(`   ⚠️ Falling back to first candidate: ${suggestedArticle.id}`);
+    // Try to get OpenAI suggestion, but if it fails, still return selection data
+    let openaiSuggestedId: string | undefined = undefined;
+    try {
+      const openaiSuggestedIdOrUrl = await selectBestArticleWithOpenAI(candidateArticles, date, tieredArticles, requestId);
+      
+      // Convert OpenAI's suggestion (might be URL or ID) to article ID
+      const openaiSuggestedArticleId = convertToArticleId(openaiSuggestedIdOrUrl);
+      
+      // Verify the suggested article exists
+      const suggestedArticle = openaiSuggestedArticleId ? articleMap.get(openaiSuggestedArticleId) : null;
+      
+      if (suggestedArticle) {
+        openaiSuggestedId = suggestedArticle.id;
+        console.log(`✅ [ANALYSE DAY] OpenAI suggested: ${openaiSuggestedIdOrUrl} -> ${openaiSuggestedId}`);
+        console.log(`   📰 Article title: "${suggestedArticle.title.substring(0, 60)}..."`);
+      } else {
+        console.warn(`⚠️ [ANALYSE DAY] OpenAI suggested article ${openaiSuggestedIdOrUrl} (converted: ${openaiSuggestedArticleId}) not found in articleMap, will use first candidate`);
+        openaiSuggestedId = candidateArticles[0].id;
+      }
+    } catch (openaiError) {
+      console.error(`⚠️ [ANALYSE DAY] OpenAI selection failed: ${(openaiError as Error).message}`);
+      console.log(`   🔄 Continuing without OpenAI suggestion - user will select manually`);
+      // Use first candidate as fallback suggestion
+      openaiSuggestedId = candidateArticles[0].id;
+      console.log(`   📋 Fallback suggestion: ${openaiSuggestedId}`);
     }
     
-    const finalSuggestedId = suggestedArticle.id;
-    console.log(`✅ [ANALYSE DAY] OpenAI suggested: ${openaiSuggestedIdOrUrl} -> ${finalSuggestedId}`);
-    console.log(`   📰 Article title: "${suggestedArticle.title.substring(0, 60)}..."`);
     console.log(`   🔄 Returning selection data for user confirmation (Verified mode)`);
     
-    // Return early with selection data
+    // Return early with selection data (even if OpenAI failed)
     return {
       summary: '',
       topArticleId: 'none',
-      reasoning: `Multiple articles matched. OpenAI suggested: ${finalSuggestedId}. User confirmation required.`,
+      reasoning: openaiSuggestedId 
+        ? `Multiple articles matched. OpenAI suggested: ${openaiSuggestedId}. User confirmation required.`
+        : `Multiple articles matched. User selection required.`,
       winningTier: 'none',
       tieredArticles,
       aiProvider: 'openai',
@@ -322,7 +343,7 @@ export async function analyzeDay(options: AnalysisModeOptions): Promise<Analysis
       geminiSelectedIds: geminiArticleIds,
       perplexitySelectedIds: perplexityArticleIds,
       intersectionIds: intersection,
-      openaiSuggestedId: finalSuggestedId
+      openaiSuggestedId: openaiSuggestedId
     };
   }
   
