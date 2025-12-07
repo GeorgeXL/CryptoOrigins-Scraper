@@ -1076,7 +1076,7 @@ export default function HomePage() {
     paginatedAnalyses.every(a => selectedDates.has(a.date));
 
   return (
-    <SidebarProvider className="w-full">
+    <SidebarProvider className="w-full" defaultOpen={true}>
       <div className="space-y-6">
         <div className="flex flex-col gap-6 lg:flex-row">
           <div className="lg:w-72 shrink-0">

@@ -566,16 +566,32 @@ export function TagManager() {
   const [showQualityCheck, setShowQualityCheck] = useState(false);
   const [isDeletingUnused, setIsDeletingUnused] = useState(false);
 
-  // Fetch tags from Supabase directly
+  // Fetch tags from Supabase directly (with pagination to handle 1000 row limit)
   const { data: allTagsData, isLoading: isTagsLoading } = useQuery({
     queryKey: ['supabase-all-tags-manager'],
     queryFn: async () => {
       if (!supabase) return [];
-      const { data, error } = await supabase
-        .from('tags')
-        .select('*');
-      if (error) throw error;
-      return data || [];
+      
+      // Fetch all tags in batches (Supabase limits to 1000 rows per query)
+      let allTags: any[] = [];
+      let batchStart = 0;
+      const batchSize = 1000;
+      
+      while (true) {
+        const { data: batch, error } = await supabase
+          .from('tags')
+          .select('*')
+          .range(batchStart, batchStart + batchSize - 1);
+        
+        if (error) throw error;
+        if (!batch || batch.length === 0) break;
+        
+        allTags = allTags.concat(batch);
+        if (batch.length < batchSize) break; // Last batch
+        batchStart += batchSize;
+      }
+      
+      return allTags;
     },
     staleTime: 0,
     refetchOnMount: true
@@ -613,9 +629,26 @@ export function TagManager() {
       
       let tags = allTagsData;
       if (!tags) {
-         const { data, error } = await supabase.from('tags').select('*');
-         if (error) throw error;
-         tags = data || [];
+         // Fetch all tags in batches (Supabase limits to 1000 rows per query)
+         let allTags: any[] = [];
+         let batchStart = 0;
+         const batchSize = 1000;
+         
+         while (true) {
+           const { data: batch, error } = await supabase
+             .from('tags')
+             .select('*')
+             .range(batchStart, batchStart + batchSize - 1);
+           
+           if (error) throw error;
+           if (!batch || batch.length === 0) break;
+           
+           allTags = allTags.concat(batch);
+           if (batch.length < batchSize) break; // Last batch
+           batchStart += batchSize;
+         }
+         
+         tags = allTags;
       }
       
       const tagsList = tags || [];
