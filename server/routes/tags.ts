@@ -71,7 +71,7 @@ const router = Router();
 
 router.post("/api/batch-tagging/start", async (req, res) => {
   try {
-    console.log("🏷️ Starting batch tagging of entire database...");
+    const { dates } = req.body; // Optional array of specific dates to process
     
     // Check if already running
     if (isBatchTaggingRunning) {
@@ -80,29 +80,43 @@ router.post("/api/batch-tagging/start", async (req, res) => {
       });
     }
     
-    // Get all analyses
-    const allAnalyses = await storage.getAllAnalyses();
+    let eligibleAnalyses;
+    let allAnalyses;
     
-    // Filter to only analyses with summaries that don't already have tags_version2
-    // IMPORTANT: This ensures we only tag entries that are empty or don't have tags_version2
-    // If you click the button again, it will only process the ones that weren't tagged yet
-    const eligibleAnalyses = allAnalyses.filter(a => 
-      a.summary && 
-      a.summary.trim().length > 0 &&
-      (!a.tagsVersion2 || (Array.isArray(a.tagsVersion2) && a.tagsVersion2.length === 0))
-    );
-    
-    const alreadyTagged = allAnalyses.filter(a => 
-      a.summary && 
-      a.summary.trim().length > 0 &&
-      a.tagsVersion2 && 
-      Array.isArray(a.tagsVersion2) &&
-      a.tagsVersion2.length > 0
-    ).length;
-    
-    batchTaggingTotal = eligibleAnalyses.length;
-    console.log(`✅ Found ${batchTaggingTotal} untagged analyses to process (${alreadyTagged} already tagged, will be skipped)`);
-    console.log(`📊 Processing ${batchTaggingTotal} analyses with 8 concurrent requests at a time`);
+    if (dates && Array.isArray(dates) && dates.length > 0) {
+      // Process only selected dates
+      console.log(`🏷️ Starting batch tagging for ${dates.length} selected dates...`);
+      allAnalyses = await storage.getAllAnalyses();
+      eligibleAnalyses = allAnalyses.filter(a => 
+        dates.includes(a.date) &&
+        a.summary && 
+        a.summary.trim().length > 0 &&
+        (!a.tagsVersion2 || (Array.isArray(a.tagsVersion2) && a.tagsVersion2.length === 0))
+      );
+      const alreadyTaggedInSelection = dates.length - eligibleAnalyses.length;
+      batchTaggingTotal = eligibleAnalyses.length;
+      console.log(`✅ Found ${batchTaggingTotal} untagged analyses in selection (${alreadyTaggedInSelection} already tagged, will be skipped)`);
+      console.log(`📊 Processing ${batchTaggingTotal} selected analyses with max 8 concurrent requests at a time`);
+    } else {
+      // Process all untagged analyses
+      console.log("🏷️ Starting batch tagging of entire database...");
+      allAnalyses = await storage.getAllAnalyses();
+      eligibleAnalyses = allAnalyses.filter(a => 
+        a.summary && 
+        a.summary.trim().length > 0 &&
+        (!a.tagsVersion2 || (Array.isArray(a.tagsVersion2) && a.tagsVersion2.length === 0))
+      );
+      const alreadyTagged = allAnalyses.filter(a => 
+        a.summary && 
+        a.summary.trim().length > 0 &&
+        a.tagsVersion2 && 
+        Array.isArray(a.tagsVersion2) &&
+        a.tagsVersion2.length > 0
+      ).length;
+      batchTaggingTotal = eligibleAnalyses.length;
+      console.log(`✅ Found ${batchTaggingTotal} untagged analyses to process (${alreadyTagged} already tagged, will be skipped)`);
+      console.log(`📊 Processing ${batchTaggingTotal} analyses with max 8 concurrent requests at a time`);
+    }
     
     // Send initial response
     res.json({ 
@@ -234,6 +248,261 @@ router.post("/api/batch-tagging/stop", async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error stopping batch tagging:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Tagging with context (summary + article)
+let isContextTaggingRunning = false;
+let shouldStopContextTagging = false;
+let contextTaggingProcessed = 0;
+let contextTaggingTotal = 0;
+
+router.post("/api/tagging/with-context", async (req, res) => {
+  try {
+    const { dates } = req.body; // Array of specific dates to process
+    
+    // Check if already running
+    if (isContextTaggingRunning) {
+      return res.status(409).json({ 
+        error: "Context tagging already running. Please stop the current one first." 
+      });
+    }
+    
+    let eligibleAnalyses;
+    let allAnalyses;
+    
+    if (dates && Array.isArray(dates) && dates.length > 0) {
+      // Process only selected dates
+      console.log(`🏷️ Starting context tagging for ${dates.length} selected dates...`);
+      allAnalyses = await storage.getAllAnalyses();
+      eligibleAnalyses = allAnalyses.filter(a => 
+        dates.includes(a.date) &&
+        a.summary && 
+        a.summary.trim().length > 0 &&
+        (!a.tagsVersion2 || (Array.isArray(a.tagsVersion2) && a.tagsVersion2.length === 0))
+      );
+      const alreadyTaggedInSelection = dates.length - eligibleAnalyses.length;
+      contextTaggingTotal = eligibleAnalyses.length;
+      console.log(`✅ Found ${contextTaggingTotal} untagged analyses in selection (${alreadyTaggedInSelection} already tagged, will be skipped)`);
+      console.log(`📊 Processing ${contextTaggingTotal} selected analyses with max 8 concurrent requests at a time`);
+    } else {
+      // Process all untagged analyses
+      console.log("🏷️ Starting context tagging of entire database...");
+      allAnalyses = await storage.getAllAnalyses();
+      eligibleAnalyses = allAnalyses.filter(a => 
+        a.summary && 
+        a.summary.trim().length > 0 &&
+        (!a.tagsVersion2 || (Array.isArray(a.tagsVersion2) && a.tagsVersion2.length === 0))
+      );
+      const alreadyTagged = allAnalyses.filter(a => 
+        a.summary && 
+        a.summary.trim().length > 0 &&
+        a.tagsVersion2 && 
+        Array.isArray(a.tagsVersion2) &&
+        a.tagsVersion2.length > 0
+      ).length;
+      contextTaggingTotal = eligibleAnalyses.length;
+      console.log(`✅ Found ${contextTaggingTotal} untagged analyses to process (${alreadyTagged} already tagged, will be skipped)`);
+      console.log(`📊 Processing ${contextTaggingTotal} analyses with max 8 concurrent requests at a time`);
+    }
+    
+    // Send initial response
+    res.json({ 
+      success: true, 
+      total: contextTaggingTotal,
+      message: `Starting context tagging of ${contextTaggingTotal} analyses` 
+    });
+    
+    // Mark as running
+    isContextTaggingRunning = true;
+    shouldStopContextTagging = false;
+    contextTaggingProcessed = 0;
+    
+    // Start background processing with 8-at-a-time concurrent processing
+    (async () => {
+      let processed = 0;
+      let failed = 0;
+      const failedDates: string[] = [];
+      const MAX_CONCURRENT = 8;
+      const running = new Map<string, Promise<{ success: boolean; date: string }>>();
+      let index = 0;
+      
+      // Helper function to get article content
+      const getArticleContent = async (analysis: typeof eligibleAnalyses[0]): Promise<string | null> => {
+        try {
+          if (!analysis.topArticleId || analysis.topArticleId === 'none') {
+            return null;
+          }
+          
+          // Try to find article in tieredArticles
+          const tieredArticles = analysis.tieredArticles as any;
+          if (tieredArticles && typeof tieredArticles === 'object') {
+            const tiers = ['bitcoin', 'crypto', 'macro'] as const;
+            for (const tier of tiers) {
+              const tierArticles = tieredArticles[tier] || [];
+              const article = tierArticles.find((a: any) => a.id === analysis.topArticleId);
+              if (article) {
+                return article.text || article.summary || article.content || null;
+              }
+            }
+          }
+          
+          // Fallback to analyzedArticles
+          if (analysis.analyzedArticles && Array.isArray(analysis.analyzedArticles)) {
+            const article = analysis.analyzedArticles.find((a: any) => a.id === analysis.topArticleId);
+            if (article) {
+              return article.text || article.summary || article.content || null;
+            }
+          }
+          
+          return null;
+        } catch (error) {
+          console.error(`Error fetching article for ${analysis.date}:`, error);
+          return null;
+        }
+      };
+      
+      // Helper function to process a single analysis
+      const processAnalysis = async (analysis: typeof eligibleAnalyses[0]): Promise<{ success: boolean; date: string }> => {
+        try {
+          const currentIndex = processed + failed + 1;
+          console.log(`🏷️ [${currentIndex}/${contextTaggingTotal}] Extracting tags with context for ${analysis.date}...`);
+          
+          // Get article content
+          const articleContent = await getArticleContent(analysis);
+          
+          let tagNames: string[];
+          if (articleContent && articleContent.trim().length > 0) {
+            // Use context-based extraction
+            tagNames = await entityExtractor.extractEntitiesWithContext(analysis.summary, articleContent);
+            console.log(`   📰 Using article context (${articleContent.length} chars)`);
+          } else {
+            // Fallback to regular extraction if no article found
+            console.log(`   ⚠️ No article content found, using summary only`);
+            tagNames = await entityExtractor.extractEntities(analysis.summary);
+          }
+          
+          // Update analysis with tags_version2
+          await storage.updateAnalysis(analysis.date, {
+            tagsVersion2: tagNames
+          });
+          
+          processed++;
+          contextTaggingProcessed = processed + failed;
+          
+          console.log(`✅ Tagged ${analysis.date} with ${tagNames.length} tags: ${tagNames.slice(0, 5).join(', ')}${tagNames.length > 5 ? '...' : ''}`);
+          
+          return { success: true, date: analysis.date };
+        } catch (error) {
+          console.error(`❌ Error tagging ${analysis.date}:`, error);
+          failed++;
+          failedDates.push(analysis.date);
+          contextTaggingProcessed = processed + failed;
+          
+          return { success: false, date: analysis.date };
+        }
+      };
+      
+      // Process analyses with 8-at-a-time batching
+      while (index < eligibleAnalyses.length || running.size > 0) {
+        // Check if stop was requested
+        if (shouldStopContextTagging) {
+          console.log(`🛑 Context tagging stopped by user after ${processed} analyses (${failed} failed)`);
+          break;
+        }
+        
+        // Start new analyses until we have MAX_CONCURRENT running
+        while (running.size < MAX_CONCURRENT && index < eligibleAnalyses.length) {
+          const analysis = eligibleAnalyses[index];
+          const promise = processAnalysis(analysis);
+          running.set(analysis.date, promise);
+          index++;
+        }
+        
+        // Wait for at least one to complete
+        if (running.size > 0) {
+          const completed = await Promise.race(
+            Array.from(running.entries()).map(([date, promise]) =>
+              promise.then(result => ({ result, date })).catch(error => {
+                console.error(`Promise error for ${date}:`, error);
+                return {
+                  result: { success: false, date },
+                  date
+                };
+              })
+            )
+          );
+          running.delete(completed.date);
+          
+          // Small delay before starting next batch
+          if (index < eligibleAnalyses.length && running.size < MAX_CONCURRENT) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        }
+      }
+      
+      console.log(`✅ Context tagging completed: ${processed} successful, ${failed} failed`);
+      if (failedDates.length > 0) {
+        console.log(`❌ Failed dates: ${failedDates.join(', ')}`);
+      }
+      
+      // Invalidate caches
+      cacheManager.invalidate('tags:catalog');
+      cacheManager.invalidate('tags:catalog:manual');
+      cacheManager.invalidate('tags:catalog-v2');
+      cacheManager.invalidate('tags:catalog-v2:manual');
+      cacheManager.invalidate('tags:hierarchy');
+      cacheManager.invalidate('tags:filter-tree');
+      cacheManager.invalidate('tags:manage');
+      cacheManager.invalidate('tags:analyses:all');
+      cacheManager.invalidate('tags:analyses:manual');
+      
+      isContextTaggingRunning = false;
+    })();
+    
+  } catch (error) {
+    console.error("❌ Error starting context tagging:", error);
+    isContextTaggingRunning = false;
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post("/api/tagging/with-context/stop", async (req, res) => {
+  try {
+    console.log("🛑 Stop context tagging requested");
+    
+    if (!isContextTaggingRunning) {
+      return res.status(400).json({ 
+        error: "No context tagging process is currently running" 
+      });
+    }
+    
+    shouldStopContextTagging = true;
+    const processedCount = contextTaggingProcessed;
+    
+    res.json({ 
+      success: true, 
+      processed: processedCount,
+      total: contextTaggingTotal,
+      message: `Context tagging will stop after current analysis completes` 
+    });
+  } catch (error) {
+    console.error("❌ Error stopping context tagging:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.get("/api/tagging/with-context/status", async (req, res) => {
+  try {
+    res.json({
+      isRunning: isContextTaggingRunning,
+      processed: contextTaggingProcessed,
+      total: contextTaggingTotal,
+      progress: contextTaggingTotal > 0 ? Math.round((contextTaggingProcessed / contextTaggingTotal) * 100) : 0
+    });
+  } catch (error) {
+    console.error("❌ Error getting context tagging status:", error);
     res.status(500).json({ error: (error as Error).message });
   }
 });
@@ -1745,7 +2014,7 @@ router.post("/api/tags/initialize", async (req, res) => {
 
 router.post("/api/tags/ai-categorize/start", async (req, res) => {
   try {
-    console.log("🤖 Starting AI categorization of all tags from tags_version2...");
+    console.log("🤖 Starting AI categorization for tags WITHOUT subcategory_path...");
     
     // Check if already running
     if (isAiCategorizationRunning) {
@@ -1754,26 +2023,37 @@ router.post("/api/tags/ai-categorize/start", async (req, res) => {
       });
     }
     
-    // Get all unique tags from tags_version2 column
-    const result = await db.execute(sql`
-      SELECT DISTINCT unnest(tags_version2) as tag_name
-      FROM historical_news_analyses
-      WHERE tags_version2 IS NOT NULL AND array_length(tags_version2, 1) > 0
-      ORDER BY tag_name;
+    // Get tags that currently have no subcategory_path (matches Quality Check UI)
+    const uncategorized = await db.execute(sql`
+      SELECT id, name, category
+      FROM tags
+      WHERE subcategory_path IS NULL OR array_length(subcategory_path, 1) IS NULL
+      ORDER BY name;
     `);
     
-    const allTags = result.rows.map((row: any) => ({
-      name: row.tag_name as string
+    const allTags = (uncategorized.rows as any[]).map((row) => ({
+      id: row.id as string,
+      name: row.name as string
     }));
     
     aiCategorizationTotal = allTags.length;
-    console.log(`✅ Found ${aiCategorizationTotal} unique tags to categorize`);
+    
+    if (aiCategorizationTotal === 0) {
+      console.log("ℹ️ No tags without subcategory_path to categorize.");
+      return res.json({ 
+        success: true, 
+        total: 0,
+        message: "No tags without subcategory_path to categorize" 
+      });
+    }
+    
+    console.log(`✅ Found ${aiCategorizationTotal} tags without subcategory_path to categorize`);
     
     // Send initial response
     res.json({ 
       success: true, 
       total: aiCategorizationTotal,
-      message: `Starting AI categorization of ${aiCategorizationTotal} tags` 
+      message: `Starting AI categorization of ${aiCategorizationTotal} tags without subcategory_path` 
     });
     
     // Mark as running
@@ -1783,6 +2063,8 @@ router.post("/api/tags/ai-categorize/start", async (req, res) => {
     
     // Start background processing
     (async () => {
+      try {
+      console.log(`🚀 Background processing started for ${aiCategorizationTotal} tags`);
       const { tags: tagsTable, pagesAndTags, historicalNewsAnalyses } = await import("@shared/schema");
       const { eq, and, inArray } = await import("drizzle-orm");
       const { categorizeTagWithContext } = await import("../services/tag-categorizer");
@@ -1794,6 +2076,15 @@ router.post("/api/tags/ai-categorize/start", async (req, res) => {
       const MAX_CONCURRENT = 8;
       const running = new Map<string, Promise<{ success: boolean; tagName: string }>>();
       let index = 0;
+      
+      console.log(`📋 Starting to process ${allTags.length} tags`);
+      console.log(`   First few tags: ${allTags.slice(0, 5).map(t => t.name).join(', ')}`);
+      
+      if (!allTags || allTags.length === 0) {
+        console.error('❌ allTags is empty or undefined!');
+        isAiCategorizationRunning = false;
+        return;
+      }
       
       // Helper function to get sample summaries for a tag
       const getTagSummaries = async (tagName: string): Promise<string[]> => {
@@ -1813,8 +2104,9 @@ router.post("/api/tags/ai-categorize/start", async (req, res) => {
       };
       
       // Helper function to process a single tag
-      const processTag = async (tagName: string): Promise<{ success: boolean; tagName: string }> => {
+      const processTag = async (tag: { id: string; name: string }): Promise<{ success: boolean; tagName: string }> => {
         try {
+          const tagName = tag.name;
           aiCategorizationCurrentTag = tagName;
           const currentIndex = processed + failed + 1;
           console.log(`🤖 [${currentIndex}/${aiCategorizationTotal}] Categorizing "${tagName}"...`);
@@ -1827,27 +2119,25 @@ router.post("/api/tags/ai-categorize/start", async (req, res) => {
           
           console.log(`   → Categorized as: ${categorization.category} ${categorization.subcategoryPath.join(' -> ')} (confidence: ${(categorization.confidence * 100).toFixed(1)}%)`);
           
-          // Find or create tag in tags table
+          // Find or create tag in tags table (match by name only, then update category/path)
+          let tagId: string = tag.id;
           const existingTag = await db.select()
             .from(tagsTable)
-            .where(and(
-              eq(tagsTable.name, tagName),
-              eq(tagsTable.category, categorization.category)
-            ))
+            .where(eq(tagsTable.id, tag.id))
             .limit(1);
           
-          let tagId: string;
           if (existingTag.length > 0) {
-            // Update existing tag
+            // Update the original uncategorized tag row
             await db.update(tagsTable)
               .set({
+                category: categorization.category,
                 subcategoryPath: categorization.subcategoryPath,
+                normalizedName: normalizeTagName(tagName),
                 updatedAt: new Date()
               })
-              .where(eq(tagsTable.id, existingTag[0].id));
-            tagId = existingTag[0].id;
+              .where(eq(tagsTable.id, tag.id));
           } else {
-            // Create new tag
+            // Fallback: create new tag if the original was not found
             const [newTag] = await db.insert(tagsTable).values({
               name: tagName,
               category: categorization.category,
@@ -1897,15 +2187,25 @@ router.post("/api/tags/ai-categorize/start", async (req, res) => {
           
           return { success: true, tagName };
         } catch (error) {
-          console.error(`❌ Error categorizing "${tagName}":`, error);
+          const errorTagName = tag.name; // Use tag.name from outer scope
+          console.error(`❌ Error categorizing "${errorTagName}":`, error);
           failed++;
-          failedTags.push(tagName);
+          failedTags.push(errorTagName);
           aiCategorizationProcessed = processed + failed;
-          return { success: false, tagName };
+          return { success: false, tagName: errorTagName };
         }
       };
       
       // Process tags with 8-at-a-time batching
+      console.log(`🔄 Entering processing loop: ${allTags.length} tags to process`);
+      console.log(`   Initial state: index=${index}, running.size=${running.size}, allTags.length=${allTags.length}`);
+      
+      if (allTags.length === 0) {
+        console.log('⚠️ No tags to process - exiting early');
+        isAiCategorizationRunning = false;
+        return;
+      }
+      
       while (index < allTags.length || running.size > 0) {
         // Check if stop was requested
         if (shouldStopAiCategorization) {
@@ -1916,30 +2216,42 @@ router.post("/api/tags/ai-categorize/start", async (req, res) => {
         // Start new tags until we have MAX_CONCURRENT running
         while (running.size < MAX_CONCURRENT && index < allTags.length) {
           const tag = allTags[index];
-          const promise = processTag(tag.name);
-          running.set(tag.name, promise);
+          console.log(`▶️ Starting processing for tag ${index + 1}/${allTags.length}: "${tag.name}"`);
+          const promise = processTag(tag);
+          running.set(tag.id, promise);
           index++;
         }
         
         // Wait for at least one to complete
         if (running.size > 0) {
-          const completed = await Promise.race(
-            Array.from(running.entries()).map(([tagName, promise]) =>
-              promise.then(result => ({ result, tagName })).catch(error => {
-                console.error(`Promise error for ${tagName}:`, error);
-                return {
-                  result: { success: false, tagName },
-                  tagName
-                };
-              })
-            )
-          );
-          running.delete(completed.tagName);
-          
-          // Small delay before starting next batch
-          if (index < allTags.length && running.size < MAX_CONCURRENT) {
-            await new Promise(resolve => setTimeout(resolve, 200));
+          try {
+            const completed = await Promise.race(
+              Array.from(running.entries()).map(([tagId, promise]) =>
+                promise.then(result => ({ result, tagId })).catch(error => {
+                  console.error(`Promise error for tag ${tagId}:`, error);
+                  return {
+                    result: { success: false, tagName: tagId },
+                    tagId
+                  };
+                })
+              )
+            );
+            running.delete(completed.tagId);
+            
+            // Small delay before starting next batch
+            if (index < allTags.length && running.size < MAX_CONCURRENT) {
+              await new Promise(resolve => setTimeout(resolve, 200));
+            }
+          } catch (error) {
+            console.error('❌ Error in Promise.race:', error);
+            // Clear running map on error to prevent infinite loop
+            running.clear();
+            break;
           }
+        } else if (index >= allTags.length) {
+          // No more tags to start and nothing running - we're done
+          console.log('✅ All tags processed, exiting loop');
+          break;
         }
       }
       
@@ -1960,6 +2272,11 @@ router.post("/api/tags/ai-categorize/start", async (req, res) => {
       cacheManager.invalidate('tags:analyses:manual');
       
       isAiCategorizationRunning = false;
+      } catch (error) {
+        console.error("❌ Fatal error in AI categorization background process:", error);
+        isAiCategorizationRunning = false;
+        aiCategorizationProcessed = aiCategorizationTotal; // Mark as complete to prevent hanging
+      }
     })();
     
   } catch (error) {
@@ -2703,6 +3020,67 @@ router.post("/api/tags/category/delete", async (req, res) => {
     res.json({ success: true, deleted: tagIds.length });
   } catch (error) {
     console.error("❌ Error deleting category:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Delete all unused tags (aligns with quality-check: tags not present in tags_version2)
+router.post("/api/tags/delete-unused", async (req, res) => {
+  try {
+    console.log("🧹 Deleting unused tags based on tags_version2 usage...");
+    
+    const { tags: tagsTable, pagesAndTags } = await import("@shared/schema");
+    const { inArray, not } = await import("drizzle-orm");
+    const { sql } = await import("drizzle-orm");
+    
+    // Get all unique tag names actually used in summaries (tags_version2)
+    const usedTagNames = await db.execute(sql`
+      SELECT DISTINCT unnest(tags_version2) as tag_name
+      FROM historical_news_analyses
+      WHERE tags_version2 IS NOT NULL AND array_length(tags_version2, 1) > 0
+    `);
+    const usedNames = (usedTagNames.rows as any[]).map(r => r.tag_name as string);
+    
+    // Find tags whose names are NOT used in summaries
+    const unusedTags = usedNames.length > 0
+      ? await db.select().from(tagsTable).where(not(inArray(tagsTable.name, usedNames)))
+      : await db.select().from(tagsTable); // if no used tags, everything is unused
+    
+    if (unusedTags.length === 0) {
+      return res.json({ success: true, deletedCount: 0, message: "No unused tags to delete" });
+    }
+    
+    console.log(`🗑️ Found ${unusedTags.length} unused tags to delete (not present in tags_version2)`);
+    
+    // Collect IDs to clean up join table first
+    const unusedIds = unusedTags.map(t => t.id);
+    
+    // Delete any lingering page/tag associations (defensive)
+    await db.delete(pagesAndTags).where(inArray(pagesAndTags.tagId, unusedIds));
+    
+    // Delete unused tags
+    await db.delete(tagsTable).where(inArray(tagsTable.id, unusedIds));
+    
+    console.log(`✅ Deleted ${unusedTags.length} unused tags`);
+    
+    // Invalidate caches
+    cacheManager.invalidate('tags:catalog');
+    cacheManager.invalidate('tags:catalog:manual');
+    cacheManager.invalidate('tags:catalog-v2');
+    cacheManager.invalidate('tags:catalog-v2:manual');
+    cacheManager.invalidate('tags:hierarchy');
+    cacheManager.invalidate('tags:filter-tree');
+    cacheManager.invalidate('tags:manage');
+    cacheManager.invalidate('tags:analyses:all');
+    cacheManager.invalidate('tags:analyses:manual');
+    
+    res.json({ 
+      success: true, 
+      deletedCount: unusedTags.length,
+      message: `Deleted ${unusedTags.length} unused tags`
+    });
+  } catch (error) {
+    console.error("❌ Error deleting unused tags:", error);
     res.status(500).json({ error: (error as Error).message });
   }
 });
