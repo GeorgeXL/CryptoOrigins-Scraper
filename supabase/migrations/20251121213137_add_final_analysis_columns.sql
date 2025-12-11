@@ -22,3 +22,5 @@ ON historical_news_analyses(final_analysis_checked_at);
 
 
 
+
+

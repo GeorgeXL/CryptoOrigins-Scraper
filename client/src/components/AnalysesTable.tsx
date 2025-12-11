@@ -1,3 +1,4 @@
+import React, { useState } from "react";
 import {
   Table,
   TableBody,
@@ -33,6 +34,7 @@ export interface HistoricalNewsAnalysis {
   url?: string;
   source_url?: string;
   isManualOverride?: boolean;
+   isFlagged?: boolean;
 }
 
 interface CategoryData {
@@ -86,6 +88,10 @@ interface AnalysesTableProps {
   // Bulk actions panel
   bulkActions?: BulkActionsConfig;
   showBulkActions?: boolean;
+  // Row context actions
+  getRowHref?: (analysis: HistoricalNewsAnalysis) => string;
+  onOpenInNewTab?: (analysis: HistoricalNewsAnalysis) => void;
+  onToggleFlag?: (analysis: HistoricalNewsAnalysis) => void;
 }
 
 export function AnalysesTable({
@@ -111,7 +117,35 @@ export function AnalysesTable({
   showSelectAll = true,
   bulkActions,
   showBulkActions = true,
+  getRowHref,
+  onOpenInNewTab,
+  onToggleFlag,
 }: AnalysesTableProps) {
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [contextTarget, setContextTarget] = useState<HistoricalNewsAnalysis | null>(null);
+
+  const resolveRowHref = (analysis: HistoricalNewsAnalysis) => {
+    return getRowHref ? getRowHref(analysis) : `/day/${analysis.date}`;
+  };
+
+  const handleOpenInNewTab = () => {
+    if (!contextTarget) return;
+    if (onOpenInNewTab) {
+      onOpenInNewTab(contextTarget);
+    } else {
+      const url = resolveRowHref(contextTarget);
+      window.open(url, "_blank", "noreferrer");
+    }
+    setContextMenuOpen(false);
+  };
+
+  const handleToggleFlag = () => {
+    if (!contextTarget || !onToggleFlag) return;
+    onToggleFlag(contextTarget);
+    setContextMenuOpen(false);
+  };
+
   const toggleDateSelection = (date: string) => {
     if (selectedDates.has(date)) {
       onDateDeselect?.(date);
@@ -315,6 +349,12 @@ export function AnalysesTable({
                     : "hover:bg-sidebar-accent"
                 }`}
                 onClick={() => onRowClick?.(analysis.date)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setContextTarget(analysis);
+                  setContextMenuPos({ x: e.clientX, y: e.clientY });
+                  setContextMenuOpen(true);
+                }}
               >
                 {showCheckbox && (
                   <TableCell onClick={(e) => e.stopPropagation()}>
@@ -407,6 +447,30 @@ export function AnalysesTable({
           )}
         </div>
       )}
+      <DropdownMenu
+        open={contextMenuOpen}
+        onOpenChange={(open) => {
+          setContextMenuOpen(open);
+          if (!open) setContextTarget(null);
+        }}
+      >
+        <DropdownMenuTrigger asChild>
+          <button className="hidden" aria-label="Row actions trigger" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          className="w-44"
+          style={{ position: "fixed", left: contextMenuPos.x, top: contextMenuPos.y }}
+        >
+          <DropdownMenuItem onSelect={(e) => { e.preventDefault(); handleOpenInNewTab(); }}>
+            Open in new tab
+          </DropdownMenuItem>
+          {onToggleFlag && (
+            <DropdownMenuItem onSelect={(e) => { e.preventDefault(); handleToggleFlag(); }}>
+              {contextTarget?.isFlagged ? "Unflag" : "Flag"}
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

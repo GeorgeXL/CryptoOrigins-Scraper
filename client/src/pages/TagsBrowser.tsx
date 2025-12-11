@@ -77,6 +77,7 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor } from "@/utils/tagHelpers";
+import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
 
 // Main category type definition
 export type MainCategory = 
@@ -151,6 +152,21 @@ export default function TagsBrowser() {
 
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // Restore state from URL params on mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const restoredState = deserializePageState(urlParams);
+    if (restoredState && restoredState.page === 'tags-browser') {
+      const state = restoredState as HomePageState;
+      if (state.selectedEntities) setSelectedEntities(state.selectedEntities);
+      if (state.showUntagged !== undefined) setShowUntagged(state.showUntagged);
+      if (state.searchQuery) setSearchQuery(state.searchQuery);
+      if (state.currentPage) setCurrentPage(state.currentPage);
+      if (state.pageSize) setPageSize(state.pageSize);
+      if (state.viewMode) setViewMode(state.viewMode);
+    }
+  }, []);
   
   // Bulk operations state
   const [showBulkAdd, setShowBulkAdd] = useState(false);
@@ -1151,7 +1167,19 @@ export default function TagsBrowser() {
                   return next;
                 });
               }}
-              onRowClick={(date) => setLocation(`/day/${date}`)}
+              onRowClick={(date) => {
+                const state: HomePageState = {
+                  page: 'tags-browser',
+                  selectedEntities,
+                  showUntagged,
+                  searchQuery,
+                  currentPage,
+                  pageSize,
+                  viewMode,
+                };
+                const query = serializePageState(state);
+                setLocation(`/day/${date}?${query}`);
+              }}
               onTagClick={(tagName) => setSearchQuery(tagName)}
               emptyMessage={
                 showUntagged

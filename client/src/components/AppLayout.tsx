@@ -84,10 +84,10 @@ export default function AppLayout({ children }: AppLayoutProps) {
                       Manager
                     </NavigationMenuTrigger>
                     <NavigationMenuContent>
-                      <ul className="grid w-[280px] gap-1 p-2 bg-accent rounded-md">
+                      <ul className="grid w-[280px] gap-1 p-2 bg-card border border-border rounded-md shadow-sm">
                         <li>
                           <NavigationMenuLink asChild>
-                            <Link href="/admin" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-accent hover:bg-primary/10 hover:shadow-sm focus:bg-primary/10 focus:text-accent-foreground cursor-pointer group">
+                            <Link href="/admin" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-card hover:bg-muted focus:bg-muted focus:text-foreground cursor-pointer group">
                               <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Admin</div>
                               <p className="line-clamp-2 text-xs leading-snug text-muted-foreground group-hover:text-foreground/80 transition-colors">
                                 Export data and settings.
@@ -97,7 +97,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
                         </li>
                         <li>
                           <NavigationMenuLink asChild>
-                            <Link href="/tags-manager" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-accent hover:bg-primary/10 hover:shadow-sm focus:bg-primary/10 focus:text-accent-foreground cursor-pointer group">
+                            <Link href="/tags-manager" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-card hover:bg-muted focus:bg-muted focus:text-foreground cursor-pointer group">
                               <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Tags</div>
                               <p className="line-clamp-2 text-xs leading-snug text-muted-foreground group-hover:text-foreground/80 transition-colors">
                                 Organize and manage tags with drag-drop.
@@ -107,7 +107,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
                         </li>
                         <li>
                           <NavigationMenuLink asChild>
-                            <Link href="/events-manager" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-accent hover:bg-primary/10 hover:shadow-sm focus:bg-primary/10 focus:text-accent-foreground cursor-pointer group">
+                            <Link href="/events-manager" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-card hover:bg-muted focus:bg-muted focus:text-foreground cursor-pointer group">
                               <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Events</div>
                               <p className="line-clamp-2 text-xs leading-snug text-muted-foreground group-hover:text-foreground/80 transition-colors">
                                 View and change events.

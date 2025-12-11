@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useParams, Link } from "wouter";
+import { useParams, Link, useLocation } from "wouter";
 import React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -97,6 +97,7 @@ import {
 } from "lucide-react";
 import { getCategoryColor, getCategoryIcon, getTagCategory } from "@/utils/tagHelpers";
 import { getCategoryKeyFromPath, getCategoryDisplayMeta } from "@shared/taxonomy";
+import { deserializePageState, reconstructPageUrl } from "@/lib/navigationState";
 
 interface DayAnalysisData {
   analysis: {
@@ -111,6 +112,7 @@ interface DayAnalysisData {
     isManualOverride?: boolean;
     isFlagged?: boolean;
     flagReason?: string;
+    flaggedAt?: string | null;
     veriBadge?: 'Manual' | 'Orphan' | 'Verified' | 'Not Available' | null;
     tagsVersion2?: string[];
     articleTags?: {
@@ -164,6 +166,7 @@ interface DayAnalysisData {
 export default function DayAnalysis() {
   const { date } = useParams();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const { startContextTagging, isContextTagging } = useTagging();
   const [isEditing, setIsEditing] = React.useState(false);
   const [editedSummary, setEditedSummary] = React.useState('');
@@ -187,6 +190,18 @@ export default function DayAnalysis() {
   // Get the source parameter from URL to determine back button behavior
   const urlParams = new URLSearchParams(window.location.search);
   const source = urlParams.get('from') || 'month'; // default to month view
+
+  // Handle back navigation - reconstruct previous page URL with state
+  const handleBack = () => {
+    const restoredState = deserializePageState(urlParams);
+    if (restoredState) {
+      const backUrl = reconstructPageUrl(restoredState);
+      setLocation(backUrl);
+    } else {
+      // Fallback to browser back if no state found
+      window.history.back();
+    }
+  };
 
   // Helper function to get AI provider badge
   const getAIProviderBadge = (provider: string) => {
@@ -242,6 +257,7 @@ export default function DayAnalysis() {
             aiProvider: 'unknown',
             isManualOverride: false,
             isFlagged: false,
+            flagReason: '',
             tagsVersion2: [],
             articleTags: {
               totalArticles: 0,
@@ -290,7 +306,8 @@ export default function DayAnalysis() {
           confidenceScore: analysis.confidence_score || '0',
           aiProvider: analysis.ai_provider || 'unknown',
           isManualOverride: analysis.is_manual_override || false,
-          isFlagged: false,
+          isFlagged: analysis.is_flagged || false,
+          flagReason: analysis.flag_reason || '',
           veriBadge: analysis.veri_badge as 'Manual' | 'Orphan' | 'Verified' | 'Not Available' | null | undefined,
           tagsVersion2: analysis.tags_version2 || [],
           articleTags: {
@@ -780,6 +797,35 @@ export default function DayAnalysis() {
     },
   });
 
+  const flagAnalysisMutation = useMutation({
+    mutationFn: async (nextFlag: boolean) => {
+      const res = await fetch(`/api/analysis/date/${date}/flag`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isFlagged: nextFlag }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to update flag");
+      }
+      return res.json();
+    },
+    onSuccess: (_data, nextFlag) => {
+      queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+      toast({
+        title: nextFlag ? "Flagged" : "Unflagged",
+        description: nextFlag ? "Marked for review." : "Flag removed.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to update flag",
+        description: error?.message || "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
   // Handle text selection for tagging
   const handleTextSelection = () => {
     if (!isTaggingMode) return;
@@ -888,8 +934,9 @@ export default function DayAnalysis() {
       staleTime: 5 * 60 * 1000, // Cache for 5 minutes
     });
     
-    // Preserve the source parameter when navigating
-    window.location.href = `/day/${prevDate}?from=${source}`;
+    // Preserve all URL parameters when navigating
+    const currentParams = new URLSearchParams(window.location.search);
+    setLocation(`/day/${prevDate}?${currentParams.toString()}`);
   };
 
   const navigateNextDay = async () => {
@@ -904,8 +951,9 @@ export default function DayAnalysis() {
       staleTime: 5 * 60 * 1000, // Cache for 5 minutes
     });
     
-    // Preserve the source parameter when navigating
-    window.location.href = `/day/${nextDate}?from=${source}`;
+    // Preserve all URL parameters when navigating
+    const currentParams = new URLSearchParams(window.location.search);
+    setLocation(`/day/${nextDate}?${currentParams.toString()}`);
   };
 
   // Auto-analysis is disabled - user must manually click the Analyse button
@@ -1218,7 +1266,7 @@ export default function DayAnalysis() {
         {/* Header with Action Buttons */}
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
-            <Button variant="outline" size="sm" onClick={() => window.history.back()}>
+            <Button variant="outline" size="sm" onClick={handleBack}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
             </Button>
@@ -1255,7 +1303,7 @@ export default function DayAnalysis() {
         {/* Header with Action Buttons */}
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
-            <Button variant="outline" size="sm" onClick={() => window.history.back()}>
+            <Button variant="outline" size="sm" onClick={handleBack}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
             </Button>
@@ -1302,7 +1350,7 @@ export default function DayAnalysis() {
       {/* Header with Action Buttons */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <Button variant="outline" size="sm" onClick={() => window.history.back()}>
+          <Button variant="outline" size="sm" onClick={handleBack}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
           </Button>
@@ -1593,9 +1641,18 @@ export default function DayAnalysis() {
                   </div>
                   
                   {/* More */}
-                  <div className="mt-6">
-                    <h5 className="text-sm font-semibold text-foreground mb-2">More</h5>
-                    <VeriBadge badge={dayData.analysis.veriBadge} />
+                  <div className="mt-6 space-y-2">
+                    <h5 className="text-sm font-semibold text-foreground">More</h5>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <VeriBadge badge={dayData.analysis.veriBadge} />
+                      <Badge
+                        variant={dayData.analysis.isFlagged ? "destructive" : "outline"}
+                        className="cursor-pointer"
+                        onClick={() => flagAnalysisMutation.mutate(!dayData.analysis.isFlagged)}
+                      >
+                        {dayData.analysis.isFlagged ? "Flagged — click to unflag" : "Flag/Unflag"}
+                      </Badge>
+                    </div>
                   </div>
                 </div>
               </div>

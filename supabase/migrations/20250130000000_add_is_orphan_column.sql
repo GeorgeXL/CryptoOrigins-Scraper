@@ -11,3 +11,5 @@ CREATE INDEX IF NOT EXISTS idx_historical_news_is_orphan ON historical_news_anal
 
 
 
+
+

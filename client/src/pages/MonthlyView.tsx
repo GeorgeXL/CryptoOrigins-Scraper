@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
@@ -38,6 +38,7 @@ import { supabase } from "@/lib/supabase";
 import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
 import { TaggingDropdown } from "@/components/TaggingDropdown";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
+import { serializePageState, deserializePageState, type MonthlyViewState } from "@/lib/navigationState";
 
 const YEARS = Array.from({ length: 16 }, (_, i) => 2009 + i); // 2009-2024
 const MONTHS = [
@@ -71,6 +72,80 @@ export default function MonthlyView() {
     progress
   } = useBulkReanalyze();
   const [showManageTags, setShowManageTags] = useState(false);
+  
+  // Track previous search string to detect URL changes
+  const prevSearchRef = useRef<string>(window.location.search);
+
+  // Restore state from URL params on mount and when navigating back
+  useEffect(() => {
+    const checkAndRestore = () => {
+      const currentSearch = window.location.search;
+      
+      // Only restore if URL actually changed (to avoid resetting user actions)
+      if (currentSearch === prevSearchRef.current) {
+        return;
+      }
+      
+      prevSearchRef.current = currentSearch;
+      const urlParams = new URLSearchParams(currentSearch);
+      
+      // Check for year/month params directly (from navigation back) or via deserializePageState
+      const yearParam = urlParams.get('year');
+      const monthParam = urlParams.get('month');
+      const pageParam = urlParams.get('page');
+      const pageSizeParam = urlParams.get('pageSize');
+      
+      // If we have year/month params, restore state directly
+      if (yearParam || monthParam) {
+        if (yearParam) {
+          const year = parseInt(yearParam, 10);
+          setSelectedYear(year);
+          setOpenYear(year);
+        }
+        if (monthParam) {
+          const monthNum = parseInt(monthParam, 10);
+          const monthName = MONTHS[monthNum - 1];
+          setSelectedMonth(monthName);
+        }
+        if (pageParam) setCurrentPage(parseInt(pageParam, 10));
+        if (pageSizeParam) setPageSize(parseInt(pageSizeParam, 10));
+      } else {
+        // Fallback to deserializePageState for from=monthly format
+        const restoredState = deserializePageState(urlParams);
+        if (restoredState && restoredState.page === 'monthly') {
+          const state = restoredState as MonthlyViewState;
+          if (state.selectedYear !== null && state.selectedYear !== undefined) {
+            setSelectedYear(state.selectedYear);
+            setOpenYear(state.selectedYear);
+          }
+          if (state.selectedMonth !== null && state.selectedMonth !== undefined) {
+            const monthName = MONTHS[state.selectedMonth - 1];
+            setSelectedMonth(monthName);
+          }
+          if (state.currentPage) setCurrentPage(state.currentPage);
+          if (state.pageSize) setPageSize(state.pageSize);
+        }
+      }
+    };
+
+    // Check immediately on mount
+    checkAndRestore();
+
+    // Check more frequently for programmatic navigation (setLocation from wouter)
+    const interval = setInterval(checkAndRestore, 50);
+    
+    // Listen to popstate for browser back/forward
+    window.addEventListener('popstate', checkAndRestore);
+    
+    // Also listen to hashchange as fallback
+    window.addEventListener('hashchange', checkAndRestore);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('popstate', checkAndRestore);
+      window.removeEventListener('hashchange', checkAndRestore);
+    };
+  }, []);
 
   // Generate date range for selected month/year
   const dateRange = useMemo(() => {
@@ -149,6 +224,16 @@ export default function MonthlyView() {
     setOpenYear(year);
     setCurrentPage(1);
     setSelectedDates(new Set());
+    
+    // Update URL to match the new selection
+    const params = new URLSearchParams();
+    params.set('year', year.toString());
+    params.set('month', MONTH_NUMBERS[month].toString());
+    params.set('page', '1');
+    params.set('pageSize', pageSize.toString());
+    const newUrl = `/monthly?${params.toString()}`;
+    prevSearchRef.current = `?${params.toString()}`; // Update ref to prevent polling from resetting
+    navigate(newUrl, { replace: true });
   };
 
   const toggleDateSelection = (date: string) => {
@@ -250,7 +335,15 @@ export default function MonthlyView() {
                 onDateSelect={toggleDateSelection}
                 onDateDeselect={toggleDateSelection}
                 onRowClick={(date) => {
-                  navigate(`/day/${date}?from=monthly`);
+                  const state: MonthlyViewState = {
+                    page: 'monthly',
+                    selectedYear,
+                    selectedMonth: selectedMonth ? MONTH_NUMBERS[selectedMonth] : null,
+                    currentPage,
+                    pageSize,
+                  };
+                  const query = serializePageState(state);
+                  navigate(`/day/${date}?${query}`);
                 }}
                 emptyMessage={`No analyses found for ${selectedMonth} ${selectedYear}`}
                 showCheckbox={true}

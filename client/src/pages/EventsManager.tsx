@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
@@ -77,6 +77,7 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor } from "@/utils/tagHelpers";
+import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
 
 // Quality violation types for filtering
 const VIOLATION_TYPES = [
@@ -160,6 +161,66 @@ export default function EventsManager() {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
 
+  // Quality check state
+  const [selectedQualityCheck, setSelectedQualityCheck] = useState<string | null>(null);
+  const [selectedVeriBadge, setSelectedVeriBadge] = useState<string | null>(null);
+  const [qualityCheckPage, setQualityCheckPage] = useState(1);
+
+  // Track previous search string to detect URL changes (start empty so we restore on first mount)
+  const prevSearchRef = useRef<string>('');
+  
+  // Use refs to store current state values for updateUrl function
+  const stateRef = useRef({ selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, selectedQualityCheck, selectedVeriBadge, qualityCheckPage });
+  
+  // Update refs whenever state changes
+  useEffect(() => {
+    stateRef.current = { selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, selectedQualityCheck, selectedVeriBadge, qualityCheckPage };
+  }, [selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, selectedQualityCheck, selectedVeriBadge, qualityCheckPage]);
+
+  // Helper function to update URL when state changes
+  const updateUrl = (updates: Partial<HomePageState>) => {
+    const currentState: HomePageState = {
+      page: 'events-manager',
+      selectedEntities: updates.selectedEntities ?? stateRef.current.selectedEntities,
+      showUntagged: updates.showUntagged ?? stateRef.current.showUntagged,
+      searchQuery: updates.searchQuery ?? stateRef.current.searchQuery,
+      currentPage: updates.currentPage ?? stateRef.current.currentPage,
+      pageSize: updates.pageSize ?? stateRef.current.pageSize,
+      viewMode: updates.viewMode ?? stateRef.current.viewMode,
+      selectedQualityCheck: updates.selectedQualityCheck ?? stateRef.current.selectedQualityCheck,
+      selectedVeriBadge: updates.selectedVeriBadge ?? stateRef.current.selectedVeriBadge,
+      qualityCheckPage: updates.qualityCheckPage ?? stateRef.current.qualityCheckPage,
+    };
+    // Build URL without 'from' parameter (only used when navigating to day view)
+    const params = new URLSearchParams();
+    if (currentState.selectedEntities.size > 0) {
+      params.set('entities', Array.from(currentState.selectedEntities).join(','));
+    }
+    if (currentState.showUntagged) {
+      params.set('untagged', '1');
+    }
+    if (currentState.searchQuery) {
+      params.set('search', currentState.searchQuery);
+    }
+    params.set('page', currentState.currentPage.toString());
+    params.set('pageSize', currentState.pageSize.toString());
+    params.set('viewMode', currentState.viewMode);
+    // EventsManager-specific fields
+    if (currentState.selectedQualityCheck) {
+      params.set('qualityCheck', currentState.selectedQualityCheck);
+    }
+    if (currentState.selectedVeriBadge) {
+      params.set('veriBadge', currentState.selectedVeriBadge);
+    }
+    if (currentState.qualityCheckPage) {
+      params.set('qualityCheckPage', currentState.qualityCheckPage.toString());
+    }
+    const query = params.toString();
+    const newUrl = `/events-manager${query ? `?${query}` : ''}`;
+    prevSearchRef.current = query ? `?${query}` : ''; // Update ref to prevent polling from resetting
+    setLocation(newUrl, { replace: true });
+  };
+
   // New state for the copy dialog
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [textToCopy, setTextToCopy] = useState("");
@@ -174,10 +235,58 @@ export default function EventsManager() {
     const timer = setTimeout(() => {
       setDebouncedSearchQuery(searchQuery);
       setCurrentPage(1); // Reset to first page when search changes
+      updateUrl({ searchQuery, currentPage: 1 });
     }, 300);
 
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // Restore state from URL params on mount and when navigating back
+  useEffect(() => {
+    const checkAndRestore = () => {
+      const currentSearch = window.location.search;
+      
+      // Only restore if URL actually changed (to avoid resetting user actions)
+      if (currentSearch === prevSearchRef.current) {
+        return;
+      }
+      
+      prevSearchRef.current = currentSearch;
+      const urlParams = new URLSearchParams(currentSearch);
+      const restoredState = deserializePageState(urlParams);
+      if (restoredState && restoredState.page === 'events-manager') {
+        const state = restoredState as HomePageState;
+        if (state.selectedEntities) setSelectedEntities(state.selectedEntities);
+        if (state.showUntagged !== undefined) setShowUntagged(state.showUntagged);
+        if (state.searchQuery) setSearchQuery(state.searchQuery);
+        if (state.currentPage) setCurrentPage(state.currentPage);
+        if (state.pageSize) setPageSize(state.pageSize);
+        if (state.viewMode) setViewMode(state.viewMode);
+        // Restore quality check and veri badge state
+        if (state.selectedQualityCheck !== undefined) setSelectedQualityCheck(state.selectedQualityCheck);
+        if (state.selectedVeriBadge !== undefined) setSelectedVeriBadge(state.selectedVeriBadge);
+        if (state.qualityCheckPage !== undefined) setQualityCheckPage(state.qualityCheckPage);
+      }
+    };
+
+    // Check immediately on mount
+    checkAndRestore();
+
+    // Check more frequently for programmatic navigation (setLocation from wouter)
+    const interval = setInterval(checkAndRestore, 50);
+    
+    // Listen to popstate for browser back/forward
+    window.addEventListener('popstate', checkAndRestore);
+    
+    // Also listen to hashchange as fallback
+    window.addEventListener('hashchange', checkAndRestore);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('popstate', checkAndRestore);
+      window.removeEventListener('hashchange', checkAndRestore);
+    };
+  }, []);
 
   // Bulk operations state
   const [showBulkAdd, setShowBulkAdd] = useState(false);
@@ -196,11 +305,6 @@ export default function EventsManager() {
     confirmSelection,
     progress
   } = useBulkReanalyze();
-
-  // Quality check state
-  const [selectedQualityCheck, setSelectedQualityCheck] = useState<string | null>(null);
-  const [selectedVeriBadge, setSelectedVeriBadge] = useState<string | null>(null);
-  const [qualityCheckPage, setQualityCheckPage] = useState(1);
 
   // Fetch quality violations data
   const { data: qualityViolationsData, isLoading: qualityLoading } = useQuery<QualityViolation[]>({
@@ -273,6 +377,33 @@ export default function EventsManager() {
       return {
         entries: untagged,
         totalCount: untagged.length
+      };
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  // Fetch flagged analyses
+  const { data: flaggedData, isLoading: flaggedLoading } = useQuery<{ entries: any[]; totalCount: number }>({
+    queryKey: ['events-manager-flagged'],
+    queryFn: async () => {
+      if (!supabase) {
+        console.warn('Supabase not configured for flagged check');
+        return { entries: [], totalCount: 0 };
+      }
+
+      const { data, error } = await supabase
+        .from("historical_news_analyses")
+        .select("date, summary, is_flagged")
+        .eq("is_flagged", true);
+
+      if (error) {
+        console.error('Error fetching flagged analyses:', error);
+        throw error;
+      }
+
+      return {
+        entries: data || [],
+        totalCount: data?.length || 0,
       };
     },
     staleTime: 1000 * 60 * 5,
@@ -598,9 +729,11 @@ export default function EventsManager() {
     const emptyCount = emptySummaryData?.totalCount || 0;
     const untaggedCount = untaggedData?.totalCount || 0;
     const missingMonthsCount = missingMonthsData?.totalCount || 0;
+    const flaggedCount = flaggedData?.totalCount || 0;
     const isEmptyLoading = emptySummaryLoading;
     const isUntaggedLoading = untaggedLoading;
     const isMissingMonthsLoading = missingMonthsLoading;
+    const isFlaggedLoading = flaggedLoading;
     const isViolationsLoading = !qualityViolationsData && qualityLoading;
 
     // Empty summary
@@ -619,6 +752,15 @@ export default function EventsManager() {
       count: untaggedCount,
       hasIssues: untaggedCount > 0,
       isLoading: isUntaggedLoading,
+    });
+
+    // Flagged
+    items.push({
+      id: 'flagged',
+      label: 'Flagged',
+      count: flaggedCount,
+      hasIssues: flaggedCount > 0,
+      isLoading: isFlaggedLoading,
     });
 
     // Missing months
@@ -644,7 +786,7 @@ export default function EventsManager() {
     }
 
     return items;
-  }, [qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, qualityLoading, emptySummaryLoading, untaggedLoading, missingMonthsLoading]);
+  }, [qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, qualityLoading, emptySummaryLoading, untaggedLoading, missingMonthsLoading, flaggedLoading]);
 
   // Build VeriBadge items for sidebar
   const veriBadgeItems = useMemo<QualityCheckItem[]>(() => {
@@ -755,6 +897,16 @@ export default function EventsManager() {
         date: entry.date,
         summary: entry.summary || '',
         violations: ['Untagged'],
+        length: entry.summary?.length || 0,
+        tags_version2: entry.tags_version2 || null,
+      }));
+    }
+
+    if (selectedQualityCheck === 'flagged') {
+      return (flaggedData?.entries || []).map((entry: any) => ({
+        date: entry.date,
+        summary: entry.summary || '',
+        violations: ['Flagged'],
         length: entry.summary?.length || 0,
         tags_version2: entry.tags_version2 || null,
       }));
@@ -1747,20 +1899,24 @@ export default function EventsManager() {
               qualityCheckItems={qualityCheckItems}
               selectedQualityCheck={selectedQualityCheck}
               onQualityCheckSelect={(id) => {
-                setSelectedQualityCheck(selectedQualityCheck === id ? null : id);
+                const newQualityCheck = selectedQualityCheck === id ? null : id;
+                setSelectedQualityCheck(newQualityCheck);
                 setSelectedVeriBadge(null); // Clear VeriBadge selection
                 setQualityCheckPage(1);
                 setShowUntagged(false);
                 setSelectedEntities(new Set());
+                updateUrl({ selectedQualityCheck: newQualityCheck, selectedVeriBadge: null, qualityCheckPage: 1, selectedEntities: new Set() });
               }}
               veriBadgeItems={veriBadgeItems}
               selectedVeriBadge={selectedVeriBadge}
               onVeriBadgeSelect={(id) => {
-                setSelectedVeriBadge(selectedVeriBadge === id ? null : id);
+                const newVeriBadge = selectedVeriBadge === id ? null : id;
+                setSelectedVeriBadge(newVeriBadge);
                 setSelectedQualityCheck(null); // Clear quality check selection
                 setQualityCheckPage(1);
                 setShowUntagged(false);
                 setSelectedEntities(new Set());
+                updateUrl({ selectedVeriBadge: newVeriBadge, selectedQualityCheck: null, qualityCheckPage: 1, selectedEntities: new Set() });
               }}
               onEntitySelect={(entityKey) => {
                 const newSelected = new Set(selectedEntities);
@@ -1774,17 +1930,21 @@ export default function EventsManager() {
                 setSelectedQualityCheck(null);
                 setSelectedVeriBadge(null);
                 setCurrentPage(1);
+                updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1, selectedQualityCheck: null, selectedVeriBadge: null });
               }}
               onUntaggedToggle={() => {
-                setShowUntagged(!showUntagged);
+                const newShowUntagged = !showUntagged;
+                setShowUntagged(newShowUntagged);
                 setSelectedEntities(new Set());
                 setSelectedQualityCheck(null);
                 setSelectedVeriBadge(null);
                 setCurrentPage(1);
+                updateUrl({ showUntagged: newShowUntagged, selectedEntities: new Set(), currentPage: 1, selectedQualityCheck: null, selectedVeriBadge: null });
               }}
               onSearchChange={(value) => {
                 setSearchQuery(value);
                 setCurrentPage(1);
+                // Note: search query is debounced, so URL update happens in debounce effect
               }}
             />
           </div>
@@ -1855,7 +2015,22 @@ export default function EventsManager() {
                       return next;
                     });
                   }}
-                  onRowClick={(date) => setLocation(`/day/${date}`)}
+                  onRowClick={(date) => {
+                    const state: HomePageState = {
+                      page: 'events-manager',
+                      selectedEntities,
+                      showUntagged,
+                      searchQuery,
+                      currentPage,
+                      pageSize,
+                      viewMode,
+                      selectedQualityCheck,
+                      selectedVeriBadge,
+                      qualityCheckPage,
+                    };
+                    const query = serializePageState(state);
+                    setLocation(`/day/${date}?${query}`);
+                  }}
                   onTagClick={(tagName) => setSearchQuery(tagName)}
                   emptyMessage="No issues found in this category"
                   showCheckbox={true}
@@ -1863,10 +2038,14 @@ export default function EventsManager() {
                   currentPage={qualityCheckPage}
                   totalCount={filteredQualityViolations.length}
                   catalogData={catalogData}
-                  onPageChange={(page) => setQualityCheckPage(page)}
+                  onPageChange={(page) => {
+                    setQualityCheckPage(page);
+                    updateUrl({ qualityCheckPage: page });
+                  }}
                   onPageSizeChange={(size) => {
                     setPageSize(size);
                     setQualityCheckPage(1);
+                    updateUrl({ pageSize: size, qualityCheckPage: 1 });
                   }}
                   onSelectAll={toggleSelectAllQualityViolations}
                   selectAllMatching={selectAllMatching}
@@ -2010,7 +2189,22 @@ export default function EventsManager() {
                       return next;
                     });
                   }}
-                  onRowClick={(date) => setLocation(`/day/${date}`)}
+                  onRowClick={(date) => {
+                    const state: HomePageState = {
+                      page: 'events-manager',
+                      selectedEntities,
+                      showUntagged,
+                      searchQuery,
+                      currentPage,
+                      pageSize,
+                      viewMode,
+                      selectedQualityCheck,
+                      selectedVeriBadge,
+                      qualityCheckPage,
+                    };
+                    const query = serializePageState(state);
+                    setLocation(`/day/${date}?${query}`);
+                  }}
                   onTagClick={(tagName) => setSearchQuery(tagName)}
                   emptyMessage={
                     showUntagged
@@ -2026,10 +2220,14 @@ export default function EventsManager() {
                   currentPage={currentPage}
                   totalCount={totalCount}
                   catalogData={catalogData}
-                  onPageChange={(page) => setCurrentPage(page)}
+                  onPageChange={(page) => {
+                    setCurrentPage(page);
+                    updateUrl({ currentPage: page });
+                  }}
                   onPageSizeChange={(size) => {
                     setPageSize(size);
                     setCurrentPage(1);
+                    updateUrl({ pageSize: size, currentPage: 1 });
                   }}
                   onSelectAll={toggleSelectAll}
                   selectAllMatching={selectAllMatching}

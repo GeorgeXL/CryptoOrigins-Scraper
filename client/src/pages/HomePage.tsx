@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
@@ -77,6 +77,7 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor, buildFilterTreeFromTags } from "@/utils/tagHelpers";
+import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
 
 // Main category type definition
 export type MainCategory = 
@@ -109,6 +110,7 @@ interface HistoricalNewsAnalysis {
   url?: string;
   source_url?: string;
   isManualOverride?: boolean;
+  isFlagged?: boolean;
 }
 
 const PAGE_SIZE_OPTIONS = [50, 200, 500];
@@ -133,6 +135,91 @@ export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
 
+  // Track previous search string to detect URL changes (start empty so we restore on first mount)
+  const prevSearchRef = useRef<string>('');
+  
+  // Use refs to store current state values for updateUrl function
+  const stateRef = useRef({ selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode });
+  
+  // Update refs whenever state changes
+  useEffect(() => {
+    stateRef.current = { selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode };
+  }, [selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode]);
+
+  // Helper function to update URL when state changes
+  const updateUrl = (updates: Partial<HomePageState>) => {
+    const currentState: HomePageState = {
+      page: 'home',
+      selectedEntities: updates.selectedEntities ?? stateRef.current.selectedEntities,
+      showUntagged: updates.showUntagged ?? stateRef.current.showUntagged,
+      searchQuery: updates.searchQuery ?? stateRef.current.searchQuery,
+      currentPage: updates.currentPage ?? stateRef.current.currentPage,
+      pageSize: updates.pageSize ?? stateRef.current.pageSize,
+      viewMode: updates.viewMode ?? stateRef.current.viewMode,
+    };
+    // Build URL without 'from' parameter (only used when navigating to day view)
+    const params = new URLSearchParams();
+    if (currentState.selectedEntities.size > 0) {
+      params.set('entities', Array.from(currentState.selectedEntities).join(','));
+    }
+    if (currentState.showUntagged) {
+      params.set('untagged', '1');
+    }
+    if (currentState.searchQuery) {
+      params.set('search', currentState.searchQuery);
+    }
+    params.set('page', currentState.currentPage.toString());
+    params.set('pageSize', currentState.pageSize.toString());
+    params.set('viewMode', currentState.viewMode);
+    const query = params.toString();
+    const newUrl = `/${query ? `?${query}` : ''}`;
+    prevSearchRef.current = query ? `?${query}` : ''; // Update ref to prevent polling from resetting
+    setLocation(newUrl, { replace: true });
+  };
+
+  // Restore state from URL params on mount and when navigating back
+  useEffect(() => {
+    const checkAndRestore = () => {
+      const currentSearch = window.location.search;
+      
+      // Only restore if URL actually changed (to avoid resetting user actions)
+      if (currentSearch === prevSearchRef.current) {
+        return;
+      }
+      
+      prevSearchRef.current = currentSearch;
+      const urlParams = new URLSearchParams(currentSearch);
+      const restoredState = deserializePageState(urlParams);
+      if (restoredState && restoredState.page === 'home') {
+        const state = restoredState as HomePageState;
+        if (state.selectedEntities) setSelectedEntities(state.selectedEntities);
+        if (state.showUntagged !== undefined) setShowUntagged(state.showUntagged);
+        if (state.searchQuery) setSearchQuery(state.searchQuery);
+        if (state.currentPage) setCurrentPage(state.currentPage);
+        if (state.pageSize) setPageSize(state.pageSize);
+        if (state.viewMode) setViewMode(state.viewMode);
+      }
+    };
+
+    // Check immediately on mount
+    checkAndRestore();
+
+    // Check more frequently for programmatic navigation (setLocation from wouter)
+    const interval = setInterval(checkAndRestore, 50);
+    
+    // Listen to popstate for browser back/forward
+    window.addEventListener('popstate', checkAndRestore);
+    
+    // Also listen to hashchange as fallback
+    window.addEventListener('hashchange', checkAndRestore);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('popstate', checkAndRestore);
+      window.removeEventListener('hashchange', checkAndRestore);
+    };
+  }, []);
+
   // New state for the copy dialog
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [textToCopy, setTextToCopy] = useState("");
@@ -147,6 +234,7 @@ export default function HomePage() {
     const timer = setTimeout(() => {
       setDebouncedSearchQuery(searchQuery);
       setCurrentPage(1); // Reset to first page when search changes
+      updateUrl({ searchQuery, currentPage: 1 });
     }, 300);
 
     return () => clearTimeout(timer);
@@ -369,7 +457,7 @@ export default function HomePage() {
       // Build base query - use tags_version2 instead of tags
       let query = supabase
         .from("historical_news_analyses")
-        .select("date, summary, tags_version2, tier_used, is_manual_override", { count: "exact" });
+        .select("date, summary, tags_version2, tier_used, is_manual_override, is_flagged", { count: "exact" });
 
       // Apply filters
       if (showUntagged) {
@@ -465,7 +553,10 @@ export default function HomePage() {
       // Apply pagination after client-side filtering
       const startIndex = (currentPage - 1) * pageSize;
       const endIndex = startIndex + pageSize;
-      const paginatedAnalyses = filteredAnalyses.slice(startIndex, endIndex);
+      const paginatedAnalyses = filteredAnalyses.slice(startIndex, endIndex).map((a: any) => ({
+        ...a,
+        isFlagged: a.is_flagged || false,
+      }));
       
       // If we did client-side filtering, use the filtered count
       // Otherwise use the totalCount from Supabase query (which includes count: "exact")
@@ -553,17 +644,12 @@ export default function HomePage() {
   // Toggle entity selection
   const toggleEntity = (category: string, name: string) => {
     const key = `${category}::${name}`;
-    setSelectedEntities(prev => {
-      // If the clicked entity is already selected, clear the selection.
-      if (prev.has(key)) {
-        return new Set();
-      }
-      // Otherwise, select only this entity.
-      return new Set([key]);
-    });
+    const newSelected = selectedEntities.has(key) ? new Set<string>() : new Set([key]);
+    setSelectedEntities(newSelected);
     setShowUntagged(false); // Clear untagged view when selecting entities
     setCurrentPage(1); // Reset to first page when filter changes
     setSelectAllMatching(false); // Reset select all matching
+    updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1 });
   };
 
   // Select/deselect all on current page
@@ -761,6 +847,40 @@ export default function HomePage() {
     onError: (error: Error) => {
       toast({
         title: 'Update Failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+    },
+  });
+
+  // Toggle flag mutation
+  const toggleFlagMutation = useMutation({
+    mutationFn: async ({ date, isFlagged }: { date: string; isFlagged: boolean }) => {
+      const response = await fetch(`/api/analysis/date/${date}/flag`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ isFlagged }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Failed to toggle flag' }));
+        throw new Error(error.error || 'Failed to toggle flag');
+      }
+
+      return await response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      toast({
+        title: 'Flag updated',
+        description: 'The flag status has been updated.',
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: 'Error',
         description: error.message,
         variant: 'destructive',
       });
@@ -1097,15 +1217,19 @@ export default function HomePage() {
                 setSelectedEntities(newSelected);
                 setShowUntagged(false);
                 setCurrentPage(1);
+                updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1 });
               }}
               onUntaggedToggle={() => {
-                setShowUntagged(!showUntagged);
+                const newShowUntagged = !showUntagged;
+                setShowUntagged(newShowUntagged);
                 setSelectedEntities(new Set());
                 setCurrentPage(1);
+                updateUrl({ showUntagged: newShowUntagged, selectedEntities: new Set(), currentPage: 1 });
               }}
               onSearchChange={(value) => {
                 setSearchQuery(value);
                 setCurrentPage(1);
+                // Note: search query is debounced, so URL update happens in debounce effect
               }}
             />
           </div>
@@ -1153,8 +1277,30 @@ export default function HomePage() {
                   return next;
                 });
               }}
-              onRowClick={(date) => setLocation(`/day/${date}`)}
-              onTagClick={(tagName) => setSearchQuery(tagName)}
+              onRowClick={(date) => {
+                const state: HomePageState = {
+                  page: 'home',
+                  selectedEntities,
+                  showUntagged,
+                  searchQuery,
+                  currentPage,
+                  pageSize,
+                  viewMode,
+                };
+                const query = serializePageState(state);
+                setLocation(`/day/${date}?${query}`);
+              }}
+              onTagClick={(tagName) => {
+                setSearchQuery(tagName);
+                setCurrentPage(1);
+                // URL will be updated by debounce effect
+              }}
+              onToggleFlag={(analysis) => {
+                toggleFlagMutation.mutate({
+                  date: analysis.date,
+                  isFlagged: !analysis.isFlagged,
+                });
+              }}
               emptyMessage={
                 showUntagged
                   ? "No untagged analyses found"
@@ -1169,10 +1315,14 @@ export default function HomePage() {
               currentPage={currentPage}
               totalCount={totalCount}
               catalogData={catalogData}
-              onPageChange={(page) => setCurrentPage(page)}
+              onPageChange={(page) => {
+                setCurrentPage(page);
+                updateUrl({ currentPage: page });
+              }}
               onPageSizeChange={(size) => {
                 setPageSize(size);
                 setCurrentPage(1);
+                updateUrl({ pageSize: size, currentPage: 1 });
               }}
               onSelectAll={toggleSelectAll}
               selectAllMatching={selectAllMatching}

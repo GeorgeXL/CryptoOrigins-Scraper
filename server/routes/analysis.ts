@@ -148,6 +148,23 @@ function parsePerplexityDate(dateText: string | null): string | null {
     }
   });
 
+  // Update flagged state for a specific date
+  router.post("/api/analysis/date/:date/flag", async (req, res) => {
+    try {
+      const { date } = req.params;
+      const { isFlagged, flagReason } = req.body as { isFlagged: boolean; flagReason?: string };
+
+      if (typeof isFlagged !== "boolean") {
+        return res.status(400).json({ error: "isFlagged (boolean) is required" });
+      }
+
+      const updated = await storage.updateAnalysisFlag(date, isFlagged, flagReason);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
   router.get("/api/analysis/month/:year/:month", async (req, res) => {
     try {
       const { year, month } = req.params;
