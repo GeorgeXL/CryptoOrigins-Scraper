@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,7 @@ import {
 import { AnalysesTable, HistoricalNewsAnalysis } from "@/components/AnalysesTable";
 import { supabase } from "@/lib/supabase";
 import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
+import { useToggleFlag } from "@/hooks/useToggleFlag";
 import { TaggingDropdown } from "@/components/TaggingDropdown";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { serializePageState, deserializePageState, type MonthlyViewState } from "@/lib/navigationState";
@@ -149,24 +150,33 @@ export default function MonthlyView() {
 
   // Generate date range for selected month/year
   const dateRange = useMemo(() => {
-    if (!selectedYear || !selectedMonth) return null;
+    if (!selectedYear) return null;
     
-    const monthNum = MONTH_NUMBERS[selectedMonth];
-    const startDate = `${selectedYear}-${String(monthNum).padStart(2, '0')}-01`;
+    // If month is selected, show only that month
+    if (selectedMonth) {
+      const monthNum = MONTH_NUMBERS[selectedMonth];
+      const startDate = `${selectedYear}-${String(monthNum).padStart(2, '0')}-01`;
+      
+      // Get last day of month
+      const lastDay = new Date(selectedYear, monthNum, 0).getDate();
+      const endDate = `${selectedYear}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+      
+      return { startDate, endDate };
+    }
     
-    // Get last day of month
-    const lastDay = new Date(selectedYear, monthNum, 0).getDate();
-    const endDate = `${selectedYear}-${String(monthNum).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    // If only year is selected, show all 12 months
+    const startDate = `${selectedYear}-01-01`;
+    const endDate = `${selectedYear}-12-31`;
     
     return { startDate, endDate };
   }, [selectedYear, selectedMonth]);
 
-  // Fetch analyses for selected month
+  // Fetch analyses for selected month/year
   const { data: analysesData, isLoading } = useQuery<{
     analyses: HistoricalNewsAnalysis[];
     pagination: { totalCount: number; totalPages: number };
   }>({
-    queryKey: ['monthly-analyses', selectedYear, selectedMonth, currentPage, pageSize],
+    queryKey: ['monthly-analyses', selectedYear, selectedMonth || 'all', currentPage, pageSize],
     queryFn: async () => {
       if (!supabase || !dateRange) {
         return { analyses: [], pagination: { totalCount: 0, totalPages: 0 } };
@@ -187,7 +197,7 @@ export default function MonthlyView() {
       // Get paginated results
       const { data, error } = await supabase
         .from("historical_news_analyses")
-        .select("date, summary, tags_version2, tier_used, is_manual_override")
+        .select("date, summary, tags_version2, tier_used, is_manual_override, is_flagged")
         .gte("date", startDate)
         .lte("date", endDate)
         .order("date", { ascending: false })
@@ -204,6 +214,7 @@ export default function MonthlyView() {
           url: undefined,
           source_url: undefined,
           isManualOverride: item.is_manual_override || false,
+          isFlagged: item.is_flagged || false,
         })),
         pagination: { totalCount, totalPages },
       };
@@ -217,6 +228,23 @@ export default function MonthlyView() {
   
   // Check if all items on current page are selected
   const allPageSelected = analyses.length > 0 && analyses.every(a => selectedDates.has(a.date));
+
+  const handleYearSelect = (year: number) => {
+    setSelectedYear(year);
+    setSelectedMonth(null); // Clear month to show all months for the year
+    setOpenYear(year);
+    setCurrentPage(1);
+    setSelectedDates(new Set());
+    
+    // Update URL to match the new selection
+    const params = new URLSearchParams();
+    params.set('year', year.toString());
+    params.set('page', '1');
+    params.set('pageSize', pageSize.toString());
+    const newUrl = `/monthly?${params.toString()}`;
+    prevSearchRef.current = `?${params.toString()}`; // Update ref to prevent polling from resetting
+    navigate(newUrl, { replace: true });
+  };
 
   const handleMonthSelect = (year: number, month: string) => {
     setSelectedYear(year);
@@ -248,6 +276,11 @@ export default function MonthlyView() {
     });
   };
 
+  // Toggle flag mutation
+  const toggleFlagMutation = useToggleFlag({
+    invalidateQueries: [['monthly-analyses']],
+  });
+
   return (
     <SidebarProvider className="w-full">
       <div className="flex flex-col gap-6 lg:flex-row">
@@ -260,40 +293,58 @@ export default function MonthlyView() {
                 <SidebarGroupLabel>Years</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {YEARS.map((year) => (
-                      <SidebarMenuItem key={year}>
-                        <Collapsible
-                          className="group/collapsible [&[data-state=open]>button>svg:first-child]:rotate-90"
-                          open={openYear === year}
-                          onOpenChange={(open) => setOpenYear(open ? year : null)}
-                        >
-                          <CollapsibleTrigger asChild>
-                            <SidebarMenuButton className="justify-start gap-2">
-                              <ChevronRight className="h-3 w-3 transition-transform" />
-                              <span>{year}</span>
-                            </SidebarMenuButton>
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <SidebarMenuSub>
-                              {MONTHS.map((month) => {
-                                const isSelected = selectedYear === year && selectedMonth === month;
-                                return (
-                                  <SidebarMenuSubItem key={month}>
-                                    <SidebarMenuButton
-                                      isActive={isSelected}
-                                      className="w-full justify-start text-xs h-7 data-[active=true]:bg-white data-[active=true]:text-black"
-                                      onClick={() => handleMonthSelect(year, month)}
-                                    >
-                                      {month}
-                                    </SidebarMenuButton>
-                                  </SidebarMenuSubItem>
-                                );
-                              })}
-                            </SidebarMenuSub>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      </SidebarMenuItem>
-                    ))}
+                    {YEARS.map((year) => {
+                      const isYearSelected = selectedYear === year && !selectedMonth;
+                      return (
+                        <SidebarMenuItem key={year}>
+                          <Collapsible
+                            className="group/collapsible [&[data-state=open]>button>svg:first-child]:rotate-90"
+                            open={openYear === year}
+                            onOpenChange={(open) => setOpenYear(open ? year : null)}
+                          >
+                            <div className="flex items-center">
+                              <CollapsibleTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="flex-shrink-0 w-6 h-8 flex items-center justify-center hover:bg-sidebar-accent rounded-l-md transition-colors"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <ChevronRight className="h-3 w-3 transition-transform" />
+                                </button>
+                              </CollapsibleTrigger>
+                              <SidebarMenuButton
+                                isActive={isYearSelected}
+                                className="flex-1 justify-start rounded-l-none data-[active=true]:bg-white data-[active=true]:text-black"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleYearSelect(year);
+                                }}
+                              >
+                                <span>{year}</span>
+                              </SidebarMenuButton>
+                            </div>
+                            <CollapsibleContent>
+                              <SidebarMenuSub>
+                                {MONTHS.map((month) => {
+                                  const isSelected = selectedYear === year && selectedMonth === month;
+                                  return (
+                                    <SidebarMenuSubItem key={month}>
+                                      <SidebarMenuButton
+                                        isActive={isSelected}
+                                        className="w-full justify-start text-xs h-7 data-[active=true]:bg-white data-[active=true]:text-black"
+                                        onClick={() => handleMonthSelect(year, month)}
+                                      >
+                                        {month}
+                                      </SidebarMenuButton>
+                                    </SidebarMenuSubItem>
+                                  );
+                                })}
+                              </SidebarMenuSub>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        </SidebarMenuItem>
+                      );
+                    })}
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
@@ -309,7 +360,9 @@ export default function MonthlyView() {
               <h2 className="text-lg font-semibold text-foreground">
                 {selectedYear && selectedMonth
                   ? `${selectedMonth} ${selectedYear}`
-                  : "Select a month"}
+                  : selectedYear
+                  ? `${selectedYear} (All Months)`
+                  : "Select a year and month from the sidebar to view analyses"}
               </h2>
               {totalCount > 0 && (
                 <Badge variant="secondary" className="font-normal">
@@ -319,7 +372,7 @@ export default function MonthlyView() {
             </div>
           </div>
 
-          {!selectedYear || !selectedMonth ? (
+          {!selectedYear ? (
             <div className="text-center py-12">
               <p className="text-muted-foreground">
                 Select a year and month from the sidebar to view analyses
@@ -345,7 +398,13 @@ export default function MonthlyView() {
                   const query = serializePageState(state);
                   navigate(`/day/${date}?${query}`);
                 }}
-                emptyMessage={`No analyses found for ${selectedMonth} ${selectedYear}`}
+                onToggleFlag={(analysis) => {
+                  toggleFlagMutation.mutate({
+                    date: analysis.date,
+                    isFlagged: !analysis.isFlagged,
+                  });
+                }}
+                emptyMessage={`No analyses found for ${selectedMonth || 'the selected period'} ${selectedYear}`}
                 showCheckbox={true}
                 pageSize={pageSize}
                 currentPage={currentPage}

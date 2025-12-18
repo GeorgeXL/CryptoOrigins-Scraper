@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
+import { useToggleFlag } from "@/hooks/useToggleFlag";
 import { TaggingDropdown } from "@/components/TaggingDropdown";
 import { 
   Dialog,
@@ -854,37 +855,8 @@ export default function HomePage() {
   });
 
   // Toggle flag mutation
-  const toggleFlagMutation = useMutation({
-    mutationFn: async ({ date, isFlagged }: { date: string; isFlagged: boolean }) => {
-      const response = await fetch(`/api/analysis/date/${date}/flag`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ isFlagged }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Failed to toggle flag' }));
-        throw new Error(error.error || 'Failed to toggle flag');
-      }
-
-      return await response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
-      toast({
-        title: 'Flag updated',
-        description: 'The flag status has been updated.',
-      });
-    },
-    onError: (error: Error) => {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive',
-      });
-    },
+  const toggleFlagMutation = useToggleFlag({
+    invalidateQueries: [['supabase-tags-analyses']],
   });
 
   // Delete tag mutation

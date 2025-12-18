@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
+import { useToggleFlag } from "@/hooks/useToggleFlag";
 import { TaggingDropdown } from "@/components/TaggingDropdown";
 import { 
   Dialog,
@@ -110,6 +111,7 @@ interface HistoricalNewsAnalysis {
   url?: string;
   source_url?: string;
   isManualOverride?: boolean;
+  isFlagged?: boolean;
 }
 
 const PAGE_SIZE_OPTIONS = [50, 200, 500];
@@ -384,7 +386,7 @@ export default function TagsBrowser() {
       // Build base query - use tags_version2 instead of tags
       let query = supabase
         .from("historical_news_analyses")
-        .select("date, summary, tags_version2, tier_used, is_manual_override", { count: "exact" });
+        .select("date, summary, tags_version2, tier_used, is_manual_override, is_flagged", { count: "exact" });
 
       // Apply filters
       if (showUntagged) {
@@ -480,7 +482,10 @@ export default function TagsBrowser() {
       // Apply pagination after client-side filtering
       const startIndex = (currentPage - 1) * pageSize;
       const endIndex = startIndex + pageSize;
-      const paginatedAnalyses = filteredAnalyses.slice(startIndex, endIndex);
+      const paginatedAnalyses = filteredAnalyses.slice(startIndex, endIndex).map((a: any) => ({
+        ...a,
+        isFlagged: a.is_flagged || false,
+      }));
       
       // If we did client-side filtering, use the filtered count
       // Otherwise use the totalCount from Supabase query (which includes count: "exact")
@@ -833,6 +838,11 @@ export default function TagsBrowser() {
     },
   });
 
+  // Toggle flag mutation
+  const toggleFlagMutation = useToggleFlag({
+    invalidateQueries: [['supabase-tags-analyses']],
+  });
+
   // Flush cache mutation
   const flushCacheMutation = useMutation({
     mutationFn: async () => {
@@ -1181,6 +1191,12 @@ export default function TagsBrowser() {
                 setLocation(`/day/${date}?${query}`);
               }}
               onTagClick={(tagName) => setSearchQuery(tagName)}
+              onToggleFlag={(analysis) => {
+                toggleFlagMutation.mutate({
+                  date: analysis.date,
+                  isFlagged: !analysis.isFlagged,
+                });
+              }}
               emptyMessage={
                 showUntagged
                   ? "No untagged analyses found"
