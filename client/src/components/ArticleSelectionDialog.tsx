@@ -11,7 +11,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { VeriBadge } from '@/components/VeriBadge';
 import { 
   CheckCircle, 
   Sparkles, 
@@ -145,28 +144,11 @@ export function ArticleSelectionDialog({
 
   const renderArticle = (article: Article, tier: 'bitcoin' | 'crypto' | 'macro') => {
     const status = getArticleStatus(article.id);
-    const tierColors = {
-      bitcoin: 'border-orange-500/30 bg-orange-950/20',
-      crypto: 'border-blue-500/30 bg-blue-950/20',
-      macro: 'border-purple-500/30 bg-purple-950/20',
-    };
-
-    const borderClass = status.isOpenAISuggested
-      ? 'border-2 border-yellow-500 ring-2 ring-yellow-500/50'
-      : status.isSelected
-      ? 'border-2 border-green-500 ring-2 ring-green-500/50'
-      : status.isIntersection
-      ? 'border-2 border-green-400/50'
-      : 'border border-border';
 
     return (
       <Card
         key={article.id}
-        className={`group cursor-pointer transition-all duration-200 hover:scale-[1.02] hover:shadow-lg w-full ${
-          status.isSelected 
-            ? 'ring-2 ring-green-500/50 shadow-lg shadow-green-500/20' 
-            : 'hover:ring-1 hover:ring-border'
-        } ${borderClass} ${tierColors[tier]} bg-muted/50 backdrop-blur-sm`}
+        className="group cursor-pointer transition-all duration-200 hover:bg-muted w-full border border-border bg-background"
         onClick={() => {
           if (selectionMode === 'orphan' || status.isIntersection) {
             setSelectedArticleId(article.id);
@@ -185,11 +167,42 @@ export function ArticleSelectionDialog({
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <h4 className={`font-semibold leading-tight mb-2 break-words ${
-                    status.isSelected ? 'text-green-300' : 'text-foreground'
-                  }`}>
-                    {article.title}
-                  </h4>
+                  <div className="flex items-center gap-2 flex-wrap mb-2">
+                    <h4 className={`font-semibold leading-tight break-words ${
+                      status.isSelected ? 'text-green-300' : 'text-foreground'
+                    }`}>
+                      {article.title}
+                    </h4>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {status.isIntersection ? (
+                        <Badge variant="outline" className="bg-muted/50 text-muted-foreground border-border text-xs font-normal px-2 py-1">
+                          <CheckCircle className="w-3 h-3 mr-1" />
+                          Gemini & Perplexity Approved
+                        </Badge>
+                      ) : (
+                        <>
+                          {status.isGemini && (
+                            <Badge variant="outline" className="bg-muted/50 text-muted-foreground border-border text-xs font-normal px-2 py-1">
+                              <Bot className="w-3 h-3 mr-1" />
+                              Gemini
+                            </Badge>
+                          )}
+                          {status.isPerplexity && (
+                            <Badge variant="outline" className="bg-muted/50 text-muted-foreground border-border text-xs font-normal px-2 py-1">
+                              <Zap className="w-3 h-3 mr-1" />
+                              Perplexity
+                            </Badge>
+                          )}
+                        </>
+                      )}
+                      {status.isOpenAISuggested && (
+                        <Badge variant="outline" className="bg-muted/50 text-muted-foreground border-border text-xs font-normal px-2 py-1">
+                          <Star className="w-3 h-3 mr-1" />
+                          OpenAI Suggested
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
                   {article.summary && (
                     <p className="text-sm text-muted-foreground leading-relaxed line-clamp-3 mb-3 break-words">
                       {article.summary}
@@ -198,44 +211,16 @@ export function ArticleSelectionDialog({
                 </div>
               </div>
               
-              <div className="flex flex-wrap items-center gap-2">
-                {status.isGemini && (
-                  <Badge variant="outline" className="bg-blue-500/10 text-blue-300 border-blue-500/30 text-xs font-medium px-2 py-1">
-                    <Bot className="w-3 h-3 mr-1" />
-                    Gemini
-                  </Badge>
-                )}
-                {status.isPerplexity && (
-                  <Badge variant="outline" className="bg-purple-500/10 text-purple-300 border-purple-500/30 text-xs font-medium px-2 py-1">
-                    <Zap className="w-3 h-3 mr-1" />
-                    Perplexity
-                  </Badge>
-                )}
-                {status.isIntersection && (
-                  <Badge variant="outline" className="bg-green-500/10 text-green-300 border-green-500/30 text-xs font-medium px-2 py-1">
-                    <CheckCircle className="w-3 h-3 mr-1" />
-                    Both Agreed
-                  </Badge>
-                )}
-                {status.isOpenAISuggested && (
-                  <Badge variant="outline" className="bg-yellow-500/10 text-yellow-300 border-yellow-500/30 text-xs font-medium px-2 py-1">
-                    <Star className="w-3 h-3 mr-1 fill-yellow-300/20" />
-                    OpenAI Suggested
-                  </Badge>
-                )}
-              </div>
-              
               {article.url && (
                 <a
                   href={article.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center text-xs text-blue-400 hover:text-blue-300 transition-colors font-medium mt-2"
+                  className="inline-flex items-center gap-1.5 text-sm text-foreground hover:text-foreground/80 underline-offset-4 hover:underline transition-colors mt-2"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <ExternalLink className="w-3 h-3 mr-1.5" />
+                  <ExternalLink className="w-3.5 h-3.5" />
                   View Full Article
-                  <ArrowRight className="w-3 h-3 ml-1" />
                 </a>
               )}
             </div>
@@ -285,126 +270,108 @@ export function ArticleSelectionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[90vh] flex flex-col bg-background border-border text-foreground shadow-2xl overflow-hidden">
-        <DialogHeader className="space-y-4 pb-4 border-b border-border">
+      <DialogContent className="max-w-5xl max-h-[90vh] flex flex-col bg-background border-border text-foreground shadow-2xl p-0 overflow-hidden">
+        <DialogHeader className="flex-shrink-0 space-y-4 px-6 pt-6 pb-4 border-b border-border">
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1 space-y-2">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-gradient-to-br from-violet-500/20 to-purple-500/20 border border-violet-500/30">
-                  <FileText className="w-5 h-5 text-violet-300" />
-                </div>
-                <DialogTitle className="text-2xl font-bold text-foreground">
-                  Select Article for {new Date(date).toLocaleDateString('en-US', { 
-                    weekday: 'long',
-                    year: 'numeric', 
-                    month: 'long', 
-                    day: 'numeric' 
-                  })}
-                </DialogTitle>
-              </div>
+              <DialogTitle className="text-2xl font-bold text-foreground">
+                Select Article for {new Date(date).toLocaleDateString('en-US', { 
+                  weekday: 'long',
+                  year: 'numeric', 
+                  month: 'long', 
+                  day: 'numeric' 
+                })}
+              </DialogTitle>
               <DialogDescription className="text-muted-foreground text-base leading-relaxed">
                 {selectionMode === 'multiple' ? (
-                  <div className="flex items-start gap-2">
-                    <Sparkles className="w-4 h-4 mt-1 text-yellow-400 flex-shrink-0" />
-                    <span>
-                      Multiple articles were approved by both <span className="font-semibold text-blue-300">Gemini</span> and <span className="font-semibold text-purple-300">Perplexity</span>. 
-                      <span className="font-semibold text-yellow-300"> OpenAI</span> has suggested one, but you can choose a different one.
-                    </span>
-                  </div>
+                  <span>
+                    Multiple articles were approved by both Gemini and Perplexity. OpenAI has suggested one, but you can choose a different one.
+                  </span>
                 ) : (
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 mt-1 text-orange-400 flex-shrink-0" />
-                    <span>
-                      No articles were approved by both AIs. Please manually select an article to summarize.
-                    </span>
-                  </div>
+                  <span>
+                    No articles were approved by both AIs. Please manually select an article to summarize.
+                  </span>
                 )}
               </DialogDescription>
-            </div>
-            <div className="flex-shrink-0">
-              <VeriBadge badge={selectionMode === 'orphan' ? 'Orphan' : 'Verified'} />
             </div>
           </div>
         </DialogHeader>
 
-        <Tabs defaultValue={defaultTier} className="w-full mt-6">
-          <TabsList className="grid w-full grid-cols-3 bg-muted/50 border border-border rounded-lg p-1">
-            <TabsTrigger
-              value="bitcoin"
-              className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-500/20 data-[state=active]:to-orange-600/20 data-[state=active]:text-orange-300 data-[state=active]:border-orange-500/30 data-[state=active]:shadow-lg transition-all rounded-md border border-transparent"
-            >
-              <div className="flex items-center gap-2">
-                <Zap className="w-4 h-4" />
-                <span className="font-semibold">Bitcoin</span>
-                <Badge variant="secondary" className="ml-1 bg-orange-500/20 text-orange-300 border-orange-500/30 text-xs">
-                  {tieredArticles.bitcoin.length}
-                </Badge>
-                {defaultTier === 'bitcoin' && (
-                  <Star className="w-4 h-4 text-orange-400 fill-orange-400/30" />
-                )}
-              </div>
-            </TabsTrigger>
-            <TabsTrigger
-              value="crypto"
-              className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-500/20 data-[state=active]:to-blue-600/20 data-[state=active]:text-blue-300 data-[state=active]:border-blue-500/30 data-[state=active]:shadow-lg transition-all rounded-md border border-transparent"
-            >
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4" />
-                <span className="font-semibold">Crypto</span>
-                <Badge variant="secondary" className="ml-1 bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs">
-                  {tieredArticles.crypto.length}
-                </Badge>
-                {defaultTier === 'crypto' && (
-                  <Star className="w-4 h-4 text-blue-400 fill-blue-400/30" />
-                )}
-              </div>
-            </TabsTrigger>
-            <TabsTrigger
-              value="macro"
-              className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500/20 data-[state=active]:to-purple-600/20 data-[state=active]:text-purple-300 data-[state=active]:border-purple-500/30 data-[state=active]:shadow-lg transition-all rounded-md border border-transparent"
-            >
-              <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4" />
-                <span className="font-semibold">Macro</span>
-                <Badge variant="secondary" className="ml-1 bg-purple-500/20 text-purple-300 border-purple-500/30 text-xs">
-                  {tieredArticles.macro.length}
-                </Badge>
-                {defaultTier === 'macro' && (
-                  <Star className="w-4 h-4 text-purple-400 fill-purple-400/30" />
-                )}
-              </div>
-            </TabsTrigger>
-          </TabsList>
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden px-6">
+          <Tabs defaultValue={defaultTier} className="w-full flex flex-col flex-1 min-h-0">
+            <TabsList className="flex-shrink-0 inline-flex h-11 items-center justify-start gap-1 rounded-lg bg-muted/50 p-1 border border-border w-fit">
+              <TabsTrigger
+                value="bitcoin"
+                className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-orange-500/20 data-[state=active]:to-orange-600/20 data-[state=active]:text-orange-300 data-[state=active]:border-orange-500/30 data-[state=active]:shadow-lg transition-all rounded-md border border-transparent"
+              >
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4" />
+                  <span className="font-semibold">Bitcoin</span>
+                  <Badge variant="secondary" className="ml-1 bg-orange-500/20 text-orange-300 border-orange-500/30 text-xs">
+                    {tieredArticles.bitcoin.length}
+                  </Badge>
+                  {defaultTier === 'bitcoin' && (
+                    <Star className="w-4 h-4 text-orange-400 fill-orange-400/30" />
+                  )}
+                </div>
+              </TabsTrigger>
+              <TabsTrigger
+                value="crypto"
+                className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-500/20 data-[state=active]:to-blue-600/20 data-[state=active]:text-blue-300 data-[state=active]:border-blue-500/30 data-[state=active]:shadow-lg transition-all rounded-md border border-transparent"
+              >
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4" />
+                  <span className="font-semibold">Crypto</span>
+                  <Badge variant="secondary" className="ml-1 bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs">
+                    {tieredArticles.crypto.length}
+                  </Badge>
+                  {defaultTier === 'crypto' && (
+                    <Star className="w-4 h-4 text-blue-400 fill-blue-400/30" />
+                  )}
+                </div>
+              </TabsTrigger>
+              <TabsTrigger
+                value="macro"
+                className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500/20 data-[state=active]:to-purple-600/20 data-[state=active]:text-purple-300 data-[state=active]:border-purple-500/30 data-[state=active]:shadow-lg transition-all rounded-md border border-transparent"
+              >
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4" />
+                  <span className="font-semibold">Macro</span>
+                  <Badge variant="secondary" className="ml-1 bg-purple-500/20 text-purple-300 border-purple-500/30 text-xs">
+                    {tieredArticles.macro.length}
+                  </Badge>
+                  {defaultTier === 'macro' && (
+                    <Star className="w-4 h-4 text-purple-400 fill-purple-400/30" />
+                  )}
+                </div>
+              </TabsTrigger>
+            </TabsList>
 
-          <div className="mt-4 flex-1 overflow-y-auto overflow-x-hidden pr-2 min-h-0 max-h-[calc(90vh-300px)]">
-            <TabsContent value="bitcoin" className="mt-0 space-y-4">
-              {renderTier('bitcoin', tieredArticles.bitcoin)}
-            </TabsContent>
-            <TabsContent value="crypto" className="mt-0 space-y-4">
-              {renderTier('crypto', tieredArticles.crypto)}
-            </TabsContent>
-            <TabsContent value="macro" className="mt-0 space-y-4">
-              {renderTier('macro', tieredArticles.macro)}
-            </TabsContent>
-          </div>
-        </Tabs>
+            <div className="flex-1 overflow-y-auto overflow-x-hidden pr-2 mt-4 min-h-0">
+              <TabsContent value="bitcoin" className="mt-0 space-y-4">
+                {renderTier('bitcoin', tieredArticles.bitcoin)}
+              </TabsContent>
+              <TabsContent value="crypto" className="mt-0 space-y-4">
+                {renderTier('crypto', tieredArticles.crypto)}
+              </TabsContent>
+              <TabsContent value="macro" className="mt-0 space-y-4">
+                {renderTier('macro', tieredArticles.macro)}
+              </TabsContent>
+            </div>
+          </Tabs>
+        </div>
 
-        <DialogFooter className="border-t border-border pt-6 mt-6">
+        <DialogFooter className="flex-shrink-0 border-t border-border pt-6 px-6 pb-6 mt-0 bg-background">
           <div className="flex items-center justify-between w-full gap-4">
             <div className="flex items-center gap-3 text-sm">
               {selectedArticleId ? (
-                <>
-                  <div className="p-1.5 rounded-full bg-green-500/20 border border-green-500/30">
-                    <CheckCircle className="w-4 h-4 text-green-400" />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-muted-foreground text-xs">Selected Article:</span>
-                    <span className="text-foreground font-medium">
-                      {tieredArticles.bitcoin.concat(tieredArticles.crypto, tieredArticles.macro).find(a => a.id === selectedArticleId)?.title.substring(0, 60)}
-                      {tieredArticles.bitcoin.concat(tieredArticles.crypto, tieredArticles.macro).find(a => a.id === selectedArticleId)?.title.length && tieredArticles.bitcoin.concat(tieredArticles.crypto, tieredArticles.macro).find(a => a.id === selectedArticleId)!.title.length > 60 ? '...' : ''}
-                    </span>
-                  </div>
-                </>
+                <div className="flex flex-col">
+                  <span className="text-muted-foreground text-xs">Selected Article:</span>
+                  <span className="text-foreground font-medium">
+                    {tieredArticles.bitcoin.concat(tieredArticles.crypto, tieredArticles.macro).find(a => a.id === selectedArticleId)?.title.substring(0, 60)}
+                    {tieredArticles.bitcoin.concat(tieredArticles.crypto, tieredArticles.macro).find(a => a.id === selectedArticleId)?.title.length && tieredArticles.bitcoin.concat(tieredArticles.crypto, tieredArticles.macro).find(a => a.id === selectedArticleId)!.title.length > 60 ? '...' : ''}
+                  </span>
+                </div>
               ) : (
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <AlertCircle className="w-4 h-4" />
@@ -424,7 +391,7 @@ export function ArticleSelectionDialog({
               <Button
                 onClick={handleConfirm}
                 disabled={!selectedArticleId || isConfirming}
-                className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-lg shadow-green-500/20 hover:shadow-green-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-semibold"
+                className="bg-primary hover:bg-primary/90 text-primary-foreground disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isConfirming ? (
                   <>
@@ -432,10 +399,7 @@ export function ArticleSelectionDialog({
                     Generating Summary...
                   </>
                 ) : (
-                  <>
-                    <CheckCircle className="w-4 h-4 mr-2" />
-                    Confirm Selection
-                  </>
+                  'Confirm Selection'
                 )}
               </Button>
             </div>

@@ -165,6 +165,74 @@ function parsePerplexityDate(dateText: string | null): string | null {
     }
   });
 
+  router.post("/api/analysis/date/:date/veri-badge", async (req, res) => {
+    try {
+      const { date } = req.params;
+      const { veriBadge } = req.body;
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
+      }
+
+      if (!veriBadge || !['Manual', 'Orphan', 'Verified', 'Not Available'].includes(veriBadge)) {
+        return res.status(400).json({ error: "Invalid veri_badge value. Must be one of: Manual, Orphan, Verified, Not Available" });
+      }
+
+      console.log(`🏷️ POST /api/analysis/date/${date}/veri-badge - Updating veri_badge to ${veriBadge}`);
+
+      // Check if analysis exists
+      const existingAnalysis = await storage.getAnalysisByDate(date);
+      if (!existingAnalysis) {
+        return res.status(404).json({ error: `Analysis not found for date: ${date}` });
+      }
+
+      // Update the underlying fields that determine veri_badge
+      // The database trigger will automatically recalculate veri_badge
+      const updateData: any = {};
+      
+      switch (veriBadge) {
+        case 'Manual':
+          updateData.isManualOverride = true;
+          updateData.isOrphan = false;
+          updateData.geminiApproved = false;
+          updateData.perplexityApproved = false;
+          break;
+        case 'Orphan':
+          updateData.isOrphan = true;
+          updateData.isManualOverride = false;
+          updateData.geminiApproved = false;
+          updateData.perplexityApproved = false;
+          break;
+        case 'Verified':
+          updateData.geminiApproved = true;
+          updateData.perplexityApproved = true;
+          updateData.isManualOverride = false;
+          updateData.isOrphan = false;
+          break;
+        case 'Not Available':
+          updateData.geminiApproved = false;
+          updateData.perplexityApproved = false;
+          updateData.isManualOverride = false;
+          updateData.isOrphan = false;
+          break;
+      }
+
+      await storage.updateAnalysis(date, updateData);
+
+      console.log(`✅ Successfully updated veri_badge for ${date} to ${veriBadge}`);
+
+      res.json({
+        success: true,
+        date,
+        veriBadge,
+        message: "Verification badge updated successfully"
+      });
+    } catch (error) {
+      console.error(`💥 Error updating veri_badge for ${req.params.date}:`, error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
   router.get("/api/analysis/month/:year/:month", async (req, res) => {
     try {
       const { year, month } = req.params;

@@ -93,7 +93,8 @@ import {
   Sparkles,
   Tag,
   Minus,
-  Plus
+  Plus,
+  Flag
 } from "lucide-react";
 import { getCategoryColor, getCategoryIcon, getTagCategory } from "@/utils/tagHelpers";
 import { getCategoryKeyFromPath, getCategoryDisplayMeta } from "@shared/taxonomy";
@@ -186,6 +187,16 @@ export default function DayAnalysis() {
   const articlesPerPage = 10;
   const { triggerHealthCheck } = useApiHealthCheck();
   const { aiProvider } = useAiProvider();
+  
+  // Tag addition queue to prevent race conditions
+  const [tagQueue, setTagQueue] = React.useState<string[]>([]);
+  const isProcessingQueueRef = React.useRef(false);
+  const tagQueueRef = React.useRef<string[]>([]);
+  
+  // Keep ref in sync with state
+  React.useEffect(() => {
+    tagQueueRef.current = tagQueue;
+  }, [tagQueue]);
 
   // Get the source parameter from URL to determine back button behavior
   const urlParams = new URLSearchParams(window.location.search);
@@ -747,17 +758,15 @@ export default function DayAnalysis() {
     },
   });
 
-  // Add tag mutation (for highlight-to-tag feature)
+  // Add tag mutation (for highlight-to-tag feature) - now uses queue system
   const addTagMutation = useMutation({
-    mutationFn: async (newTagName: string) => {
-      const currentTags = dayData?.analysis?.tagsVersion2 || [];
-      
+    mutationFn: async ({ tagName, currentTags, summary }: { tagName: string; currentTags: string[]; summary?: string }) => {
       // Don't add duplicate tags
-      if (currentTags.includes(newTagName)) {
+      if (currentTags.includes(tagName)) {
         throw new Error("Tag already exists");
       }
       
-      const updatedTags = [...currentTags, newTagName];
+      const updatedTags = [...currentTags, tagName];
       
       const response = await fetch(`/api/analysis/date/${date}`, {
         method: "PATCH",
@@ -765,7 +774,7 @@ export default function DayAnalysis() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          summary: dayData?.analysis.summary,
+          summary: summary || dayData?.analysis.summary,
           tags_version2: updatedTags,
         }),
       });
@@ -797,6 +806,62 @@ export default function DayAnalysis() {
     },
   });
 
+  // Process tag queue sequentially
+  React.useEffect(() => {
+    if (isProcessingQueueRef.current || tagQueueRef.current.length === 0) return;
+    
+    const processNext = async () => {
+      if (tagQueueRef.current.length === 0) {
+        isProcessingQueueRef.current = false;
+        return;
+      }
+      
+      isProcessingQueueRef.current = true;
+      const tagName = tagQueueRef.current[0];
+      
+      try {
+        // Fetch the latest tags from the server to avoid race conditions
+        if (!supabase || !date) {
+          setTagQueue(prev => prev.slice(1));
+          setTimeout(processNext, 0);
+          return;
+        }
+        
+        const { data: analysis, error } = await supabase
+          .from("historical_news_analyses")
+          .select("tags_version2, summary")
+          .eq("date", date)
+          .single();
+        
+        if (error && error.code !== 'PGRST116') {
+          console.error('Error fetching latest tags:', error);
+          setTagQueue(prev => prev.slice(1));
+          setTimeout(processNext, 0);
+          return;
+        }
+        
+        const currentTags = analysis?.tags_version2 || [];
+        const currentSummary = analysis?.summary || dayData?.analysis?.summary || '';
+        
+        // Process the tag with the latest state
+        await addTagMutation.mutateAsync({ tagName, currentTags, summary: currentSummary });
+        
+        // Remove processed tag and continue with next
+        setTagQueue(prev => prev.slice(1));
+        setTimeout(processNext, 0);
+      } catch (error: any) {
+        // If tag already exists or other error, just remove it from queue
+        setTagQueue(prev => prev.slice(1));
+        if (error.message !== "Tag already exists") {
+          console.error('Error processing tag:', error);
+        }
+        setTimeout(processNext, 0);
+      }
+    };
+    
+    processNext();
+  }, [tagQueue.length, date, addTagMutation, supabase, dayData?.analysis?.summary]);
+
   const flagAnalysisMutation = useMutation({
     mutationFn: async (nextFlag: boolean) => {
       const res = await fetch(`/api/analysis/date/${date}/flag`, {
@@ -826,7 +891,37 @@ export default function DayAnalysis() {
     },
   });
 
-  // Handle text selection for tagging
+  const updateVeriBadgeMutation = useMutation({
+    mutationFn: async (newBadge: 'Manual' | 'Orphan' | 'Verified' | 'Not Available') => {
+      const res = await fetch(`/api/analysis/date/${date}/veri-badge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ veriBadge: newBadge }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to update verification badge");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+      queryClient.invalidateQueries({ queryKey: ['supabase-counts'] });
+      toast({
+        title: "Verification Badge Updated",
+        description: "The verification status has been updated successfully.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Update Failed",
+        description: error.message || "Failed to update verification badge",
+      });
+    }
+  });
+
+  // Handle text selection for tagging - adds to queue instead of direct mutation
   const handleTextSelection = () => {
     if (!isTaggingMode) return;
     
@@ -834,7 +929,8 @@ export default function DayAnalysis() {
     const selectedText = selection?.toString().trim();
     
     if (selectedText && selectedText.length > 0 && selectedText.length < 100) {
-      addTagMutation.mutate(selectedText);
+      // Add to queue instead of directly mutating
+      setTagQueue(prev => [...prev, selectedText]);
       selection?.removeAllRanges(); // Clear selection after adding
     }
   };
@@ -1476,39 +1572,37 @@ export default function DayAnalysis() {
                       {((isEditing ? editedSummary?.length : dayData.analysis.summary?.length) || 0).toLocaleString()} characters
                     </Badge>
                   )}
-                  {!dayData.analysis.isManualOverride && (
-                    <div className="flex items-center space-x-1">
-                      {hasUnsavedChanges && (
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          onClick={() => saveChangesMutation.mutate()}
-                          disabled={saveChangesMutation.isPending}
-                          className="h-8 w-8 p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                          title="Save Changes (S)"
-                        >
-                          {saveChangesMutation.isPending ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Save className="w-4 h-4" />
-                          )}
-                        </Button>
-                      )}
+                  <div className="flex items-center space-x-1">
+                    {hasUnsavedChanges && (
                       <Button 
                         variant="ghost" 
                         size="sm" 
-                        onClick={handleEditClick}
+                        onClick={() => saveChangesMutation.mutate()}
+                        disabled={saveChangesMutation.isPending}
                         className="h-8 w-8 p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                        title={isEditing ? "Cancel editing" : "Edit summary"}
+                        title="Save Changes (S)"
                       >
-                        {isEditing ? (
-                          <X className="w-4 h-4" />
+                        {saveChangesMutation.isPending ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
                         ) : (
-                          <Pencil className="w-4 h-4" />
+                          <Save className="w-4 h-4" />
                         )}
                       </Button>
-                    </div>
-                  )}
+                    )}
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={handleEditClick}
+                      className="h-8 w-8 p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      title={isEditing ? "Cancel editing" : "Edit summary"}
+                    >
+                      {isEditing ? (
+                        <X className="w-4 h-4" />
+                      ) : (
+                        <Pencil className="w-4 h-4" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
                 {/* Show loading state during article selection */}
                 {selectArticleMutation.isPending ? (
@@ -1519,12 +1613,12 @@ export default function DayAnalysis() {
                       <p className="text-muted-foreground text-sm">AI is analyzing the selected article</p>
                     </div>
                   </div>
-                ) : isEditing && !dayData.analysis.isManualOverride ? (
+                ) : isEditing ? (
                   <Textarea
                     value={editedSummary}
                     onChange={(e) => handleSummaryChange(e.target.value)}
                     className="text-base leading-relaxed min-h-[100px] text-foreground bg-background border-input focus-visible:ring-ring"
-                    placeholder="Edit the AI summary..."
+                    placeholder="Edit the summary..."
                   />
                 ) : (
                   <div
@@ -1644,13 +1738,18 @@ export default function DayAnalysis() {
                   <div className="mt-6 space-y-2">
                     <h5 className="text-sm font-semibold text-foreground">More</h5>
                     <div className="flex items-center gap-3 flex-wrap">
-                      <VeriBadge badge={dayData.analysis.veriBadge} />
+                      <VeriBadge 
+                        badge={dayData.analysis.veriBadge} 
+                        onBadgeChange={(newBadge) => updateVeriBadgeMutation.mutate(newBadge)}
+                        date={date}
+                      />
                       <Badge
                         variant={dayData.analysis.isFlagged ? "destructive" : "outline"}
-                        className="cursor-pointer"
+                        className="cursor-pointer inline-flex items-center gap-1.5"
                         onClick={() => flagAnalysisMutation.mutate(!dayData.analysis.isFlagged)}
                       >
-                        {dayData.analysis.isFlagged ? "Flagged — click to unflag" : "Flag/Unflag"}
+                        <Flag className={`w-3 h-3 ${dayData.analysis.isFlagged ? 'fill-current' : ''}`} />
+                        {dayData.analysis.isFlagged ? "Unflag" : "Flag"}
                       </Badge>
                     </div>
                   </div>
@@ -1961,7 +2060,7 @@ export default function DayAnalysis() {
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && tagSearchQuery.trim()) {
-                    addTagMutation.mutate(tagSearchQuery.trim());
+                    setTagQueue(prev => [...prev, tagSearchQuery.trim()]);
                     setTagSearchQuery('');
                     setIsAddTagDialogOpen(false);
                   }
@@ -2011,7 +2110,7 @@ export default function DayAnalysis() {
                         disabled={isAlreadyAdded}
                         onClick={() => {
                           if (!isAlreadyAdded) {
-                            addTagMutation.mutate(tag.name);
+                            setTagQueue(prev => [...prev, tag.name]);
                             setTagSearchQuery('');
                             setIsAddTagDialogOpen(false);
                           }
