@@ -83,9 +83,35 @@ export default async function handler(req: any, res: any) {
 
     const { app } = await getOrCreateApp();
 
-    // Handle the request with Express. Cast to any so TypeScript doesn't complain
-    return new Promise<void>((resolve) => {
-      (app as unknown as (req: any, res: any, next: any) => void)(req, res, resolve);
+    // Express 4 does not await async route handlers; the stack's `done` callback often
+    // never runs after `await` inside a route. Resolve when the response is fully sent
+    // so Vercel can freeze the invocation (otherwise FUNCTION_INVOCATION_TIMEOUT).
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const onError = (err: unknown) => {
+        if (settled) return;
+        settled = true;
+        res.removeListener("finish", settle);
+        res.removeListener("close", settle);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+
+      res.once("finish", settle);
+      res.once("close", settle);
+      res.once("error", onError);
+
+      try {
+        (app as (req: any, res: any, next: (err?: unknown) => void) => void)(req, res, (err?: unknown) => {
+          if (err) onError(err);
+        });
+      } catch (e) {
+        onError(e);
+      }
     });
   } catch (error) {
     console.error('❌ Serverless function error:', error);
