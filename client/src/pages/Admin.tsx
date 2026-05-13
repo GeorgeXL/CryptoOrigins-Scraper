@@ -21,7 +21,6 @@ export default function Admin() {
   const [hasMissingDates, setHasMissingDates] = useState<boolean | null>(null);
   const [isCheckingMissingDates, setIsCheckingMissingDates] = useState(false);
 
-
   // Export Functions - using Supabase directly for reliability
   const exportToCSV = async () => {
     setIsExporting(true);
