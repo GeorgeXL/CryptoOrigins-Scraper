@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { desc, eq, and } from "drizzle-orm";
+import { desc, eq, and, count } from "drizzle-orm";
 import { db } from "../db";
 import { agentDecisions, agentSessions } from "@shared/schema";
 import { requireAgentSecret } from "../services/agents-sdk/auth";
-import { runWikiOverseerPass } from "../services/agents-sdk/wiki-overseer-run";
+import { isWikiOverseerPassRunning, startWikiOverseerPass, stopWikiOverseerPass } from "../services/agents-sdk/wiki-overseer-run";
 import { applyApprovedProposal } from "../services/agents-sdk/apply-approved-proposal";
 import type { ProposalAfterState } from "../services/agents-sdk/apply-approved-proposal";
 
@@ -137,16 +137,115 @@ router.post("/api/agent/wiki-overseer/run", async (req, res) => {
       return res.status(400).json({ error: "dateFrom must be <= dateTo" });
     }
 
-    const out = await runWikiOverseerPass({
+    const out = await startWikiOverseerPass({
       dateFrom,
       dateTo,
       maxDaysToConsider: Number(maxDaysToConsider) || 7,
       maxProposals: Number(maxProposals) || 15,
     });
 
-    res.json(out);
+    res.json({ ...out, status: "running" });
   } catch (e: any) {
     res.status(e.status || 500).json({ error: e.message || "Overseer run failed" });
+  }
+});
+
+router.post("/api/agent/sessions/:id/stop", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const id = req.params.id;
+    const [session] = await db
+      .select({ id: agentSessions.id, status: agentSessions.status })
+      .from(agentSessions)
+      .where(eq(agentSessions.id, id))
+      .limit(1);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    const stopping = stopWikiOverseerPass(id);
+    if (stopping) {
+      await db
+        .update(agentSessions)
+        .set({
+          status: "stopped",
+          completedAt: new Date(),
+          stats: {
+            phase: "stopped",
+            stopReason: "Stop requested by admin",
+            lastHeartbeatIso: new Date().toISOString(),
+          },
+        })
+        .where(eq(agentSessions.id, id));
+      return res.json({ success: true, status: "stopped" });
+    }
+
+    // Job might already be completed/stopped or running in another runtime instance.
+    return res.status(409).json({
+      error: "Session is not stoppable from this instance (already finished or not running here).",
+      status: session.status,
+    });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Stop failed" });
+  }
+});
+
+router.get("/api/agent/sessions/:id", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const id = req.params.id;
+
+    const [session] = await db
+      .select({
+        id: agentSessions.id,
+        status: agentSessions.status,
+        startedAt: agentSessions.startedAt,
+        completedAt: agentSessions.completedAt,
+        issuesFlagged: agentSessions.issuesFlagged,
+        config: agentSessions.config,
+        stats: agentSessions.stats,
+      })
+      .from(agentSessions)
+      .where(eq(agentSessions.id, id))
+      .limit(1);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    const [totalRow] = await db
+      .select({ c: count() })
+      .from(agentDecisions)
+      .where(eq(agentDecisions.sessionId, id));
+    const [pendingRow] = await db
+      .select({ c: count() })
+      .from(agentDecisions)
+      .where(and(eq(agentDecisions.sessionId, id), eq(agentDecisions.status, "pending")));
+
+    const recentDecisions = await db
+      .select({
+        id: agentDecisions.id,
+        type: agentDecisions.type,
+        module: agentDecisions.module,
+        status: agentDecisions.status,
+        reasoning: agentDecisions.reasoning,
+        createdAt: agentDecisions.createdAt,
+      })
+      .from(agentDecisions)
+      .where(eq(agentDecisions.sessionId, id))
+      .orderBy(desc(agentDecisions.createdAt))
+      .limit(10);
+
+    res.json({
+      session,
+      live: {
+        isRunningInThisRuntime: isWikiOverseerPassRunning(id),
+        totalDecisions: Number(totalRow?.c ?? 0),
+        pendingDecisions: Number(pendingRow?.c ?? 0),
+      },
+      recentDecisions,
+    });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to load session" });
   }
 });
 

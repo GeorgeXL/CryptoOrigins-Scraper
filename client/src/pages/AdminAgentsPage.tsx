@@ -23,6 +23,31 @@ type AgentDecisionRow = {
   createdAt: string | null;
 };
 
+type LiveSessionResponse = {
+  session: {
+    id: string;
+    status: string;
+    startedAt: string | null;
+    completedAt: string | null;
+    issuesFlagged: number | null;
+    config: unknown;
+    stats: unknown;
+  };
+  live: {
+    isRunningInThisRuntime: boolean;
+    totalDecisions: number;
+    pendingDecisions: number;
+  };
+  recentDecisions: Array<{
+    id: string;
+    type: string;
+    module: string;
+    status: string;
+    reasoning: string | null;
+    createdAt: string | null;
+  }>;
+};
+
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -37,9 +62,10 @@ export default function AdminAgentsPage() {
   const [agentDecisions, setAgentDecisions] = useState<AgentDecisionRow[]>([]);
   const [agentLoading, setAgentLoading] = useState(false);
   const [overseerBusy, setOverseerBusy] = useState(false);
-  const [lastRun, setLastRun] = useState<{ sessionId: string; proposalsPending: number; finalOutput?: unknown } | null>(
-    null
-  );
+  const [lastRun, setLastRun] = useState<{ sessionId: string; status: string } | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [liveSession, setLiveSession] = useState<LiveSessionResponse | null>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
   const [approveExecuteById, setApproveExecuteById] = useState<Record<string, boolean>>({});
 
   const agentHeaders = (): HeadersInit => {
@@ -66,9 +92,35 @@ export default function AdminAgentsPage() {
     }
   };
 
+  const loadLiveSession = async (sessionId: string, opts?: { quiet?: boolean }) => {
+    if (!opts?.quiet) setLiveLoading(true);
+    try {
+      const res = await fetch(`/api/agent/sessions/${sessionId}`, { headers: agentHeaders() });
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as LiveSessionResponse;
+      setLiveSession(data);
+      if (data.session.status === "completed" || data.session.status === "error" || data.session.status === "stopped") {
+        setLastRun({ sessionId: data.session.id, status: data.session.status });
+        setActiveSessionId(null);
+        await loadAgentQueue();
+      }
+    } catch (e) {
+      if (!opts?.quiet) {
+        toast({
+          title: "Live session",
+          description: e instanceof Error ? e.message : "Failed to load",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      if (!opts?.quiet) setLiveLoading(false);
+    }
+  };
+
   const runOverseer = async () => {
     setOverseerBusy(true);
     setLastRun(null);
+    setLiveSession(null);
     try {
       const res = await fetch("/api/agent/wiki-overseer/run", {
         method: "POST",
@@ -84,14 +136,14 @@ export default function AdminAgentsPage() {
       const data = await res.json();
       setLastRun({
         sessionId: data.sessionId,
-        proposalsPending: data.proposalsPending,
-        finalOutput: data.finalOutput,
+        status: data.status || "running",
       });
+      setActiveSessionId(data.sessionId);
       toast({
-        title: "Wiki Overseer finished",
-        description: `${data.proposalsPending} pending proposal(s). Session ${data.sessionId}`,
+        title: "Wiki Overseer started",
+        description: `Session ${data.sessionId} is now running`,
       });
-      await loadAgentQueue();
+      await loadLiveSession(data.sessionId);
     } catch (e) {
       toast({
         title: "Overseer run failed",
@@ -100,6 +152,28 @@ export default function AdminAgentsPage() {
       });
     } finally {
       setOverseerBusy(false);
+    }
+  };
+
+  const stopOverseer = async () => {
+    if (!activeSessionId) return;
+    try {
+      const res = await fetch(`/api/agent/sessions/${activeSessionId}/stop`, {
+        method: "POST",
+        headers: agentHeaders(),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast({
+        title: "Stop requested",
+        description: `Session ${activeSessionId} was stopped`,
+      });
+      await loadLiveSession(activeSessionId);
+    } catch (e) {
+      toast({
+        title: "Stop failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
     }
   };
 
@@ -149,6 +223,16 @@ export default function AdminAgentsPage() {
   useEffect(() => {
     void loadAgentQueue();
   }, []);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const tick = () => {
+      void loadLiveSession(activeSessionId, { quiet: true });
+    };
+    tick();
+    const t = window.setInterval(tick, 2000);
+    return () => window.clearInterval(t);
+  }, [activeSessionId]);
 
   return (
     <div className="space-y-6">
@@ -212,6 +296,15 @@ export default function AdminAgentsPage() {
               {overseerBusy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
               Run Wiki Overseer
             </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={!activeSessionId || liveSession?.session.status !== "running"}
+              onClick={() => void stopOverseer()}
+            >
+              Stop run
+            </Button>
           </div>
           {lastRun ? (
             <div className="text-sm space-y-1 rounded-md border p-3 bg-muted/40">
@@ -219,15 +312,45 @@ export default function AdminAgentsPage() {
                 <span className="font-medium">Last session:</span> {lastRun.sessionId}
               </div>
               <div>
-                <span className="font-medium">Pending proposals created:</span> {lastRun.proposalsPending}
+                <span className="font-medium">Status:</span> {lastRun.status}
               </div>
-              {lastRun.finalOutput != null ? (
-                <pre className="text-xs whitespace-pre-wrap max-h-40 overflow-auto mt-2">
-                  {typeof lastRun.finalOutput === "string"
-                    ? lastRun.finalOutput
-                    : JSON.stringify(lastRun.finalOutput, null, 2)}
-                </pre>
-              ) : null}
+            </div>
+          ) : null}
+          {activeSessionId || liveSession ? (
+            <div className="text-sm space-y-2 rounded-md border p-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-medium">Live session:</span> {liveSession?.session.id ?? activeSessionId}
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void (activeSessionId ? loadLiveSession(activeSessionId) : Promise.resolve())}
+                  disabled={liveLoading || !activeSessionId}
+                >
+                  {liveLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Refresh live"}
+                </Button>
+              </div>
+              <div className="text-muted-foreground">
+                Status: <strong>{liveSession?.session.status ?? "loading..."}</strong> · Pending proposals:{" "}
+                <strong>{liveSession?.live.pendingDecisions ?? 0}</strong> · Total proposals:{" "}
+                <strong>{liveSession?.live.totalDecisions ?? 0}</strong>
+              </div>
+              {liveSession?.recentDecisions?.length ? (
+                <ul className="space-y-2 text-xs">
+                  {liveSession.recentDecisions.map((d) => (
+                    <li key={d.id} className="rounded border p-2">
+                      <div className="font-medium">
+                        {d.module} · {d.type} · {d.status}
+                      </div>
+                      {d.reasoning ? <div className="text-muted-foreground mt-1">{d.reasoning.slice(0, 240)}</div> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-muted-foreground">No proposal activity yet for this session.</p>
+              )}
             </div>
           ) : null}
         </CardContent>
