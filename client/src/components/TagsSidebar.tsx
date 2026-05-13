@@ -32,13 +32,17 @@ export interface QualityCheckItem {
   isLoading?: boolean;
 }
 
-interface CategoryData {
+export interface CategoryData {
   category: string;
   name: string;
   count: number;
   isParent: boolean;
   isTag?: boolean;
   children?: CategoryData[];
+  /** Stable React key (e.g. topic id) when `name` alone is not unique */
+  id?: string;
+  /** When set, used for selection instead of `${category}::${name}` */
+  entityKey?: string;
 }
 
 interface TagsSidebarProps {
@@ -111,16 +115,17 @@ export function TagsSidebar({
 
   const renderTreeNode = (item: CategoryData, fallbackCategory: string) => {
     const entityCategory = item.category || fallbackCategory;
-    const entityKey = `${entityCategory}::${item.name}`;
+    const selectionKey = item.entityKey ?? `${entityCategory}::${item.name}`;
+    const rowKey = item.id ?? selectionKey;
     const hasChildren = Array.isArray(item.children) && item.children.length > 0;
     const isLeaf = item.isTag || !hasChildren;
 
     if (isLeaf) {
       return (
-        <SidebarMenuItem key={entityKey}>
+        <SidebarMenuItem key={rowKey}>
           <SidebarMenuButton
-            onClick={() => onEntitySelect(entityKey)}
-            isActive={selectedEntities.has(entityKey)}
+            onClick={() => onEntitySelect(selectionKey)}
+            isActive={selectedEntities.has(selectionKey)}
             className="data-[active=true]:bg-white data-[active=true]:text-black"
             tooltip={`${item.count || 0} analyses`}
           >
@@ -132,7 +137,7 @@ export function TagsSidebar({
     }
 
     return (
-      <SidebarMenuItem key={`${entityKey}-parent`}>
+      <SidebarMenuItem key={`${rowKey}-parent`}>
         <Collapsible
           className="group/collapsible [&[data-state=open]>button>svg:first-child]:rotate-90"
           defaultOpen={false}
@@ -146,7 +151,7 @@ export function TagsSidebar({
           <CollapsibleContent>
             <SidebarMenuSub>
               {item.children?.map((child, index) => (
-                <SidebarMenuSubItem key={`${entityKey}-${index}`}>
+                <SidebarMenuSubItem key={`${rowKey}-sub-${index}`}>
                   {renderTreeNode(child, entityCategory)}
                 </SidebarMenuSubItem>
               ))}

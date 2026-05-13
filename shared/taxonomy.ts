@@ -246,6 +246,10 @@ function buildLabelLookup(nodes: TaxonomyNode[]) {
 
 buildLabelLookup(TAXONOMY_TREE);
 
+// Synthetic sidebar bucket for DB-driven narrative topics (not taxonomy category "topics")
+LABEL_LOOKUP["narratives"] = "Storylines";
+MAIN_CATEGORY_META["narratives"] = { name: "Storylines", emoji: "📖" };
+
 export function getTaxonomyLabel(key: string | null | undefined): string | undefined {
   if (!key) return undefined;
   return LABEL_LOOKUP[key] || key;

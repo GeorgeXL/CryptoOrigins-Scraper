@@ -10,6 +10,8 @@ export interface HomePageState {
   currentPage: number;
   pageSize: number;
   viewMode: 'keywords' | 'topics';
+  /** Left sidebar: tag taxonomy vs DB narrative topics (`topics` / `page_topics`) */
+  sidebarMenu?: 'tags' | 'topics';
   // EventsManager-specific fields
   selectedQualityCheck?: string | null;
   selectedVeriBadge?: string | null;
@@ -50,6 +52,9 @@ export function serializePageState(state: HomePageState | MonthlyViewState): str
     params.set('page', state.currentPage.toString());
     params.set('pageSize', state.pageSize.toString());
     params.set('viewMode', state.viewMode);
+    if (state.sidebarMenu === 'topics') {
+      params.set('sidebar', 'topics');
+    }
     // EventsManager-specific fields
     if (state.page === 'events-manager') {
       if (state.selectedQualityCheck) {
@@ -97,6 +102,7 @@ export function deserializePageState(searchParams: URLSearchParams): Partial<Hom
       currentPage: parseInt(searchParams.get('page') || '1', 10),
       pageSize: parseInt(searchParams.get('pageSize') || '50', 10),
       viewMode: (searchParams.get('viewMode') || 'keywords') as 'keywords' | 'topics',
+      sidebarMenu: searchParams.get('sidebar') === 'topics' ? 'topics' : 'tags',
     };
     // EventsManager-specific fields
     if (from === 'events-manager') {
@@ -126,6 +132,7 @@ export function deserializePageState(searchParams: URLSearchParams): Partial<Hom
         currentPage: parseInt(searchParams.get('page') || '1', 10),
         pageSize: parseInt(searchParams.get('pageSize') || '50', 10),
         viewMode: (searchParams.get('viewMode') || 'keywords') as 'keywords' | 'topics',
+        sidebarMenu: searchParams.get('sidebar') === 'topics' ? 'topics' : 'tags',
       };
       // EventsManager-specific fields
       const qualityCheck = searchParams.get('qualityCheck');
@@ -139,7 +146,7 @@ export function deserializePageState(searchParams: URLSearchParams): Partial<Hom
     
     // Otherwise, if we have homepage-related params, treat as homepage
     // This handles URLs without 'from=home' (which should be the default for homepage)
-    if (searchParams.has('entities') || searchParams.has('untagged') || searchParams.has('search') || searchParams.has('page') || searchParams.has('viewMode')) {
+    if (searchParams.has('entities') || searchParams.has('untagged') || searchParams.has('search') || searchParams.has('page') || searchParams.has('viewMode') || searchParams.has('sidebar')) {
       const entities = searchParams.get('entities');
       const state: HomePageState = {
         page: 'home',
@@ -149,6 +156,7 @@ export function deserializePageState(searchParams: URLSearchParams): Partial<Hom
         currentPage: parseInt(searchParams.get('page') || '1', 10),
         pageSize: parseInt(searchParams.get('pageSize') || '50', 10),
         viewMode: (searchParams.get('viewMode') || 'keywords') as 'keywords' | 'topics',
+        sidebarMenu: searchParams.get('sidebar') === 'topics' ? 'topics' : 'tags',
       };
       return state;
     }
@@ -183,6 +191,9 @@ export function reconstructPageUrl(state: HomePageState | MonthlyViewState): str
     params.set('page', state.currentPage.toString());
     params.set('pageSize', state.pageSize.toString());
     params.set('viewMode', state.viewMode);
+    if (state.sidebarMenu === 'topics') {
+      params.set('sidebar', 'topics');
+    }
     // EventsManager-specific fields
     if (state.page === 'events-manager') {
       if (state.selectedQualityCheck) {

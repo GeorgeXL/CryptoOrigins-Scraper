@@ -286,6 +286,40 @@ export const agentAuditLog = pgTable("agent_audit_log", {
   createdAtIdx: index("idx_agent_audit_created_at").on(table.createdAt),
 }));
 
+/** Narrative / storyline topics (editorial layer), not taxonomy category "topics" */
+export const topics = pgTable("topics", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  slug: text("slug"),
+  parentTopicId: uuid("parent_topic_id").references((): any => topics.id, { onDelete: "set null" }),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  parentIdx: index("idx_topics_parent_topic_id").on(table.parentTopicId),
+}));
+
+/** Default tag → topic suggestions (inference / tooling; not timeline source of truth) */
+export const tagTopics = pgTable("tag_topics", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tagId: uuid("tag_id").notNull().references(() => tags.id, { onDelete: "cascade" }),
+  topicId: uuid("topic_id").notNull().references(() => topics.id, { onDelete: "cascade" }),
+}, (table) => ({
+  uniqueTagTopic: uniqueIndex("idx_tag_topics_unique").on(table.tagId, table.topicId),
+  tagTopicsTopicIdx: index("idx_tag_topics_topic_id").on(table.topicId),
+}));
+
+/** Timeline assignment: which storylines a day/event belongs to */
+export const pageTopics = pgTable("page_topics", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  analysisId: uuid("analysis_id").notNull().references(() => historicalNewsAnalyses.id, { onDelete: "cascade" }),
+  topicId: uuid("topic_id").notNull().references(() => topics.id, { onDelete: "cascade" }),
+  isPrimary: boolean("is_primary").notNull().default(false),
+}, (table) => ({
+  uniquePageTopic: uniqueIndex("idx_page_topics_unique").on(table.analysisId, table.topicId),
+  pageTopicsTopicIdx: index("idx_page_topics_topic_id").on(table.topicId),
+  pageTopicsAnalysisIdx: index("idx_page_topics_analysis_id").on(table.analysisId),
+}));
+
 // Relations
 export const historicalNewsAnalysesRelations = relations(historicalNewsAnalyses, ({ many }) => ({
   manualEntries: many(manualNewsEntries),

@@ -79,6 +79,13 @@ import {
 } from "@/components/ui/sidebar";
 import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor, buildFilterTreeFromTags } from "@/utils/tagHelpers";
 import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
+import {
+  buildTopicCatalogData,
+  parseTopicIdsFromSelection,
+  selectionUsesTopicKeys,
+  type PageTopicRow,
+  type TopicRow,
+} from "@/lib/topicCatalog";
 
 // Main category type definition
 export type MainCategory = 
@@ -103,6 +110,7 @@ interface EntityTag {
 type TagName = string;
 
 interface HistoricalNewsAnalysis {
+  id?: string;
   date: string;
   summary: string;
   tags?: EntityTag[] | null; // Old tags column (deprecated)
@@ -122,6 +130,8 @@ export default function HomePage() {
   
   // View mode state - toggle between Keywords and Topics
   const [viewMode, setViewMode] = useState<'keywords' | 'topics'>('keywords');
+  /** Left nav: tag taxonomy vs DB narrative topics */
+  const [sidebarMenu, setSidebarMenu] = useState<'tags' | 'topics'>('tags');
   const [pageSize, setPageSize] = useState(50);
   
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
@@ -140,12 +150,12 @@ export default function HomePage() {
   const prevSearchRef = useRef<string>('');
   
   // Use refs to store current state values for updateUrl function
-  const stateRef = useRef({ selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode });
+  const stateRef = useRef({ selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, sidebarMenu });
   
   // Update refs whenever state changes
   useEffect(() => {
-    stateRef.current = { selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode };
-  }, [selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode]);
+    stateRef.current = { selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, sidebarMenu };
+  }, [selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, sidebarMenu]);
 
   // Helper function to update URL when state changes
   const updateUrl = (updates: Partial<HomePageState>) => {
@@ -157,6 +167,7 @@ export default function HomePage() {
       currentPage: updates.currentPage ?? stateRef.current.currentPage,
       pageSize: updates.pageSize ?? stateRef.current.pageSize,
       viewMode: updates.viewMode ?? stateRef.current.viewMode,
+      sidebarMenu: updates.sidebarMenu ?? stateRef.current.sidebarMenu,
     };
     // Build URL without 'from' parameter (only used when navigating to day view)
     const params = new URLSearchParams();
@@ -172,6 +183,9 @@ export default function HomePage() {
     params.set('page', currentState.currentPage.toString());
     params.set('pageSize', currentState.pageSize.toString());
     params.set('viewMode', currentState.viewMode);
+    if (currentState.sidebarMenu === 'topics') {
+      params.set('sidebar', 'topics');
+    }
     const query = params.toString();
     const newUrl = `/${query ? `?${query}` : ''}`;
     prevSearchRef.current = query ? `?${query}` : ''; // Update ref to prevent polling from resetting
@@ -199,6 +213,7 @@ export default function HomePage() {
         if (state.currentPage) setCurrentPage(state.currentPage);
         if (state.pageSize) setPageSize(state.pageSize);
         if (state.viewMode) setViewMode(state.viewMode);
+        if (state.sidebarMenu) setSidebarMenu(state.sidebarMenu);
       }
     };
 
@@ -438,7 +453,44 @@ export default function HomePage() {
     };
   }, [catalogV2Data, hierarchyDataToUse]);
 
+  const { data: topicRows = [] } = useQuery({
+    queryKey: ["supabase-topics-rows"],
+    queryFn: async (): Promise<TopicRow[]> => {
+      if (!supabase) return [];
+      const { data, error } = await supabase
+        .from("topics")
+        .select("id, name, parent_topic_id, sort_order");
+      if (error) {
+        console.warn("[HomePage] topics:", error.message);
+        return [];
+      }
+      return (data ?? []) as TopicRow[];
+    },
+    staleTime: 60_000,
+  });
 
+  const { data: pageTopicRows = [] } = useQuery({
+    queryKey: ["supabase-page-topics-rows"],
+    queryFn: async (): Promise<PageTopicRow[]> => {
+      if (!supabase) return [];
+      const { data, error } = await supabase
+        .from("page_topics")
+        .select("analysis_id, topic_id");
+      if (error) {
+        console.warn("[HomePage] page_topics:", error.message);
+        return [];
+      }
+      return (data ?? []) as PageTopicRow[];
+    },
+    staleTime: 60_000,
+  });
+
+  const topicCatalogData = useMemo(
+    () => buildTopicCatalogData(topicRows, pageTopicRows),
+    [topicRows, pageTopicRows]
+  );
+
+  const sidebarCatalogData = sidebarMenu === "topics" ? topicCatalogData : catalogData;
   // Fetch filtered analyses with server-side filtering and pagination
   const { data: analysesData, isLoading, refetch } = useQuery<{
     analyses: HistoricalNewsAnalysis[];
@@ -449,7 +501,15 @@ export default function HomePage() {
       totalPages: number;
     };
   }>({
-    queryKey: ['supabase-tags-analyses', Array.from(selectedEntities).sort().join(','), showUntagged, debouncedSearchQuery, currentPage, pageSize],
+    queryKey: [
+      "supabase-tags-analyses",
+      sidebarMenu,
+      Array.from(selectedEntities).sort().join(","),
+      showUntagged,
+      debouncedSearchQuery,
+      currentPage,
+      pageSize,
+    ],
     refetchOnMount: true,
     refetchOnWindowFocus: false,
     queryFn: async () => {
@@ -458,7 +518,10 @@ export default function HomePage() {
       // Build base query - use tags_version2 instead of tags
       let query = supabase
         .from("historical_news_analyses")
-        .select("date, summary, tags_version2, tier_used, is_manual_override, is_flagged", { count: "exact" });
+        .select(
+          "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged",
+          { count: "exact" }
+        );
 
       // Apply filters
       if (showUntagged) {
@@ -541,12 +604,29 @@ export default function HomePage() {
       }
       
       if (selectedEntities.size > 0 && !showUntagged) {
-        filteredAnalyses = filteredAnalyses.filter(analysis => {
+        let analysisIdFilter: Set<string> | null = null;
+        if (sidebarMenu === "topics" && selectionUsesTopicKeys(selectedEntities)) {
+          const topicIds = parseTopicIdsFromSelection(selectedEntities);
+          if (topicIds.length > 0) {
+            const { data: pt, error: ptErr } = await supabase
+              .from("page_topics")
+              .select("analysis_id")
+              .in("topic_id", topicIds);
+            if (ptErr) throw ptErr;
+            analysisIdFilter = new Set((pt ?? []).map((r: { analysis_id: string }) => r.analysis_id));
+          } else {
+            analysisIdFilter = new Set();
+          }
+        }
+
+        filteredAnalyses = filteredAnalyses.filter((analysis) => {
+          if (analysisIdFilter) {
+            return !!(analysis.id && analysisIdFilter.has(analysis.id));
+          }
           if (!analysis.tags_version2 || !Array.isArray(analysis.tags_version2)) return false;
-          return Array.from(selectedEntities).some(entityKey => {
-            const [category, name] = entityKey.split("::");
-            // Match by tag name from tags_version2 array
-            return analysis.tags_version2.includes(name);
+          return Array.from(selectedEntities).some((entityKey) => {
+            const [, name] = entityKey.split("::");
+            return analysis.tags_version2!.includes(name);
           });
         });
       }
@@ -704,7 +784,7 @@ export default function HomePage() {
 
     let query = supabase
       .from("historical_news_analyses")
-      .select("date, tags_version2, summary");
+      .select("id, date, tags_version2, summary");
 
     // Note: For untagged filtering, we'll do it client-side since Supabase doesn't handle empty arrays well
     // if (showUntagged) {
@@ -728,12 +808,29 @@ export default function HomePage() {
     }
     
     if (selectedEntities.size > 0 && !showUntagged) {
-      filteredAnalyses = filteredAnalyses.filter(analysis => {
+      let analysisIdFilter: Set<string> | null = null;
+      if (sidebarMenu === "topics" && selectionUsesTopicKeys(selectedEntities)) {
+        const topicIds = parseTopicIdsFromSelection(selectedEntities);
+        if (topicIds.length > 0) {
+          const { data: pt, error: ptErr } = await supabase
+            .from("page_topics")
+            .select("analysis_id")
+            .in("topic_id", topicIds);
+          if (ptErr) throw ptErr;
+          analysisIdFilter = new Set((pt ?? []).map((r: { analysis_id: string }) => r.analysis_id));
+        } else {
+          analysisIdFilter = new Set();
+        }
+      }
+
+      filteredAnalyses = filteredAnalyses.filter((analysis) => {
+        if (analysisIdFilter) {
+          return !!(analysis.id && analysisIdFilter.has(analysis.id));
+        }
         if (!analysis.tags_version2 || !Array.isArray(analysis.tags_version2)) return false;
-        return Array.from(selectedEntities).some(entityKey => {
-          const [category, name] = entityKey.split("::");
-          // Match by tag name from tags_version2 array
-          return analysis.tags_version2.includes(name);
+        return Array.from(selectedEntities).some((entityKey) => {
+          const [, name] = entityKey.split("::");
+          return analysis.tags_version2!.includes(name);
         });
       });
     }
@@ -1171,14 +1268,62 @@ export default function HomePage() {
     <SidebarProvider className="w-full" defaultOpen={true}>
       <div className="space-y-6">
         <div className="flex flex-col gap-6 lg:flex-row">
-          <div className="lg:w-72 shrink-0">
+          <div className="lg:w-72 shrink-0 space-y-2">
+            <div className="flex rounded-lg border bg-muted/30 p-1">
+              <Button
+                type="button"
+                variant={sidebarMenu === "tags" ? "default" : "ghost"}
+                size="sm"
+                className="flex-1"
+                onClick={() => {
+                  setSidebarMenu("tags");
+                  setSelectedEntities(new Set());
+                  setShowUntagged(false);
+                  setCurrentPage(1);
+                  updateUrl({
+                    sidebarMenu: "tags",
+                    selectedEntities: new Set(),
+                    showUntagged: false,
+                    currentPage: 1,
+                  });
+                }}
+              >
+                Tags
+              </Button>
+              <Button
+                type="button"
+                variant={sidebarMenu === "topics" ? "default" : "ghost"}
+                size="sm"
+                className="flex-1"
+                onClick={() => {
+                  setSidebarMenu("topics");
+                  setSelectedEntities(new Set());
+                  setShowUntagged(false);
+                  setCurrentPage(1);
+                  updateUrl({
+                    sidebarMenu: "topics",
+                    selectedEntities: new Set(),
+                    showUntagged: false,
+                    currentPage: 1,
+                  });
+                }}
+              >
+                Topics
+              </Button>
+            </div>
+            {sidebarMenu === "topics" && !sidebarCatalogData ? (
+              <Card className="p-4 text-sm text-muted-foreground rounded-xl border bg-sidebar/40">
+                No storylines yet. Add rows to <code className="text-xs">topics</code> and link analyses in{" "}
+                <code className="text-xs">page_topics</code>.
+              </Card>
+            ) : (
             <TagsSidebar
-              catalogData={catalogData}
+              catalogData={sidebarCatalogData}
               selectedEntities={selectedEntities}
               showUntagged={showUntagged}
               searchQuery={searchQuery}
               mode="inline"
-              showOverview={false}
+              showOverview={sidebarMenu === "tags"}
               onEntitySelect={(entityKey) => {
                 const newSelected = new Set(selectedEntities);
                 if (newSelected.has(entityKey)) {
@@ -1204,6 +1349,7 @@ export default function HomePage() {
                 // Note: search query is debounced, so URL update happens in debounce effect
               }}
             />
+            )}
           </div>
 
           <div className="flex-1 space-y-4">
@@ -1258,6 +1404,7 @@ export default function HomePage() {
                   currentPage,
                   pageSize,
                   viewMode,
+                  sidebarMenu,
                 };
                 const query = serializePageState(state);
                 setLocation(`/day/${date}?${query}`);
@@ -1277,7 +1424,9 @@ export default function HomePage() {
                 showUntagged
                   ? "No untagged analyses found"
                   : selectedEntities.size > 0
-                  ? "No analyses match the selected entities"
+                  ? sidebarMenu === "topics"
+                    ? "No analyses match the selected storylines"
+                    : "No analyses match the selected entities"
                   : debouncedSearchQuery
                   ? "No analyses match your search"
                   : "No tagged analyses found"
