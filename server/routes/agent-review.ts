@@ -1,7 +1,7 @@
 import { Router } from "express";
-import { desc, eq, and, count } from "drizzle-orm";
+import { asc, desc, eq, and, count } from "drizzle-orm";
 import { db } from "../db";
-import { agentDecisions, agentSessions } from "@shared/schema";
+import { agentDecisions, agentSessions, humanReviewQueue } from "@shared/schema";
 import { requireAgentSecret } from "../services/agents-sdk/auth";
 import { isWikiOverseerPassRunning, startWikiOverseerPass, stopWikiOverseerPass } from "../services/agents-sdk/wiki-overseer-run";
 import { applyApprovedProposal } from "../services/agents-sdk/apply-approved-proposal";
@@ -208,6 +208,69 @@ router.post("/api/agent/pipeline/runs/:id/stop", async (req, res) => {
     res.json({ success: true, status: "stopped" });
   } catch (e: any) {
     res.status(e.status || 500).json({ error: e.message || "Failed to stop pipeline run" });
+  }
+});
+
+router.get("/api/agent/pipeline/review", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const status = (req.query.status as string) || "pending";
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const rows = await db
+      .select()
+      .from(humanReviewQueue)
+      .where(eq(humanReviewQueue.status, status))
+      .orderBy(desc(humanReviewQueue.priority), asc(humanReviewQueue.createdAt))
+      .limit(limit);
+    res.json({ items: rows });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to load review queue" });
+  }
+});
+
+router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const id = req.params.id;
+    const reviewer = (req.body?.reviewer as string) || "admin-ui";
+    const notes = (req.body?.notes as string) || null;
+    const updated = await db
+      .update(humanReviewQueue)
+      .set({
+        status: "approved",
+        reviewer,
+        reviewNotes: notes,
+        reviewedAt: new Date(),
+      })
+      .where(and(eq(humanReviewQueue.id, id), eq(humanReviewQueue.status, "pending")))
+      .returning({ id: humanReviewQueue.id, runId: humanReviewQueue.runId });
+    if (!updated.length) return res.status(404).json({ error: "Pending review item not found" });
+    res.json({ success: true, itemId: updated[0].id, runId: updated[0].runId });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Approve review failed" });
+  }
+});
+
+router.post("/api/agent/pipeline/review/:id/reject", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const id = req.params.id;
+    const reviewer = (req.body?.reviewer as string) || "admin-ui";
+    const notes = (req.body?.notes as string) || null;
+    const updated = await db
+      .update(humanReviewQueue)
+      .set({
+        status: "rejected",
+        reviewer,
+        reviewNotes: notes,
+        reviewedAt: new Date(),
+      })
+      .where(and(eq(humanReviewQueue.id, id), eq(humanReviewQueue.status, "pending")))
+      .returning({ id: humanReviewQueue.id, runId: humanReviewQueue.runId });
+    if (!updated.length) return res.status(404).json({ error: "Pending review item not found" });
+    res.json({ success: true, itemId: updated[0].id, runId: updated[0].runId });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Reject review failed" });
   }
 });
 

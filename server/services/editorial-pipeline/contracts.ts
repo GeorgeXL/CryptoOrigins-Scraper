@@ -37,6 +37,44 @@ export const triageItemSchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
+export const rejectionSchema = z.object({
+  status: z.literal("rejected"),
+  agent: pipelineAgentSchema,
+  reason: z.string().min(5),
+  confidence: z.number().min(0).max(1),
+  suggestedAction: z.enum(["retry_with_new_source", "manual_review", "discard", "merge_existing"]),
+  returnTo: pipelineAgentSchema,
+});
+
+export const handoffPayloadSchema = z.object({
+  articleId: z.string().min(1).optional(),
+  analysisId: z.string().uuid().nullable(),
+  date: z.string(), // YYYY-MM-DD
+  status: z.enum(["accepted", "rejected", "needs_review"]),
+  confidence: z.number().min(0).max(1),
+  reason: z.string().optional(),
+  nextAgent: pipelineAgentSchema.optional(),
+  metadata: z.record(z.unknown()).default({}),
+});
+
+export const stepOutputSchema = z.object({
+  summary: z.string().optional(),
+  findings: z.array(z.string()).default([]),
+  handoff: handoffPayloadSchema.optional(),
+  rejection: rejectionSchema.optional(),
+});
+
+export function buildHandoffPayload(input: z.input<typeof handoffPayloadSchema>) {
+  return handoffPayloadSchema.parse(input);
+}
+
+export function buildStepOutput(input: z.input<typeof stepOutputSchema>) {
+  return stepOutputSchema.parse(input);
+}
+
 export type PipelineAgentName = z.infer<typeof pipelineAgentSchema>;
 export type TriageRoute = z.infer<typeof triageRouteSchema>;
 export type TriageItem = z.infer<typeof triageItemSchema>;
+export type PipelineRejection = z.infer<typeof rejectionSchema>;
+export type PipelineHandoffPayload = z.infer<typeof handoffPayloadSchema>;
+export type PipelineStepOutput = z.infer<typeof stepOutputSchema>;

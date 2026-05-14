@@ -342,6 +342,26 @@ export const pipelineHandoffs = pgTable("pipeline_handoffs", {
   toAgentIdx: index("idx_pipeline_handoffs_to_agent").on(table.toAgent),
 }));
 
+// Human review queue for final editorial approval (mandatory gate)
+export const humanReviewQueue = pgTable("human_review_queue", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => pipelineRuns.id, { onDelete: "cascade" }),
+  stepId: uuid("step_id").references(() => pipelineSteps.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("pending"), // pending, approved, rejected
+  priority: integer("priority").notNull().default(50),
+  eventDate: date("event_date"),
+  reviewer: text("reviewer"),
+  reviewNotes: text("review_notes"),
+  package: jsonb("package").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  reviewedAt: timestamp("reviewed_at"),
+}, (table) => ({
+  runIdx: index("idx_human_review_queue_run_id").on(table.runId),
+  statusIdx: index("idx_human_review_queue_status").on(table.status),
+  priorityIdx: index("idx_human_review_queue_priority").on(table.priority),
+  eventDateIdx: index("idx_human_review_queue_event_date").on(table.eventDate),
+}));
+
 /** Narrative / storyline topics (editorial layer), not taxonomy category "topics" */
 export const topics = pgTable("topics", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -577,3 +597,12 @@ export const insertPipelineHandoffSchema = createInsertSchema(pipelineHandoffs).
 
 export type InsertPipelineHandoff = z.infer<typeof insertPipelineHandoffSchema>;
 export type PipelineHandoff = typeof pipelineHandoffs.$inferSelect;
+
+export const insertHumanReviewQueueSchema = createInsertSchema(humanReviewQueue).omit({
+  id: true,
+  createdAt: true,
+  reviewedAt: true,
+});
+
+export type InsertHumanReviewQueue = z.infer<typeof insertHumanReviewQueueSchema>;
+export type HumanReviewQueue = typeof humanReviewQueue.$inferSelect;

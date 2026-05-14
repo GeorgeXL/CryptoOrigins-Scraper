@@ -69,7 +69,11 @@ type PipelineRunDetail = {
     stepIndex: number;
     agentName: string;
     status: string;
+    confidence?: string | null;
     output: unknown;
+    input?: unknown;
+    rejectionReason?: string | null;
+    suggestedAction?: string | null;
   }>;
   handoffs: Array<{
     id: string;
@@ -79,6 +83,20 @@ type PipelineRunDetail = {
     payload: unknown;
   }>;
   live: { activeInThisRuntime: boolean };
+};
+
+type HumanReviewItem = {
+  id: string;
+  runId: string;
+  stepId: string | null;
+  status: string;
+  priority: number;
+  eventDate: string | null;
+  reviewer: string | null;
+  reviewNotes: string | null;
+  package: unknown;
+  createdAt: string | null;
+  reviewedAt: string | null;
 };
 
 function todayIso(): string {
@@ -104,6 +122,8 @@ export default function AdminAgentsPage() {
   const [pipelineRunId, setPipelineRunId] = useState<string | null>(null);
   const [pipelineDetail, setPipelineDetail] = useState<PipelineRunDetail | null>(null);
   const [pipelineMaxDays, setPipelineMaxDays] = useState("60");
+  const [reviewItems, setReviewItems] = useState<HumanReviewItem[]>([]);
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   const agentHeaders = (): HeadersInit => {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -264,6 +284,62 @@ export default function AdminAgentsPage() {
     }
   };
 
+  const loadReviewQueue = async () => {
+    setReviewLoading(true);
+    try {
+      const res = await fetch("/api/agent/pipeline/review?status=pending&limit=200", { headers: agentHeaders() });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setReviewItems((data.items || []) as HumanReviewItem[]);
+    } catch (e) {
+      toast({
+        title: "Review queue",
+        description: e instanceof Error ? e.message : "Failed to load review items",
+        variant: "destructive",
+      });
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  const approveReviewItem = async (id: string) => {
+    try {
+      const res = await fetch(`/api/agent/pipeline/review/${id}/approve`, {
+        method: "POST",
+        headers: agentHeaders(),
+        body: JSON.stringify({ reviewer: "admin-ui" }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast({ title: "Review item approved" });
+      await loadReviewQueue();
+    } catch (e) {
+      toast({
+        title: "Approve review failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const rejectReviewItem = async (id: string) => {
+    try {
+      const res = await fetch(`/api/agent/pipeline/review/${id}/reject`, {
+        method: "POST",
+        headers: agentHeaders(),
+        body: JSON.stringify({ reviewer: "admin-ui" }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast({ title: "Review item rejected" });
+      await loadReviewQueue();
+    } catch (e) {
+      toast({
+        title: "Reject review failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
+    }
+  };
+
   const stopPipelineRun = async () => {
     if (!pipelineRunId) return;
     try {
@@ -328,6 +404,7 @@ export default function AdminAgentsPage() {
 
   useEffect(() => {
     void loadAgentQueue();
+    void loadReviewQueue();
   }, []);
 
   useEffect(() => {
@@ -343,8 +420,10 @@ export default function AdminAgentsPage() {
   useEffect(() => {
     if (!pipelineRunId) return;
     void loadPipelineRun(pipelineRunId);
+    void loadReviewQueue();
     const t = window.setInterval(() => {
       void loadPipelineRun(pipelineRunId, { quiet: true });
+      void loadReviewQueue();
     }, 2500);
     return () => window.clearInterval(t);
   }, [pipelineRunId]);
@@ -533,7 +612,19 @@ export default function AdminAgentsPage() {
                   <ul className="space-y-1 text-xs">
                     {pipelineDetail.steps.slice(-8).map((s) => (
                       <li key={s.id} className="border rounded p-2">
-                        #{s.stepIndex} {s.agentName} · {s.status}
+                        <div className="font-medium">
+                          #{s.stepIndex} {s.agentName} · {s.status}
+                          {s.confidence ? ` · conf ${s.confidence}` : ""}
+                        </div>
+                        {s.rejectionReason ? (
+                          <div className="text-muted-foreground mt-1">
+                            Rejection: {s.rejectionReason}
+                            {s.suggestedAction ? ` · action: ${s.suggestedAction}` : ""}
+                          </div>
+                        ) : null}
+                        <pre className="mt-1 bg-muted rounded p-2 overflow-x-auto">
+                          {JSON.stringify(s.output ?? {}, null, 2)}
+                        </pre>
                       </li>
                     ))}
                   </ul>
@@ -543,7 +634,12 @@ export default function AdminAgentsPage() {
                   <ul className="space-y-1 text-xs">
                     {pipelineDetail.handoffs.slice(0, 8).map((h) => (
                       <li key={h.id} className="border rounded p-2">
-                        {h.fromAgent} → {h.toAgent} · {h.status}
+                        <div className="font-medium">
+                          {h.fromAgent} → {h.toAgent} · {h.status}
+                        </div>
+                        <pre className="mt-1 bg-muted rounded p-2 overflow-x-auto">
+                          {JSON.stringify(h.payload ?? {}, null, 2)}
+                        </pre>
                       </li>
                     ))}
                   </ul>
@@ -553,6 +649,50 @@ export default function AdminAgentsPage() {
           ) : (
             <p className="text-sm text-muted-foreground">No pipeline run started yet.</p>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Human review queue (pipeline v2)</CardTitle>
+          <CardDescription>
+            Mandatory approval gate for editorial pipeline output. Approve or reject each queued day package.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2 mb-3">
+            <Button type="button" size="sm" variant="outline" onClick={() => void loadReviewQueue()} disabled={reviewLoading}>
+              {reviewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Refresh review queue"}
+            </Button>
+          </div>
+          <ScrollArea className="h-[min(420px,45vh)] rounded-md border p-3">
+            {reviewItems.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No pending review items.</p>
+            ) : (
+              <ul className="space-y-3">
+                {reviewItems.map((item) => (
+                  <li key={item.id} className="border rounded p-3 text-xs space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-medium">
+                        {item.eventDate ?? "n/a"} · priority {item.priority} · run {item.runId}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="default" onClick={() => void approveReviewItem(item.id)}>
+                          Approve
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => void rejectReviewItem(item.id)}>
+                          Reject
+                        </Button>
+                      </div>
+                    </div>
+                    <pre className="bg-muted rounded p-2 overflow-x-auto">
+                      {JSON.stringify(item.package ?? {}, null, 2)}
+                    </pre>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </ScrollArea>
         </CardContent>
       </Card>
 
