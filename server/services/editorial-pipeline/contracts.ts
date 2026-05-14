@@ -72,6 +72,35 @@ export function buildStepOutput(input: z.input<typeof stepOutputSchema>) {
   return stepOutputSchema.parse(input);
 }
 
+export function buildHandoffChain(args: {
+  fromAgent: PipelineAgentName;
+  toAgents: PipelineAgentName[];
+  analysisId: string | null;
+  date: string;
+  confidence: number;
+  reasons: string[];
+  route: TriageRoute;
+  sourceStepId?: string;
+}): Array<{ fromAgent: PipelineAgentName; toAgent: PipelineAgentName; payload: PipelineHandoffPayload }> {
+  const uniqueToAgents = Array.from(new Set(args.toAgents)).filter((to) => to !== args.fromAgent);
+  return uniqueToAgents.map((toAgent) => ({
+    fromAgent: args.fromAgent,
+    toAgent,
+    payload: buildHandoffPayload({
+      analysisId: args.analysisId,
+      date: args.date,
+      status: "needs_review",
+      confidence: args.confidence,
+      reason: args.reasons.join("; "),
+      nextAgent: toAgent,
+      metadata: {
+        route: args.route,
+        sourceStepId: args.sourceStepId ?? null,
+      },
+    }),
+  }));
+}
+
 export type PipelineAgentName = z.infer<typeof pipelineAgentSchema>;
 export type TriageRoute = z.infer<typeof triageRouteSchema>;
 export type TriageItem = z.infer<typeof triageItemSchema>;

@@ -11,6 +11,7 @@ import {
 } from "@shared/schema";
 import {
   EDITORIAL_DEFAULT_MODEL,
+  buildHandoffChain,
   buildHandoffPayload,
   buildStepOutput,
   type PipelineAgentName,
@@ -174,21 +175,24 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
     await recordConfidence(runId, triageStepId, "NewsManager", item.confidence, item.reasons.join("; "));
     stepIndex += 1;
 
-    for (const toAgent of item.requiredAgents) {
-      if (toAgent === "NewsManager") continue;
+    const handoffChain = buildHandoffChain({
+      fromAgent: "NewsManager",
+      toAgents: item.requiredAgents,
+      analysisId: item.analysisId,
+      date: item.date,
+      confidence: item.confidence,
+      reasons: item.reasons,
+      route: item.route,
+      sourceStepId: triageStepId,
+    });
+
+    for (const handoff of handoffChain) {
+      const toAgent = handoff.toAgent;
       await db.insert(pipelineHandoffs).values({
         runId,
-        fromAgent: "NewsManager",
-        toAgent,
-        payload: buildHandoffPayload({
-          analysisId: item.analysisId,
-          date: item.date,
-          status: "needs_review",
-          confidence: item.confidence,
-          reason: item.reasons.join("; "),
-          nextAgent: toAgent,
-          metadata: { route: item.route, sourceStepId: triageStepId },
-        }),
+        fromAgent: handoff.fromAgent,
+        toAgent: handoff.toAgent,
+        payload: handoff.payload,
       });
       const out = await runAgentWithRetry(runId, item, toAgent, stepIndex);
       stepIndex = out.nextStepIndex;
