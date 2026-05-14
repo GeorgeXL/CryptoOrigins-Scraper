@@ -7,10 +7,16 @@ import { isWikiOverseerPassRunning, startWikiOverseerPass, stopWikiOverseerPass 
 import { applyApprovedProposal } from "../services/agents-sdk/apply-approved-proposal";
 import type { ProposalAfterState } from "../services/agents-sdk/apply-approved-proposal";
 import {
+  getEditorialCutoverStatus,
   getEditorialPipelineRun,
+  pauseEditorialPipelineRun,
+  resumeEditorialPipelineRun,
+  shadowValidatePipelineWindow,
   startEditorialPipelineRun,
   stopEditorialPipelineRun,
 } from "../services/editorial-pipeline/run";
+import { executeApprovedReviewItem } from "../services/editorial-pipeline/approved-writer";
+import { detectMilestoneGapsInWindow } from "../services/editorial-pipeline/milestones";
 
 const router = Router();
 
@@ -211,6 +217,83 @@ router.post("/api/agent/pipeline/runs/:id/stop", async (req, res) => {
   }
 });
 
+router.post("/api/agent/pipeline/runs/:id/pause", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const paused = pauseEditorialPipelineRun(req.params.id);
+    if (!paused) return res.status(409).json({ error: "Run is not active in this runtime" });
+    res.json({ success: true, status: "paused" });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to pause run" });
+  }
+});
+
+router.post("/api/agent/pipeline/runs/:id/resume", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const out = await resumeEditorialPipelineRun(req.params.id);
+    res.json({ success: true, ...out, status: "running" });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to resume run" });
+  }
+});
+
+router.post("/api/agent/pipeline/shadow-validate", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const { dateFrom, dateTo, maxDaysToConsider } = req.body || {};
+    if (!dateFrom || !dateTo || typeof dateFrom !== "string" || typeof dateTo !== "string") {
+      return res.status(400).json({ error: "dateFrom and dateTo are required (YYYY-MM-DD)" });
+    }
+    const out = await shadowValidatePipelineWindow({
+      dateFrom,
+      dateTo,
+      maxDaysToConsider: Number(maxDaysToConsider) || 60,
+    });
+    res.json(out);
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Shadow validation failed" });
+  }
+});
+
+router.get("/api/agent/pipeline/milestones/gaps", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const dateFrom = (req.query.dateFrom as string) || "2009-01-01";
+    const dateTo = (req.query.dateTo as string) || new Date().toISOString().slice(0, 10);
+    const gaps = await detectMilestoneGapsInWindow(dateFrom, dateTo);
+    res.json({ gaps, count: gaps.length });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to detect milestone gaps" });
+  }
+});
+
+router.get("/api/agent/pipeline/cutover-status", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    res.json(getEditorialCutoverStatus());
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to get cutover status" });
+  }
+});
+
+router.get("/api/agent/pipeline/runs/:id/evidence", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const run = await getEditorialPipelineRun(req.params.id);
+    if (!run) return res.status(404).json({ error: "Run not found" });
+    const steps = (run.steps as any[]).map((s) => ({
+      stepId: s.id,
+      agentName: s.agentName,
+      evidence: s.evidence ?? null,
+      output: s.output ?? null,
+    }));
+    res.json({ runId: req.params.id, steps });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to load evidence" });
+  }
+});
+
 router.get("/api/agent/pipeline/review", async (req, res) => {
   try {
     requireAgentSecret(req);
@@ -245,7 +328,8 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
       .where(and(eq(humanReviewQueue.id, id), eq(humanReviewQueue.status, "pending")))
       .returning({ id: humanReviewQueue.id, runId: humanReviewQueue.runId });
     if (!updated.length) return res.status(404).json({ error: "Pending review item not found" });
-    res.json({ success: true, itemId: updated[0].id, runId: updated[0].runId });
+    const execution = await executeApprovedReviewItem(updated[0].id);
+    res.json({ success: true, itemId: updated[0].id, runId: updated[0].runId, execution });
   } catch (e: any) {
     res.status(e.status || 500).json({ error: e.message || "Approve review failed" });
   }

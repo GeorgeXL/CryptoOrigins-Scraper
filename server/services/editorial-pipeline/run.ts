@@ -1,93 +1,121 @@
 import { Agent, run } from "@openai/agents";
 import { asc, count, desc, eq } from "drizzle-orm";
 import { db } from "../../db";
-import { humanReviewQueue, pipelineHandoffs, pipelineRuns, pipelineSteps } from "@shared/schema";
+import {
+  humanReviewQueue,
+  pipelineConfidenceHistory,
+  pipelineEvidence,
+  pipelineHandoffs,
+  pipelineRuns,
+  pipelineSteps,
+} from "@shared/schema";
 import {
   EDITORIAL_DEFAULT_MODEL,
   buildHandoffPayload,
   buildStepOutput,
+  type PipelineAgentName,
   type TriageItem,
 } from "./contracts";
 import { triageRange } from "./triage";
+import { executeAgent } from "./executors";
+import { getModelForAgent } from "./model-config";
 
 const controllers = new Map<string, AbortController>();
+const EDITORIAL_PIPELINE_ENABLED = process.env.EDITORIAL_PIPELINE_ENABLED !== "0";
 
 type StartOpts = {
   dateFrom: string;
   dateTo: string;
   maxDaysToConsider: number;
   requestedBy?: string;
+  resumedFromRunId?: string;
 };
 
-async function writeTriageTrace(runId: string, triage: TriageItem[]): Promise<void> {
-  let stepIndex = 1;
-  for (const item of triage) {
-    const stepOutput = buildStepOutput({
-      summary: `Triage route ${item.route} selected for ${item.date}`,
-      findings: item.reasons,
-      handoff: {
-        analysisId: item.analysisId,
-        date: item.date,
-        status: item.route === "existing_ok" ? "accepted" : "needs_review",
-        confidence: item.confidence,
-        reason: item.reasons.join("; "),
-        nextAgent: item.requiredAgents.find((a) => a !== "NewsManager"),
-        metadata: { route: item.route, requiredAgents: item.requiredAgents },
-      },
+const RETRYABLE_STATUSES = new Set(["rejected", "error"]);
+
+async function createStep(opts: {
+  runId: string;
+  stepIndex: number;
+  agentName: PipelineAgentName;
+  status: string;
+  confidence?: number;
+  input: unknown;
+  output: unknown;
+  evidence?: unknown;
+  rejectionReason?: string | null;
+  suggestedAction?: string | null;
+}) {
+  const [step] = await db
+    .insert(pipelineSteps)
+    .values({
+      runId: opts.runId,
+      stepIndex: opts.stepIndex,
+      agentName: opts.agentName,
+      status: opts.status,
+      confidence: opts.confidence != null ? String(Math.round(opts.confidence * 100)) : null,
+      input: opts.input,
+      output: opts.output,
+      evidence: opts.evidence,
+      rejectionReason: opts.rejectionReason ?? null,
+      suggestedAction: opts.suggestedAction ?? null,
+    })
+    .returning({ id: pipelineSteps.id });
+  return step.id;
+}
+
+async function recordConfidence(runId: string, stepId: string, agentName: string, score?: number, reason?: string) {
+  if (score == null) return;
+  await db.insert(pipelineConfidenceHistory).values({
+    runId,
+    stepId,
+    agentName,
+    score: String(Math.round(score * 100)),
+    reason: reason || null,
+  });
+}
+
+async function runAgentWithRetry(
+  runId: string,
+  triageItem: TriageItem,
+  agentName: PipelineAgentName,
+  stepIndexStart: number
+): Promise<{ nextStepIndex: number; lastStepId: string | null }> {
+  const maxAttempts = 2;
+  let stepIndex = stepIndexStart;
+  let lastStepId: string | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await executeAgent(agentName, { runId, triageItem });
+    const stepId = await createStep({
+      runId,
+      stepIndex,
+      agentName,
+      status: result.status,
+      confidence: result.confidence,
+      input: { triageItem, attempt, model: getModelForAgent(agentName) },
+      output: result.output,
+      evidence: result.evidence || null,
+      rejectionReason: result.output.rejection?.reason ?? null,
+      suggestedAction: result.output.rejection?.suggestedAction ?? null,
     });
+    await recordConfidence(runId, stepId, agentName, result.confidence, result.output.rejection?.reason);
 
-    const [step] = await db
-      .insert(pipelineSteps)
-      .values({
+    if (result.evidence) {
+      await db.insert(pipelineEvidence).values({
         runId,
-        stepIndex,
-        agentName: "NewsManager",
-        status: "completed",
-        confidence: String(Math.round(item.confidence * 100)),
-        input: { date: item.date, analysisId: item.analysisId },
-        output: stepOutput,
-        evidence: { triageRuleVersion: "v1" },
-      })
-      .returning({ id: pipelineSteps.id });
-    stepIndex += 1;
-
-    // Only create handoffs for work items. existing_ok goes to final editorial check only.
-    for (const toAgent of item.requiredAgents) {
-      if (toAgent === "NewsManager") continue;
-      const handoff = buildHandoffPayload({
-        analysisId: item.analysisId,
-        date: item.date,
-        status: "needs_review",
-        confidence: item.confidence,
-        reason: item.reasons.join("; "),
-        nextAgent: toAgent,
-        metadata: {
-          route: item.route,
-          sourceStepId: step.id,
-        },
-      });
-      await db.insert(pipelineHandoffs).values({
-        runId,
-        fromAgent: "NewsManager",
-        toAgent,
-        payload: handoff,
+        stepId,
+        sourceType: "agent-executor",
+        title: `${agentName} evidence`,
+        metadata: result.evidence,
       });
     }
 
-    // Mandatory human gate: queue each triaged day for operator decision.
-    await db.insert(humanReviewQueue).values({
-      runId,
-      stepId: step.id,
-      status: "pending",
-      priority:
-        item.route === "missing_day" ? 95 : item.route === "empty_day" ? 90 : item.route === "existing_needs_correction" ? 75 : 50,
-      eventDate: item.date,
-      package: {
-        triage: item,
-        note: "Generated by NewsManager triage. Existing search and summary flows remain unchanged.",
-      },
-    });
+    lastStepId = stepId;
+    stepIndex += 1;
+    if (!RETRYABLE_STATUSES.has(result.status) || attempt === maxAttempts) break;
   }
+
+  return { nextStepIndex: stepIndex, lastStepId };
 }
 
 async function generateManagerNarrative(triage: TriageItem[], signal?: AbortSignal): Promise<string | null> {
@@ -127,7 +155,75 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
     maxDaysToConsider: Math.max(1, Math.min(opts.maxDaysToConsider, 365)),
   });
 
-  await writeTriageTrace(runId, triage);
+  let stepIndex = 1;
+  for (const item of triage) {
+    // NewsManager triage step
+    const triageStepId = await createStep({
+      runId,
+      stepIndex,
+      agentName: "NewsManager",
+      status: "completed",
+      confidence: item.confidence,
+      input: { date: item.date, analysisId: item.analysisId },
+      output: buildStepOutput({
+        summary: `Triage route ${item.route} selected for ${item.date}`,
+        findings: item.reasons,
+      }),
+      evidence: { triageRuleVersion: "v1", requiredAgents: item.requiredAgents },
+    });
+    await recordConfidence(runId, triageStepId, "NewsManager", item.confidence, item.reasons.join("; "));
+    stepIndex += 1;
+
+    for (const toAgent of item.requiredAgents) {
+      if (toAgent === "NewsManager") continue;
+      await db.insert(pipelineHandoffs).values({
+        runId,
+        fromAgent: "NewsManager",
+        toAgent,
+        payload: buildHandoffPayload({
+          analysisId: item.analysisId,
+          date: item.date,
+          status: "needs_review",
+          confidence: item.confidence,
+          reason: item.reasons.join("; "),
+          nextAgent: toAgent,
+          metadata: { route: item.route, sourceStepId: triageStepId },
+        }),
+      });
+      const out = await runAgentWithRetry(runId, item, toAgent, stepIndex);
+      stepIndex = out.nextStepIndex;
+      if (out.lastStepId) {
+        await db.insert(pipelineHandoffs).values({
+          runId,
+          fromAgent: toAgent,
+          toAgent: "NewsManager",
+          payload: buildHandoffPayload({
+            analysisId: item.analysisId,
+            date: item.date,
+            status: "needs_review",
+            confidence: 0.8,
+            reason: `${toAgent} completed`,
+            nextAgent: "NewsManager",
+            metadata: { sourceStepId: out.lastStepId },
+          }),
+        });
+      }
+    }
+
+    await db.insert(humanReviewQueue).values({
+      runId,
+      stepId: triageStepId,
+      status: "pending",
+      priority:
+        item.route === "missing_day" ? 95 : item.route === "empty_day" ? 90 : item.route === "existing_needs_correction" ? 75 : 50,
+      eventDate: item.date,
+      package: {
+        triage: item,
+        note: "Generated by NewsManager + stage executors. Existing search and summary flows are preserved.",
+      },
+    });
+  }
+
   const managerNarrative = await generateManagerNarrative(triage, signal);
   const [pendingReview] = await db
     .select({ c: count() })
@@ -154,6 +250,9 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
 }
 
 export async function startEditorialPipelineRun(opts: StartOpts): Promise<{ runId: string }> {
+  if (!EDITORIAL_PIPELINE_ENABLED) {
+    throw new Error("Editorial pipeline is disabled by feature flag (EDITORIAL_PIPELINE_ENABLED=0).");
+  }
   const [created] = await db
     .insert(pipelineRuns)
     .values({
@@ -166,6 +265,7 @@ export async function startEditorialPipelineRun(opts: StartOpts): Promise<{ runI
         maxDaysToConsider: opts.maxDaysToConsider,
         mode: "triage-first",
         preserveExistingSearchAndSummary: true,
+        resumedFromRunId: opts.resumedFromRunId || null,
       },
       stats: { phase: "queued" },
     })
@@ -203,6 +303,29 @@ export function stopEditorialPipelineRun(runId: string): boolean {
   return true;
 }
 
+export function pauseEditorialPipelineRun(runId: string): boolean {
+  const c = controllers.get(runId);
+  if (!c) return false;
+  c.abort();
+  void db
+    .update(pipelineRuns)
+    .set({ status: "paused", completedAt: new Date(), stats: { phase: "paused" } })
+    .where(eq(pipelineRuns.id, runId));
+  return true;
+}
+
+export async function resumeEditorialPipelineRun(runId: string): Promise<{ runId: string }> {
+  const [runRow] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, runId)).limit(1);
+  if (!runRow) throw new Error("Run not found");
+  return startEditorialPipelineRun({
+    dateFrom: runRow.dateFrom,
+    dateTo: runRow.dateTo,
+    maxDaysToConsider: Number((runRow.config as any)?.maxDaysToConsider || 60),
+    requestedBy: "admin-ui",
+    resumedFromRunId: runId,
+  });
+}
+
 export function isEditorialPipelineRunActive(runId: string): boolean {
   return controllers.has(runId);
 }
@@ -231,6 +354,40 @@ export async function getEditorialPipelineRun(runId: string): Promise<{
     handoffs,
     live: {
       activeInThisRuntime: isEditorialPipelineRunActive(runId),
+    },
+  };
+}
+
+export async function shadowValidatePipelineWindow(opts: {
+  dateFrom: string;
+  dateTo: string;
+  maxDaysToConsider: number;
+}): Promise<{
+  triageCount: number;
+  routeCounts: Record<string, number>;
+  reviewQueueCreated: number;
+}> {
+  const triage = await triageRange(opts);
+  const routeCounts = triage.reduce<Record<string, number>>((acc, item) => {
+    acc[item.route] = (acc[item.route] || 0) + 1;
+    return acc;
+  }, {});
+  return {
+    triageCount: triage.length,
+    routeCounts,
+    reviewQueueCreated: triage.length,
+  };
+}
+
+export function getEditorialCutoverStatus() {
+  return {
+    featureFlagEnabled: EDITORIAL_PIPELINE_ENABLED,
+    requiredHumanApproval: true,
+    defaultModel: EDITORIAL_DEFAULT_MODEL,
+    cutoverReadyChecks: {
+      featureFlagEnabled: EDITORIAL_PIPELINE_ENABLED,
+      humanApprovalGatePresent: true,
+      parallelModeOnly: true,
     },
   };
 }

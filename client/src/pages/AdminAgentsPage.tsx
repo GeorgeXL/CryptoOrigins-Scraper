@@ -99,6 +99,13 @@ type HumanReviewItem = {
   reviewedAt: string | null;
 };
 
+type CutoverStatus = {
+  featureFlagEnabled: boolean;
+  requiredHumanApproval: boolean;
+  defaultModel: string;
+  cutoverReadyChecks: Record<string, boolean>;
+};
+
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -124,6 +131,9 @@ export default function AdminAgentsPage() {
   const [pipelineMaxDays, setPipelineMaxDays] = useState("60");
   const [reviewItems, setReviewItems] = useState<HumanReviewItem[]>([]);
   const [reviewLoading, setReviewLoading] = useState(false);
+  const [pipelineFilterStatus, setPipelineFilterStatus] = useState<string>("all");
+  const [cutoverStatus, setCutoverStatus] = useState<CutoverStatus | null>(null);
+  const [shadowValidation, setShadowValidation] = useState<Record<string, unknown> | null>(null);
 
   const agentHeaders = (): HeadersInit => {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -340,6 +350,43 @@ export default function AdminAgentsPage() {
     }
   };
 
+  const loadCutoverStatus = async () => {
+    try {
+      const res = await fetch("/api/agent/pipeline/cutover-status", { headers: agentHeaders() });
+      if (!res.ok) throw new Error(await res.text());
+      setCutoverStatus((await res.json()) as CutoverStatus);
+    } catch (e) {
+      toast({
+        title: "Cutover status",
+        description: e instanceof Error ? e.message : "Failed to load",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const runShadowValidation = async () => {
+    try {
+      const res = await fetch("/api/agent/pipeline/shadow-validate", {
+        method: "POST",
+        headers: agentHeaders(),
+        body: JSON.stringify({
+          dateFrom,
+          dateTo,
+          maxDaysToConsider: Number(pipelineMaxDays) || 60,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setShadowValidation((await res.json()) as Record<string, unknown>);
+      toast({ title: "Shadow validation finished" });
+    } catch (e) {
+      toast({
+        title: "Shadow validation failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
+    }
+  };
+
   const stopPipelineRun = async () => {
     if (!pipelineRunId) return;
     try {
@@ -353,6 +400,45 @@ export default function AdminAgentsPage() {
     } catch (e) {
       toast({
         title: "Pipeline stop failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const pausePipelineRun = async () => {
+    if (!pipelineRunId) return;
+    try {
+      const res = await fetch(`/api/agent/pipeline/runs/${pipelineRunId}/pause`, {
+        method: "POST",
+        headers: agentHeaders(),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast({ title: "Pipeline paused", description: pipelineRunId });
+      await loadPipelineRun(pipelineRunId);
+    } catch (e) {
+      toast({
+        title: "Pipeline pause failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const resumePipelineRun = async () => {
+    if (!pipelineRunId) return;
+    try {
+      const res = await fetch(`/api/agent/pipeline/runs/${pipelineRunId}/resume`, {
+        method: "POST",
+        headers: agentHeaders(),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setPipelineRunId(data.runId);
+      toast({ title: "Pipeline resumed", description: data.runId });
+    } catch (e) {
+      toast({
+        title: "Pipeline resume failed",
         description: e instanceof Error ? e.message : "Error",
         variant: "destructive",
       });
@@ -405,6 +491,7 @@ export default function AdminAgentsPage() {
   useEffect(() => {
     void loadAgentQueue();
     void loadReviewQueue();
+    void loadCutoverStatus();
   }, []);
 
   useEffect(() => {
@@ -582,11 +669,32 @@ export default function AdminAgentsPage() {
             >
               Stop pipeline run
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!pipelineRunId || pipelineDetail?.run.status !== "running"}
+              onClick={() => void pausePipelineRun()}
+            >
+              Pause run
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!pipelineRunId || pipelineDetail?.run.status !== "paused"}
+              onClick={() => void resumePipelineRun()}
+            >
+              Resume run
+            </Button>
             {pipelineRunId ? (
               <Button type="button" size="sm" variant="outline" onClick={() => void loadPipelineRun(pipelineRunId)}>
                 Refresh run
               </Button>
             ) : null}
+            <Button type="button" size="sm" variant="outline" onClick={() => void runShadowValidation()}>
+              Run shadow validation
+            </Button>
           </div>
 
           {pipelineDetail ? (
@@ -610,7 +718,10 @@ export default function AdminAgentsPage() {
                 <div>
                   <div className="font-medium mb-1">Recent steps</div>
                   <ul className="space-y-1 text-xs">
-                    {pipelineDetail.steps.slice(-8).map((s) => (
+                    {pipelineDetail.steps
+                      .filter((s) => (pipelineFilterStatus === "all" ? true : s.status === pipelineFilterStatus))
+                      .slice(-12)
+                      .map((s) => (
                       <li key={s.id} className="border rounded p-2">
                         <div className="font-medium">
                           #{s.stepIndex} {s.agentName} · {s.status}
@@ -645,10 +756,37 @@ export default function AdminAgentsPage() {
                   </ul>
                 </div>
               </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="pipeline-filter-status">Step status filter</Label>
+                <select
+                  id="pipeline-filter-status"
+                  className="border rounded px-2 py-1 text-xs bg-background"
+                  value={pipelineFilterStatus}
+                  onChange={(e) => setPipelineFilterStatus(e.target.value)}
+                >
+                  <option value="all">all</option>
+                  <option value="completed">completed</option>
+                  <option value="rejected">rejected</option>
+                  <option value="error">error</option>
+                  <option value="skipped">skipped</option>
+                </select>
+              </div>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">No pipeline run started yet.</p>
           )}
+          {shadowValidation ? (
+            <pre className="text-xs bg-muted rounded p-2 overflow-x-auto">
+              {JSON.stringify(shadowValidation, null, 2)}
+            </pre>
+          ) : null}
+          {cutoverStatus ? (
+            <div className="text-xs text-muted-foreground rounded border p-2">
+              Cutover checks: model {cutoverStatus.defaultModel} · feature flag{" "}
+              {cutoverStatus.featureFlagEnabled ? "enabled" : "disabled"} · human approval{" "}
+              {cutoverStatus.requiredHumanApproval ? "required" : "disabled"}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

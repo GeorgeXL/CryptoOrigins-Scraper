@@ -342,6 +342,56 @@ export const pipelineHandoffs = pgTable("pipeline_handoffs", {
   toAgentIdx: index("idx_pipeline_handoffs_to_agent").on(table.toAgent),
 }));
 
+// Normalized evidence references used by pipeline agents.
+export const pipelineEvidence = pgTable("pipeline_evidence", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => pipelineRuns.id, { onDelete: "cascade" }),
+  stepId: uuid("step_id").references(() => pipelineSteps.id, { onDelete: "set null" }),
+  sourceType: text("source_type").notNull(), // exa, perplexity, google, archive, db
+  url: text("url"),
+  title: text("title"),
+  publishedAt: timestamp("published_at"),
+  credibilityScore: numeric("credibility_score", { precision: 5, scale: 2 }),
+  claim: text("claim"),
+  snippet: text("snippet"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  runIdx: index("idx_pipeline_evidence_run_id").on(table.runId),
+  stepIdx: index("idx_pipeline_evidence_step_id").on(table.stepId),
+  sourceIdx: index("idx_pipeline_evidence_source_type").on(table.sourceType),
+}));
+
+// Append-only confidence history for explainability and regression checks.
+export const pipelineConfidenceHistory = pgTable("pipeline_confidence_history", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => pipelineRuns.id, { onDelete: "cascade" }),
+  stepId: uuid("step_id").references(() => pipelineSteps.id, { onDelete: "set null" }),
+  agentName: text("agent_name").notNull(),
+  score: numeric("score", { precision: 5, scale: 2 }).notNull(),
+  reason: text("reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  runIdx: index("idx_pipeline_conf_hist_run_id").on(table.runId),
+  stepIdx: index("idx_pipeline_conf_hist_step_id").on(table.stepId),
+  agentIdx: index("idx_pipeline_conf_hist_agent_name").on(table.agentName),
+}));
+
+// Canonical milestone set for historical integrity checks.
+export const canonicalMilestones = pgTable("canonical_milestones", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique(),
+  label: text("label").notNull(),
+  expectedDate: date("expected_date").notNull(),
+  category: text("category").notNull().default("bitcoin-history"),
+  priority: text("priority").notNull().default("high"), // critical, high, medium
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  expectedDateIdx: index("idx_canonical_milestones_expected_date").on(table.expectedDate),
+  priorityIdx: index("idx_canonical_milestones_priority").on(table.priority),
+}));
+
 // Human review queue for final editorial approval (mandatory gate)
 export const humanReviewQueue = pgTable("human_review_queue", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -606,3 +656,27 @@ export const insertHumanReviewQueueSchema = createInsertSchema(humanReviewQueue)
 
 export type InsertHumanReviewQueue = z.infer<typeof insertHumanReviewQueueSchema>;
 export type HumanReviewQueue = typeof humanReviewQueue.$inferSelect;
+
+export const insertPipelineEvidenceSchema = createInsertSchema(pipelineEvidence).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPipelineEvidence = z.infer<typeof insertPipelineEvidenceSchema>;
+export type PipelineEvidence = typeof pipelineEvidence.$inferSelect;
+
+export const insertPipelineConfidenceHistorySchema = createInsertSchema(pipelineConfidenceHistory).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPipelineConfidenceHistory = z.infer<typeof insertPipelineConfidenceHistorySchema>;
+export type PipelineConfidenceHistory = typeof pipelineConfidenceHistory.$inferSelect;
+
+export const insertCanonicalMilestoneSchema = createInsertSchema(canonicalMilestones).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertCanonicalMilestone = z.infer<typeof insertCanonicalMilestoneSchema>;
+export type CanonicalMilestone = typeof canonicalMilestones.$inferSelect;
