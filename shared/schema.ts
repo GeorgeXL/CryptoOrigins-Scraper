@@ -286,6 +286,62 @@ export const agentAuditLog = pgTable("agent_audit_log", {
   createdAtIdx: index("idx_agent_audit_created_at").on(table.createdAt),
 }));
 
+// Editorial pipeline runs (v2) - orchestrator level lifecycle
+export const pipelineRuns = pgTable("pipeline_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: text("status").notNull().default("running"), // running, paused, completed, stopped, error
+  dateFrom: date("date_from").notNull(),
+  dateTo: date("date_to").notNull(),
+  model: text("model").notNull().default("gpt-5.4-mini"),
+  startedAt: timestamp("started_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
+  requestedBy: text("requested_by").default("admin-ui"),
+  stats: jsonb("stats"),
+  config: jsonb("config"),
+}, (table) => ({
+  statusIdx: index("idx_pipeline_runs_status").on(table.status),
+  startedIdx: index("idx_pipeline_runs_started_at").on(table.startedAt),
+  dateRangeIdx: index("idx_pipeline_runs_date_range").on(table.dateFrom, table.dateTo),
+}));
+
+// Per-agent/per-stage steps produced during a pipeline run
+export const pipelineSteps = pgTable("pipeline_steps", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => pipelineRuns.id, { onDelete: "cascade" }),
+  stepIndex: integer("step_index").notNull(),
+  agentName: text("agent_name").notNull(),
+  status: text("status").notNull().default("queued"), // queued, running, completed, rejected, skipped, error
+  confidence: numeric("confidence", { precision: 5, scale: 2 }),
+  rejectionReason: text("rejection_reason"),
+  suggestedAction: text("suggested_action"),
+  returnTo: text("return_to"),
+  input: jsonb("input"),
+  output: jsonb("output"),
+  evidence: jsonb("evidence"),
+  startedAt: timestamp("started_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
+}, (table) => ({
+  runIdx: index("idx_pipeline_steps_run_id").on(table.runId),
+  runStepIdx: uniqueIndex("idx_pipeline_steps_run_step").on(table.runId, table.stepIndex),
+  agentIdx: index("idx_pipeline_steps_agent_name").on(table.agentName),
+  statusIdx: index("idx_pipeline_steps_status").on(table.status),
+}));
+
+// Explicit handoffs between agents for observability and auditability
+export const pipelineHandoffs = pgTable("pipeline_handoffs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => pipelineRuns.id, { onDelete: "cascade" }),
+  fromAgent: text("from_agent").notNull(),
+  toAgent: text("to_agent").notNull(),
+  status: text("status").notNull().default("sent"), // sent, consumed, rejected
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  runIdx: index("idx_pipeline_handoffs_run_id").on(table.runId),
+  fromAgentIdx: index("idx_pipeline_handoffs_from_agent").on(table.fromAgent),
+  toAgentIdx: index("idx_pipeline_handoffs_to_agent").on(table.toAgent),
+}));
+
 /** Narrative / storyline topics (editorial layer), not taxonomy category "topics" */
 export const topics = pgTable("topics", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -494,3 +550,30 @@ export const insertAgentAuditLogSchema = createInsertSchema(agentAuditLog).omit(
 
 export type InsertAgentAuditLog = z.infer<typeof insertAgentAuditLogSchema>;
 export type AgentAuditLog = typeof agentAuditLog.$inferSelect;
+
+// Editorial pipeline v2 types
+export const insertPipelineRunSchema = createInsertSchema(pipelineRuns).omit({
+  id: true,
+  startedAt: true,
+  completedAt: true,
+});
+
+export type InsertPipelineRun = z.infer<typeof insertPipelineRunSchema>;
+export type PipelineRun = typeof pipelineRuns.$inferSelect;
+
+export const insertPipelineStepSchema = createInsertSchema(pipelineSteps).omit({
+  id: true,
+  startedAt: true,
+  completedAt: true,
+});
+
+export type InsertPipelineStep = z.infer<typeof insertPipelineStepSchema>;
+export type PipelineStep = typeof pipelineSteps.$inferSelect;
+
+export const insertPipelineHandoffSchema = createInsertSchema(pipelineHandoffs).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPipelineHandoff = z.infer<typeof insertPipelineHandoffSchema>;
+export type PipelineHandoff = typeof pipelineHandoffs.$inferSelect;

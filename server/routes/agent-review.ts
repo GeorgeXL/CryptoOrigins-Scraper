@@ -6,6 +6,11 @@ import { requireAgentSecret } from "../services/agents-sdk/auth";
 import { isWikiOverseerPassRunning, startWikiOverseerPass, stopWikiOverseerPass } from "../services/agents-sdk/wiki-overseer-run";
 import { applyApprovedProposal } from "../services/agents-sdk/apply-approved-proposal";
 import type { ProposalAfterState } from "../services/agents-sdk/apply-approved-proposal";
+import {
+  getEditorialPipelineRun,
+  startEditorialPipelineRun,
+  stopEditorialPipelineRun,
+} from "../services/editorial-pipeline/run";
 
 const router = Router();
 
@@ -147,6 +152,62 @@ router.post("/api/agent/wiki-overseer/run", async (req, res) => {
     res.json({ ...out, status: "running" });
   } catch (e: any) {
     res.status(e.status || 500).json({ error: e.message || "Overseer run failed" });
+  }
+});
+
+router.post("/api/agent/pipeline/run", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const { dateFrom, dateTo, maxDaysToConsider } = req.body || {};
+    if (!dateFrom || !dateTo || typeof dateFrom !== "string" || typeof dateTo !== "string") {
+      return res.status(400).json({ error: "dateFrom and dateTo are required (YYYY-MM-DD)" });
+    }
+    if (!isIsoDate(dateFrom) || !isIsoDate(dateTo)) {
+      return res.status(400).json({ error: "Invalid date format" });
+    }
+    if (dateFrom > dateTo) {
+      return res.status(400).json({ error: "dateFrom must be <= dateTo" });
+    }
+
+    const out = await startEditorialPipelineRun({
+      dateFrom,
+      dateTo,
+      maxDaysToConsider: Number(maxDaysToConsider) || 60,
+      requestedBy: "admin-ui",
+    });
+
+    res.json({
+      ...out,
+      status: "running",
+      note: "Triage-first pipeline run started (existing search/summarization flows preserved).",
+    });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Pipeline run failed" });
+  }
+});
+
+router.get("/api/agent/pipeline/runs/:id", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const out = await getEditorialPipelineRun(req.params.id);
+    if (!out) return res.status(404).json({ error: "Run not found" });
+    res.json(out);
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to fetch pipeline run" });
+  }
+});
+
+router.post("/api/agent/pipeline/runs/:id/stop", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const id = req.params.id;
+    const stopped = stopEditorialPipelineRun(id);
+    if (!stopped) {
+      return res.status(409).json({ error: "Run is not active in this runtime", status: "not-stoppable" });
+    }
+    res.json({ success: true, status: "stopped" });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to stop pipeline run" });
   }
 });
 

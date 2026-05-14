@@ -48,6 +48,39 @@ type LiveSessionResponse = {
   }>;
 };
 
+type PipelineRunDetail = {
+  run: {
+    id: string;
+    status: string;
+    dateFrom: string;
+    dateTo: string;
+    model: string;
+    startedAt: string | null;
+    completedAt: string | null;
+    stats?: {
+      triageCount?: number;
+      routeCounts?: Record<string, number>;
+      managerNarrative?: string | null;
+      [k: string]: unknown;
+    };
+  };
+  steps: Array<{
+    id: string;
+    stepIndex: number;
+    agentName: string;
+    status: string;
+    output: unknown;
+  }>;
+  handoffs: Array<{
+    id: string;
+    fromAgent: string;
+    toAgent: string;
+    status: string;
+    payload: unknown;
+  }>;
+  live: { activeInThisRuntime: boolean };
+};
+
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -67,6 +100,10 @@ export default function AdminAgentsPage() {
   const [liveSession, setLiveSession] = useState<LiveSessionResponse | null>(null);
   const [liveLoading, setLiveLoading] = useState(false);
   const [approveExecuteById, setApproveExecuteById] = useState<Record<string, boolean>>({});
+  const [pipelineBusy, setPipelineBusy] = useState(false);
+  const [pipelineRunId, setPipelineRunId] = useState<string | null>(null);
+  const [pipelineDetail, setPipelineDetail] = useState<PipelineRunDetail | null>(null);
+  const [pipelineMaxDays, setPipelineMaxDays] = useState("60");
 
   const agentHeaders = (): HeadersInit => {
     const h: Record<string, string> = { "Content-Type": "application/json" };
@@ -177,6 +214,75 @@ export default function AdminAgentsPage() {
     }
   };
 
+  const runEditorialPipeline = async () => {
+    setPipelineBusy(true);
+    try {
+      const res = await fetch("/api/agent/pipeline/run", {
+        method: "POST",
+        headers: agentHeaders(),
+        body: JSON.stringify({
+          dateFrom,
+          dateTo,
+          maxDaysToConsider: Number(pipelineMaxDays) || 60,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setPipelineRunId(data.runId);
+      toast({
+        title: "Editorial pipeline started",
+        description: `Run ${data.runId}`,
+      });
+    } catch (e) {
+      toast({
+        title: "Pipeline run failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
+    } finally {
+      setPipelineBusy(false);
+    }
+  };
+
+  const loadPipelineRun = async (runId: string, opts?: { quiet?: boolean }) => {
+    try {
+      const res = await fetch(`/api/agent/pipeline/runs/${runId}`, { headers: agentHeaders() });
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as PipelineRunDetail;
+      setPipelineDetail(data);
+      if (data.run.status !== "running") {
+        await loadAgentQueue();
+      }
+    } catch (e) {
+      if (!opts?.quiet) {
+        toast({
+          title: "Pipeline run",
+          description: e instanceof Error ? e.message : "Failed to load run",
+          variant: "destructive",
+        });
+      }
+    }
+  };
+
+  const stopPipelineRun = async () => {
+    if (!pipelineRunId) return;
+    try {
+      const res = await fetch(`/api/agent/pipeline/runs/${pipelineRunId}/stop`, {
+        method: "POST",
+        headers: agentHeaders(),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast({ title: "Pipeline stop requested", description: pipelineRunId });
+      await loadPipelineRun(pipelineRunId);
+    } catch (e) {
+      toast({
+        title: "Pipeline stop failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
+    }
+  };
+
   const approveDecision = async (id: string) => {
     const execute = approveExecuteById[id] === true;
     try {
@@ -233,6 +339,15 @@ export default function AdminAgentsPage() {
     const t = window.setInterval(tick, 2000);
     return () => window.clearInterval(t);
   }, [activeSessionId]);
+
+  useEffect(() => {
+    if (!pipelineRunId) return;
+    void loadPipelineRun(pipelineRunId);
+    const t = window.setInterval(() => {
+      void loadPipelineRun(pipelineRunId, { quiet: true });
+    }, 2500);
+    return () => window.clearInterval(t);
+  }, [pipelineRunId]);
 
   return (
     <div className="space-y-6">
@@ -353,6 +468,91 @@ export default function AdminAgentsPage() {
               )}
             </div>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Editorial Pipeline (v2 preview)</CardTitle>
+          <CardDescription>
+            Triage-first rebuild path. Keeps your existing search and summarization flows in place while routing only days that need intervention.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-3xl">
+            <div className="grid gap-2">
+              <Label htmlFor="pipeline-max-days">maxDaysToConsider</Label>
+              <Input
+                id="pipeline-max-days"
+                value={pipelineMaxDays}
+                onChange={(e) => setPipelineMaxDays(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" onClick={() => void runEditorialPipeline()} disabled={pipelineBusy}>
+              {pipelineBusy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              Run pipeline (v2)
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              disabled={!pipelineRunId || pipelineDetail?.run.status !== "running"}
+              onClick={() => void stopPipelineRun()}
+            >
+              Stop pipeline run
+            </Button>
+            {pipelineRunId ? (
+              <Button type="button" size="sm" variant="outline" onClick={() => void loadPipelineRun(pipelineRunId)}>
+                Refresh run
+              </Button>
+            ) : null}
+          </div>
+
+          {pipelineDetail ? (
+            <div className="text-sm rounded-md border p-3 space-y-2">
+              <div>
+                <span className="font-medium">Run:</span> {pipelineDetail.run.id} ·{" "}
+                <span className="font-medium">Status:</span> {pipelineDetail.run.status}
+              </div>
+              <div className="text-muted-foreground">
+                Model: {pipelineDetail.run.model} · Triage items: {pipelineDetail.run.stats?.triageCount ?? 0}
+              </div>
+              {pipelineDetail.run.stats?.routeCounts ? (
+                <pre className="text-xs bg-muted p-2 rounded overflow-x-auto">
+                  {JSON.stringify(pipelineDetail.run.stats.routeCounts, null, 2)}
+                </pre>
+              ) : null}
+              {pipelineDetail.run.stats?.managerNarrative ? (
+                <p className="text-muted-foreground">{pipelineDetail.run.stats.managerNarrative}</p>
+              ) : null}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <div className="font-medium mb-1">Recent steps</div>
+                  <ul className="space-y-1 text-xs">
+                    {pipelineDetail.steps.slice(-8).map((s) => (
+                      <li key={s.id} className="border rounded p-2">
+                        #{s.stepIndex} {s.agentName} · {s.status}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <div className="font-medium mb-1">Recent handoffs</div>
+                  <ul className="space-y-1 text-xs">
+                    {pipelineDetail.handoffs.slice(0, 8).map((h) => (
+                      <li key={h.id} className="border rounded p-2">
+                        {h.fromAgent} → {h.toAgent} · {h.status}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No pipeline run started yet.</p>
+          )}
         </CardContent>
       </Card>
 
