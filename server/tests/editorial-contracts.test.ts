@@ -30,6 +30,21 @@ test("buildStepOutput accepts structured handoff", () => {
   assert.equal(out.handoff?.nextAgent, "VerificationAgent");
 });
 
+test("buildHandoffPayload accepts metadata object", () => {
+  const payload = buildHandoffPayload({
+    analysisId: "88888888-8888-4888-8888-888888888888",
+    date: "2024-01-01",
+    status: "needs_review",
+    confidence: 0.77,
+    nextAgent: "FinalEditorAgent",
+    metadata: {
+      route: "existing_ok",
+      sourceStepId: "abc",
+    },
+  });
+  assert.equal(payload.metadata.route, "existing_ok");
+});
+
 test("rejection schema enforces canonical action values", () => {
   assert.throws(
     () =>

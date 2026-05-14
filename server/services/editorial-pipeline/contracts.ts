@@ -54,7 +54,7 @@ export const handoffPayloadSchema = z.object({
   confidence: z.number().min(0).max(1),
   reason: z.string().optional(),
   nextAgent: pipelineAgentSchema.optional(),
-  metadata: z.record(z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).default({}),
 });
 
 export const stepOutputSchema = z.object({
