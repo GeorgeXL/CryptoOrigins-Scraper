@@ -3,17 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Bot,
-  CheckCircle2,
-  ListChecks,
-  Loader2,
-  Shield,
-  Sparkles,
-  Workflow,
-} from "lucide-react";
+import { Bot, CheckCircle2, Loader2, Sparkles, Workflow } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -23,45 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 
-type AgentDecisionRow = {
-  id: string;
-  sessionId: string;
-  module: string;
-  type: string;
-  targetType: string;
-  targetId: string | null;
-  confidence: string | null;
-  status: string;
-  beforeState: unknown;
-  afterState: unknown;
-  reasoning: string | null;
-  createdAt: string | null;
-};
-
-type LiveSessionResponse = {
-  session: {
-    id: string;
-    status: string;
-    startedAt: string | null;
-    completedAt: string | null;
-    issuesFlagged: number | null;
-    config: unknown;
-    stats: unknown;
-  };
-  live: {
-    isRunningInThisRuntime: boolean;
-    totalDecisions: number;
-    pendingDecisions: number;
-  };
-  recentDecisions: Array<{
-    id: string;
-    type: string;
-    module: string;
-    status: string;
-    reasoning: string | null;
-    createdAt: string | null;
-  }>;
-};
+const jsonHeaders: HeadersInit = { "Content-Type": "application/json" };
 
 type PipelineRunDetail = {
   run: {
@@ -127,19 +80,8 @@ function todayIso(): string {
 
 export default function AdminAgentsPage() {
   const { toast } = useToast();
-  const [agentSecret, setAgentSecret] = useState(() => import.meta.env.VITE_ADMIN_AGENT_SECRET || "");
   const [dateFrom, setDateFrom] = useState("2010-01-01");
   const [dateTo, setDateTo] = useState(todayIso);
-  const [maxDays, setMaxDays] = useState("7");
-  const [maxProposals, setMaxProposals] = useState("15");
-  const [agentDecisions, setAgentDecisions] = useState<AgentDecisionRow[]>([]);
-  const [agentLoading, setAgentLoading] = useState(false);
-  const [overseerBusy, setOverseerBusy] = useState(false);
-  const [lastRun, setLastRun] = useState<{ sessionId: string; status: string } | null>(null);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [liveSession, setLiveSession] = useState<LiveSessionResponse | null>(null);
-  const [liveLoading, setLiveLoading] = useState(false);
-  const [approveExecuteById, setApproveExecuteById] = useState<Record<string, boolean>>({});
   const [pipelineBusy, setPipelineBusy] = useState(false);
   const [pipelineRunId, setPipelineRunId] = useState<string | null>(null);
   const [pipelineDetail, setPipelineDetail] = useState<PipelineRunDetail | null>(null);
@@ -149,114 +91,56 @@ export default function AdminAgentsPage() {
   const [pipelineFilterStatus, setPipelineFilterStatus] = useState<string>("all");
   const [cutoverStatus, setCutoverStatus] = useState<CutoverStatus | null>(null);
   const [shadowValidation, setShadowValidation] = useState<Record<string, unknown> | null>(null);
-  const [activePane, setActivePane] = useState<"overview" | "wiki" | "pipeline" | "review" | "proposals">("overview");
-  const [showAuthInput, setShowAuthInput] = useState(false);
+  const [activePane, setActivePane] = useState<"overview" | "pipeline" | "review">("overview");
   const [showSystemGraph, setShowSystemGraph] = useState(false);
 
-  const agentHeaders = (): HeadersInit => {
-    const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (agentSecret.trim()) h["X-Admin-Agent-Secret"] = agentSecret.trim();
-    return h;
-  };
-
-  const loadAgentQueue = async () => {
-    setAgentLoading(true);
+  const loadPipelineRun = async (runId: string, opts?: { quiet?: boolean }) => {
     try {
-      const res = await fetch("/api/agent/decisions?status=pending&limit=100", { headers: agentHeaders() });
+      const res = await fetch(`/api/agent/pipeline/runs/${runId}`, { headers: jsonHeaders });
       if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setAgentDecisions(data.decisions || []);
-    } catch (e) {
-      toast({
-        title: "Agent queue",
-        description: e instanceof Error ? e.message : "Failed to load",
-        variant: "destructive",
-      });
-    } finally {
-      setAgentLoading(false);
-    }
-  };
-
-  const loadLiveSession = async (sessionId: string, opts?: { quiet?: boolean }) => {
-    if (!opts?.quiet) setLiveLoading(true);
-    try {
-      const res = await fetch(`/api/agent/sessions/${sessionId}`, { headers: agentHeaders() });
-      if (!res.ok) throw new Error(await res.text());
-      const data = (await res.json()) as LiveSessionResponse;
-      setLiveSession(data);
-      if (data.session.status === "completed" || data.session.status === "error" || data.session.status === "stopped") {
-        setLastRun({ sessionId: data.session.id, status: data.session.status });
-        setActiveSessionId(null);
-        await loadAgentQueue();
+      const data = (await res.json()) as PipelineRunDetail;
+      setPipelineDetail(data);
+      if (data.run.status !== "running") {
+        await loadReviewQueue();
       }
     } catch (e) {
       if (!opts?.quiet) {
         toast({
-          title: "Live session",
-          description: e instanceof Error ? e.message : "Failed to load",
+          title: "Pipeline run",
+          description: e instanceof Error ? e.message : "Failed to load run",
           variant: "destructive",
         });
       }
-    } finally {
-      if (!opts?.quiet) setLiveLoading(false);
     }
   };
 
-  const runOverseer = async () => {
-    setOverseerBusy(true);
-    setLastRun(null);
-    setLiveSession(null);
+  const loadReviewQueue = async () => {
+    setReviewLoading(true);
     try {
-      const res = await fetch("/api/agent/wiki-overseer/run", {
-        method: "POST",
-        headers: agentHeaders(),
-        body: JSON.stringify({
-          dateFrom,
-          dateTo,
-          maxDaysToConsider: Number(maxDays) || 7,
-          maxProposals: Number(maxProposals) || 15,
-        }),
-      });
+      const res = await fetch("/api/agent/pipeline/review?status=pending&limit=200", { headers: jsonHeaders });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      setLastRun({
-        sessionId: data.sessionId,
-        status: data.status || "running",
-      });
-      setActiveSessionId(data.sessionId);
-      toast({
-        title: "Wiki Overseer started",
-        description: `Session ${data.sessionId} is now running`,
-      });
-      await loadLiveSession(data.sessionId);
+      setReviewItems((data.items || []) as HumanReviewItem[]);
     } catch (e) {
       toast({
-        title: "Overseer run failed",
-        description: e instanceof Error ? e.message : "Error",
+        title: "Review queue",
+        description: e instanceof Error ? e.message : "Failed to load review items",
         variant: "destructive",
       });
     } finally {
-      setOverseerBusy(false);
+      setReviewLoading(false);
     }
   };
 
-  const stopOverseer = async () => {
-    if (!activeSessionId) return;
+  const loadCutoverStatus = async () => {
     try {
-      const res = await fetch(`/api/agent/sessions/${activeSessionId}/stop`, {
-        method: "POST",
-        headers: agentHeaders(),
-      });
+      const res = await fetch("/api/agent/pipeline/cutover-status", { headers: jsonHeaders });
       if (!res.ok) throw new Error(await res.text());
-      toast({
-        title: "Stop requested",
-        description: `Session ${activeSessionId} was stopped`,
-      });
-      await loadLiveSession(activeSessionId);
+      setCutoverStatus((await res.json()) as CutoverStatus);
     } catch (e) {
       toast({
-        title: "Stop failed",
-        description: e instanceof Error ? e.message : "Error",
+        title: "Cutover status",
+        description: e instanceof Error ? e.message : "Failed to load",
         variant: "destructive",
       });
     }
@@ -267,7 +151,7 @@ export default function AdminAgentsPage() {
     try {
       const res = await fetch("/api/agent/pipeline/run", {
         method: "POST",
-        headers: agentHeaders(),
+        headers: jsonHeaders,
         body: JSON.stringify({
           dateFrom,
           dateTo,
@@ -292,49 +176,11 @@ export default function AdminAgentsPage() {
     }
   };
 
-  const loadPipelineRun = async (runId: string, opts?: { quiet?: boolean }) => {
-    try {
-      const res = await fetch(`/api/agent/pipeline/runs/${runId}`, { headers: agentHeaders() });
-      if (!res.ok) throw new Error(await res.text());
-      const data = (await res.json()) as PipelineRunDetail;
-      setPipelineDetail(data);
-      if (data.run.status !== "running") {
-        await loadAgentQueue();
-      }
-    } catch (e) {
-      if (!opts?.quiet) {
-        toast({
-          title: "Pipeline run",
-          description: e instanceof Error ? e.message : "Failed to load run",
-          variant: "destructive",
-        });
-      }
-    }
-  };
-
-  const loadReviewQueue = async () => {
-    setReviewLoading(true);
-    try {
-      const res = await fetch("/api/agent/pipeline/review?status=pending&limit=200", { headers: agentHeaders() });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setReviewItems((data.items || []) as HumanReviewItem[]);
-    } catch (e) {
-      toast({
-        title: "Review queue",
-        description: e instanceof Error ? e.message : "Failed to load review items",
-        variant: "destructive",
-      });
-    } finally {
-      setReviewLoading(false);
-    }
-  };
-
   const approveReviewItem = async (id: string) => {
     try {
       const res = await fetch(`/api/agent/pipeline/review/${id}/approve`, {
         method: "POST",
-        headers: agentHeaders(),
+        headers: jsonHeaders,
         body: JSON.stringify({ reviewer: "admin-ui" }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -353,7 +199,7 @@ export default function AdminAgentsPage() {
     try {
       const res = await fetch(`/api/agent/pipeline/review/${id}/reject`, {
         method: "POST",
-        headers: agentHeaders(),
+        headers: jsonHeaders,
         body: JSON.stringify({ reviewer: "admin-ui" }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -368,25 +214,11 @@ export default function AdminAgentsPage() {
     }
   };
 
-  const loadCutoverStatus = async () => {
-    try {
-      const res = await fetch("/api/agent/pipeline/cutover-status", { headers: agentHeaders() });
-      if (!res.ok) throw new Error(await res.text());
-      setCutoverStatus((await res.json()) as CutoverStatus);
-    } catch (e) {
-      toast({
-        title: "Cutover status",
-        description: e instanceof Error ? e.message : "Failed to load",
-        variant: "destructive",
-      });
-    }
-  };
-
   const runShadowValidation = async () => {
     try {
       const res = await fetch("/api/agent/pipeline/shadow-validate", {
         method: "POST",
-        headers: agentHeaders(),
+        headers: jsonHeaders,
         body: JSON.stringify({
           dateFrom,
           dateTo,
@@ -410,7 +242,7 @@ export default function AdminAgentsPage() {
     try {
       const res = await fetch(`/api/agent/pipeline/runs/${pipelineRunId}/stop`, {
         method: "POST",
-        headers: agentHeaders(),
+        headers: jsonHeaders,
       });
       if (!res.ok) throw new Error(await res.text());
       toast({ title: "Pipeline stop requested", description: pipelineRunId });
@@ -429,7 +261,7 @@ export default function AdminAgentsPage() {
     try {
       const res = await fetch(`/api/agent/pipeline/runs/${pipelineRunId}/pause`, {
         method: "POST",
-        headers: agentHeaders(),
+        headers: jsonHeaders,
       });
       if (!res.ok) throw new Error(await res.text());
       toast({ title: "Pipeline paused", description: pipelineRunId });
@@ -448,7 +280,7 @@ export default function AdminAgentsPage() {
     try {
       const res = await fetch(`/api/agent/pipeline/runs/${pipelineRunId}/resume`, {
         method: "POST",
-        headers: agentHeaders(),
+        headers: jsonHeaders,
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -463,64 +295,10 @@ export default function AdminAgentsPage() {
     }
   };
 
-  const approveDecision = async (id: string) => {
-    const execute = approveExecuteById[id] === true;
-    try {
-      const res = await fetch(`/api/agent/decisions/${id}/approve`, {
-        method: "POST",
-        headers: agentHeaders(),
-        body: JSON.stringify({ reviewer: "admin-ui", execute }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      toast({
-        title: "Approved",
-        description: data.execution?.message || "OK",
-      });
-      await loadAgentQueue();
-    } catch (e) {
-      toast({
-        title: "Approve failed",
-        description: e instanceof Error ? e.message : "Error",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const rejectDecision = async (id: string) => {
-    try {
-      const res = await fetch(`/api/agent/decisions/${id}/reject`, {
-        method: "POST",
-        headers: agentHeaders(),
-        body: JSON.stringify({ reviewer: "admin-ui" }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      toast({ title: "Rejected" });
-      await loadAgentQueue();
-    } catch (e) {
-      toast({
-        title: "Reject failed",
-        description: e instanceof Error ? e.message : "Error",
-        variant: "destructive",
-      });
-    }
-  };
-
   useEffect(() => {
-    void loadAgentQueue();
     void loadReviewQueue();
     void loadCutoverStatus();
   }, []);
-
-  useEffect(() => {
-    if (!activeSessionId) return;
-    const tick = () => {
-      void loadLiveSession(activeSessionId, { quiet: true });
-    };
-    tick();
-    const t = window.setInterval(tick, 2000);
-    return () => window.clearInterval(t);
-  }, [activeSessionId]);
 
   useEffect(() => {
     if (!pipelineRunId) return;
@@ -539,7 +317,7 @@ export default function AdminAgentsPage() {
         <div>
           <h1 className="text-3xl font-bold text-foreground">Admin agents</h1>
           <p className="text-muted-foreground mt-1">
-            Clean operator console for Wiki Overseer, Editorial Pipeline, and review queues.
+            Editorial pipeline (v2): run triage, inspect steps, approve work in human review.
           </p>
         </div>
         <Button type="button" variant="secondary" onClick={() => setShowSystemGraph(true)}>
@@ -552,46 +330,18 @@ export default function AdminAgentsPage() {
         <Card className="h-fit">
           <CardHeader>
             <CardTitle className="text-base">Navigation</CardTitle>
-            <CardDescription>Choose a workspace area</CardDescription>
+            <CardDescription>Pipeline and review</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
             <Button variant={activePane === "overview" ? "default" : "outline"} className="w-full justify-start" onClick={() => setActivePane("overview")}>
               <Bot className="w-4 h-4 mr-2" /> Overview
             </Button>
-            <Button variant={activePane === "wiki" ? "default" : "outline"} className="w-full justify-start" onClick={() => setActivePane("wiki")}>
-              <Workflow className="w-4 h-4 mr-2" /> Wiki Overseer
-            </Button>
             <Button variant={activePane === "pipeline" ? "default" : "outline"} className="w-full justify-start" onClick={() => setActivePane("pipeline")}>
-              <Workflow className="w-4 h-4 mr-2" /> Pipeline v2
+              <Workflow className="w-4 h-4 mr-2" /> Pipeline
             </Button>
             <Button variant={activePane === "review" ? "default" : "outline"} className="w-full justify-start" onClick={() => setActivePane("review")}>
-              <CheckCircle2 className="w-4 h-4 mr-2" /> Human review
+              <CheckCircle2 className="w-4 h-4 mr-2" /> Human review ({reviewItems.length})
             </Button>
-            <Button variant={activePane === "proposals" ? "default" : "outline"} className="w-full justify-start" onClick={() => setActivePane("proposals")}>
-              <ListChecks className="w-4 h-4 mr-2" /> Pending proposals ({agentDecisions.length})
-            </Button>
-
-            <div className="pt-3 border-t space-y-2">
-              <Button type="button" size="sm" variant="ghost" className="w-full justify-start" onClick={() => setShowAuthInput((v) => !v)}>
-                <Shield className="w-4 h-4 mr-2" />
-                {showAuthInput ? "Hide auth override" : "Show auth override"}
-              </Button>
-              {showAuthInput ? (
-                <div className="space-y-2">
-                  <Label htmlFor="agent-secret" className="text-xs text-muted-foreground">
-                    Request auth header (only needed if API returns 401)
-                  </Label>
-                  <Input
-                    id="agent-secret"
-                    type="password"
-                    autoComplete="off"
-                    placeholder="Paste ADMIN_AGENT_SECRET value"
-                    value={agentSecret}
-                    onChange={(e) => setAgentSecret(e.target.value)}
-                  />
-                </div>
-              ) : null}
-            </div>
           </CardContent>
         </Card>
 
@@ -600,106 +350,21 @@ export default function AdminAgentsPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Overview</CardTitle>
-                <CardDescription>Fast status snapshot for all agent surfaces</CardDescription>
+                <CardDescription>Queue depth and configuration snapshot</CardDescription>
               </CardHeader>
               <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
                 <div className="rounded border p-3">
-                  <div className="text-muted-foreground">Pending proposals</div>
-                  <div className="text-2xl font-semibold">{agentDecisions.length}</div>
-                </div>
-                <div className="rounded border p-3">
-                  <div className="text-muted-foreground">Pipeline review items</div>
+                  <div className="text-muted-foreground">Pending human review</div>
                   <div className="text-2xl font-semibold">{reviewItems.length}</div>
                 </div>
                 <div className="rounded border p-3">
-                  <div className="text-muted-foreground">Cutover model</div>
-                  <div className="font-semibold">{cutoverStatus?.defaultModel ?? "loading..."}</div>
+                  <div className="text-muted-foreground">Active run</div>
+                  <div className="font-semibold break-all">{pipelineRunId ?? "—"}</div>
                 </div>
-              </CardContent>
-            </Card>
-          ) : null}
-
-          {activePane === "wiki" ? (
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <Bot className="w-5 h-5" />
-                  <CardTitle>Wiki Overseer</CardTitle>
+                <div className="rounded border p-3">
+                  <div className="text-muted-foreground">Default model</div>
+                  <div className="font-semibold">{cutoverStatus?.defaultModel ?? "loading…"}</div>
                 </div>
-                <CardDescription>
-                  Uses existing Agents SDK route. Date range + proposal budget controls.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-4xl">
-                  <div className="grid gap-2">
-                    <Label htmlFor="df">dateFrom</Label>
-                    <Input id="df" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="dt">dateTo</Label>
-                    <Input id="dt" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="md">maxDaysToConsider</Label>
-                    <Input id="md" value={maxDays} onChange={(e) => setMaxDays(e.target.value)} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="mp">maxProposals</Label>
-                    <Input id="mp" value={maxProposals} onChange={(e) => setMaxProposals(e.target.value)} />
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="secondary" size="sm" onClick={() => void loadAgentQueue()} disabled={agentLoading}>
-                    {agentLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Refresh queue"}
-                  </Button>
-                  <Button type="button" variant="default" size="sm" disabled={overseerBusy} onClick={() => void runOverseer()}>
-                    {overseerBusy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                    Run Wiki Overseer
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="sm"
-                    disabled={!activeSessionId || liveSession?.session.status !== "running"}
-                    onClick={() => void stopOverseer()}
-                  >
-                    Stop run
-                  </Button>
-                </div>
-                {lastRun ? (
-                  <div className="text-sm space-y-1 rounded-md border p-3 bg-muted/40">
-                    <div>
-                      <span className="font-medium">Last session:</span> {lastRun.sessionId}
-                    </div>
-                    <div>
-                      <span className="font-medium">Status:</span> {lastRun.status}
-                    </div>
-                  </div>
-                ) : null}
-                {activeSessionId || liveSession ? (
-                  <div className="text-sm space-y-2 rounded-md border p-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-medium">Live session:</span> {liveSession?.session.id ?? activeSessionId}
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => void (activeSessionId ? loadLiveSession(activeSessionId) : Promise.resolve())}
-                        disabled={liveLoading || !activeSessionId}
-                      >
-                        {liveLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Refresh live"}
-                      </Button>
-                    </div>
-                    <div className="text-muted-foreground">
-                      Status: <strong>{liveSession?.session.status ?? "loading..."}</strong> · Pending proposals:{" "}
-                      <strong>{liveSession?.live.pendingDecisions ?? 0}</strong> · Total proposals:{" "}
-                      <strong>{liveSession?.live.totalDecisions ?? 0}</strong>
-                    </div>
-                  </div>
-                ) : null}
               </CardContent>
             </Card>
           ) : null}
@@ -707,26 +372,28 @@ export default function AdminAgentsPage() {
           {activePane === "pipeline" ? (
             <Card>
               <CardHeader>
-                <CardTitle>Editorial Pipeline (v2)</CardTitle>
-                <CardDescription>
-                  Triage-first run controls and per-agent trace output.
-                </CardDescription>
+                <CardTitle>Editorial pipeline</CardTitle>
+                <CardDescription>Triage-first run: set the window, cap days processed, then run or validate.</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-3xl">
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-4xl">
                   <div className="grid gap-2">
-                    <Label htmlFor="pipeline-max-days">maxDaysToConsider</Label>
-                    <Input
-                      id="pipeline-max-days"
-                      value={pipelineMaxDays}
-                      onChange={(e) => setPipelineMaxDays(e.target.value)}
-                    />
+                    <Label htmlFor="df">Start date</Label>
+                    <Input id="df" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="dt">End date</Label>
+                    <Input id="dt" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="pipeline-max-days">Max days to consider</Label>
+                    <Input id="pipeline-max-days" value={pipelineMaxDays} onChange={(e) => setPipelineMaxDays(e.target.value)} />
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" size="sm" onClick={() => void runEditorialPipeline()} disabled={pipelineBusy}>
                     {pipelineBusy ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                    Run pipeline (v2)
+                    Run pipeline
                   </Button>
                   <Button
                     type="button"
@@ -735,7 +402,7 @@ export default function AdminAgentsPage() {
                     disabled={!pipelineRunId || pipelineDetail?.run.status !== "running"}
                     onClick={() => void stopPipelineRun()}
                   >
-                    Stop pipeline run
+                    Stop run
                   </Button>
                   <Button
                     type="button"
@@ -744,7 +411,7 @@ export default function AdminAgentsPage() {
                     disabled={!pipelineRunId || pipelineDetail?.run.status !== "running"}
                     onClick={() => void pausePipelineRun()}
                   >
-                    Pause run
+                    Pause
                   </Button>
                   <Button
                     type="button"
@@ -753,7 +420,7 @@ export default function AdminAgentsPage() {
                     disabled={!pipelineRunId || pipelineDetail?.run.status !== "paused"}
                     onClick={() => void resumePipelineRun()}
                   >
-                    Resume run
+                    Resume
                   </Button>
                   {pipelineRunId ? (
                     <Button type="button" size="sm" variant="outline" onClick={() => void loadPipelineRun(pipelineRunId)}>
@@ -761,7 +428,7 @@ export default function AdminAgentsPage() {
                     </Button>
                   ) : null}
                   <Button type="button" size="sm" variant="outline" onClick={() => void runShadowValidation()}>
-                    Run shadow validation
+                    Shadow validation
                   </Button>
                 </div>
 
@@ -797,16 +464,16 @@ export default function AdminAgentsPage() {
                             .filter((s) => (pipelineFilterStatus === "all" ? true : s.status === pipelineFilterStatus))
                             .slice(-12)
                             .map((s) => (
-                            <li key={s.id} className="border rounded p-2">
-                              <div className="font-medium">
-                                #{s.stepIndex} {s.agentName} · {s.status}
-                                {s.confidence ? ` · conf ${s.confidence}` : ""}
-                              </div>
-                              <pre className="mt-1 bg-muted rounded p-2 overflow-x-auto">
-                                {JSON.stringify(s.output ?? {}, null, 2)}
-                              </pre>
-                            </li>
-                          ))}
+                              <li key={s.id} className="border rounded p-2">
+                                <div className="font-medium">
+                                  #{s.stepIndex} {s.agentName} · {s.status}
+                                  {s.confidence ? ` · conf ${s.confidence}` : ""}
+                                </div>
+                                <pre className="mt-1 bg-muted rounded p-2 overflow-x-auto">
+                                  {JSON.stringify(s.output ?? {}, null, 2)}
+                                </pre>
+                              </li>
+                            ))}
                         </ul>
                       </div>
                       <div>
@@ -836,9 +503,9 @@ export default function AdminAgentsPage() {
                 ) : null}
                 {cutoverStatus ? (
                   <div className="text-xs text-muted-foreground rounded border p-2">
-                    Cutover checks: model {cutoverStatus.defaultModel} · feature flag{" "}
-                    {cutoverStatus.featureFlagEnabled ? "enabled" : "disabled"} · human approval{" "}
-                    {cutoverStatus.requiredHumanApproval ? "required" : "disabled"}
+                    Cutover: model {cutoverStatus.defaultModel} · feature flag{" "}
+                    {cutoverStatus.featureFlagEnabled ? "on" : "off"} · human approval{" "}
+                    {cutoverStatus.requiredHumanApproval ? "required" : "off"}
                   </div>
                 ) : null}
               </CardContent>
@@ -849,12 +516,12 @@ export default function AdminAgentsPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Human review queue</CardTitle>
-                <CardDescription>Approve or reject queued pipeline packages</CardDescription>
+                <CardDescription>Approve or reject packages before writes are applied.</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="flex gap-2 mb-3">
                   <Button type="button" size="sm" variant="outline" onClick={() => void loadReviewQueue()} disabled={reviewLoading}>
-                    {reviewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Refresh review queue"}
+                    {reviewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Refresh queue"}
                   </Button>
                 </div>
                 <ScrollArea className="h-[min(520px,60vh)] rounded-md border p-3">
@@ -879,63 +546,6 @@ export default function AdminAgentsPage() {
                           </div>
                           <pre className="bg-muted rounded p-2 overflow-x-auto">
                             {JSON.stringify(item.package ?? {}, null, 2)}
-                          </pre>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </ScrollArea>
-              </CardContent>
-            </Card>
-          ) : null}
-
-          {activePane === "proposals" ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Pending proposals</CardTitle>
-                <CardDescription>
-                  Queue from existing Wiki Overseer path (approve/reject, optional execute).
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ScrollArea className="h-[min(520px,60vh)] rounded-md border p-3">
-                  {agentDecisions.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No pending proposals.</p>
-                  ) : (
-                    <ul className="space-y-4">
-                      {agentDecisions.map((d) => (
-                        <li key={d.id} className="border-b pb-3 last:border-0 text-sm space-y-2">
-                          <div className="flex flex-wrap gap-2 justify-between items-start">
-                            <div>
-                              <div className="font-medium">
-                                {d.module} · {d.type}
-                              </div>
-                              <div className="text-muted-foreground text-xs">id {d.id}</div>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <div className="flex items-center gap-2 mr-2">
-                                <Checkbox
-                                  id={`exec-${d.id}`}
-                                  checked={approveExecuteById[d.id] === true}
-                                  onCheckedChange={(v) =>
-                                    setApproveExecuteById((prev) => ({ ...prev, [d.id]: v === true }))
-                                  }
-                                />
-                                <Label htmlFor={`exec-${d.id}`} className="text-xs font-normal cursor-pointer">
-                                  Execute on approve
-                                </Label>
-                              </div>
-                              <Button size="sm" variant="default" onClick={() => void approveDecision(d.id)}>
-                                Approve
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={() => void rejectDecision(d.id)}>
-                                Reject
-                              </Button>
-                            </div>
-                          </div>
-                          {d.reasoning ? <p className="text-muted-foreground whitespace-pre-wrap">{d.reasoning}</p> : null}
-                          <pre className="text-xs bg-muted p-2 rounded overflow-x-auto max-h-32">
-                            {JSON.stringify({ before: d.beforeState, after: d.afterState }, null, 2)}
                           </pre>
                         </li>
                       ))}

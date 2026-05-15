@@ -157,17 +157,6 @@ async function verifyTestResults() {
   console.log(`   Tag Links: ${statsRow.link_count}`);
   console.log(`   Misc Tags: ${statsRow.misc_tags} (should be minimal)`);
 
-  // Check for agent session
-  const sessionCheck = await db.execute(sql`
-    SELECT COUNT(*) as count
-    FROM agent_sessions
-    WHERE config->>'useTestTables' = 'true'
-  `);
-
-  if (parseInt(sessionCheck.rows[0].count) > 0) {
-    console.log('\n✅ Agent session found in test mode');
-  }
-
   return {
     passed: passedCount === totalCount,
     results,

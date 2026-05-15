@@ -217,75 +217,6 @@ export const subcategoryLabels = pgTable("subcategory_labels", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-// Agent sessions table - tracks each agent run
-export const agentSessions = pgTable("agent_sessions", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  status: text("status").notNull().default("running"), // 'running', 'paused', 'completed', 'stopped', 'error'
-  currentPass: integer("current_pass").notNull().default(1),
-  maxPasses: integer("max_passes").notNull().default(10),
-  issuesFixed: integer("issues_fixed").notNull().default(0),
-  issuesFlagged: integer("issues_flagged").notNull().default(0),
-  totalCost: numeric("total_cost", { precision: 10, scale: 4 }).default("0"),
-  qualityScore: numeric("quality_score", { precision: 5, scale: 2 }),
-  startedAt: timestamp("started_at").defaultNow(),
-  completedAt: timestamp("completed_at"),
-  config: jsonb("config"), // Session configuration
-  stats: jsonb("stats"), // Detailed statistics per module
-}, (table) => ({
-  statusIdx: index("idx_agent_sessions_status").on(table.status),
-  startedAtIdx: index("idx_agent_sessions_started_at").on(table.startedAt),
-}));
-
-// Agent decisions table - tracks all decisions made by the agent
-export const agentDecisions = pgTable("agent_decisions", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  sessionId: uuid("session_id").notNull().references(() => agentSessions.id, { onDelete: "cascade" }),
-  passNumber: integer("pass_number").notNull(),
-  module: text("module").notNull(), // 'validator', 'deduper', 'gap-filler', etc.
-  type: text("type").notNull(), // 'remove_tag', 'merge_news', 'fill_gap', 'recategorize', etc.
-  targetType: text("target_type").notNull(), // 'tag', 'news', 'both'
-  targetId: text("target_id"), // ID of affected record
-  confidence: numeric("confidence", { precision: 5, scale: 2 }).notNull(),
-  status: text("status").notNull().default("pending"), // 'pending', 'approved', 'rejected', 'auto-approved'
-  beforeState: jsonb("before_state"), // State before change
-  afterState: jsonb("after_state"), // State after change
-  reasoning: text("reasoning"), // AI reasoning for the decision
-  sources: jsonb("sources"), // Source citations
-  cost: numeric("cost", { precision: 10, scale: 4 }),
-  approvedBy: text("approved_by"), // 'auto', 'user', or user_id
-  approvedAt: timestamp("approved_at"),
-  createdAt: timestamp("created_at").defaultNow(),
-}, (table) => ({
-  sessionIdx: index("idx_agent_decisions_session").on(table.sessionId),
-  moduleIdx: index("idx_agent_decisions_module").on(table.module),
-  statusIdx: index("idx_agent_decisions_status").on(table.status),
-  confidenceIdx: index("idx_agent_decisions_confidence").on(table.confidence),
-}));
-
-// Agent audit log - comprehensive log of ALL agent actions
-export const agentAuditLog = pgTable("agent_audit_log", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  sessionId: uuid("session_id").notNull().references(() => agentSessions.id, { onDelete: "cascade" }),
-  passNumber: integer("pass_number").notNull(),
-  module: text("module").notNull(),
-  action: text("action").notNull(), // 'update', 'insert', 'delete', 'merge'
-  targetType: text("target_type").notNull(),
-  targetId: text("target_id"),
-  beforeValue: jsonb("before_value"),
-  afterValue: jsonb("after_value"),
-  reasoning: text("reasoning"),
-  confidence: numeric("confidence", { precision: 5, scale: 2 }),
-  cost: numeric("cost", { precision: 10, scale: 4 }),
-  durationMs: integer("duration_ms"),
-  approvedBy: text("approved_by"),
-  createdAt: timestamp("created_at").defaultNow(),
-}, (table) => ({
-  sessionIdx: index("idx_agent_audit_session").on(table.sessionId),
-  moduleIdx: index("idx_agent_audit_module").on(table.module),
-  actionIdx: index("idx_agent_audit_action").on(table.action),
-  createdAtIdx: index("idx_agent_audit_created_at").on(table.createdAt),
-}));
-
 // Editorial pipeline runs (v2) - orchestrator level lifecycle
 export const pipelineRuns = pgTable("pipeline_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -593,33 +524,6 @@ export const insertPagesAndTagsSchema = createInsertSchema(pagesAndTags).omit({
 
 export type InsertPagesAndTags = z.infer<typeof insertPagesAndTagsSchema>;
 export type PagesAndTags = typeof pagesAndTags.$inferSelect;
-
-// Agent types
-export const insertAgentSessionSchema = createInsertSchema(agentSessions).omit({
-  id: true,
-  startedAt: true,
-  completedAt: true,
-});
-
-export type InsertAgentSession = z.infer<typeof insertAgentSessionSchema>;
-export type AgentSession = typeof agentSessions.$inferSelect;
-
-export const insertAgentDecisionSchema = createInsertSchema(agentDecisions).omit({
-  id: true,
-  createdAt: true,
-  approvedAt: true,
-});
-
-export type InsertAgentDecision = z.infer<typeof insertAgentDecisionSchema>;
-export type AgentDecision = typeof agentDecisions.$inferSelect;
-
-export const insertAgentAuditLogSchema = createInsertSchema(agentAuditLog).omit({
-  id: true,
-  createdAt: true,
-});
-
-export type InsertAgentAuditLog = z.infer<typeof insertAgentAuditLogSchema>;
-export type AgentAuditLog = typeof agentAuditLog.$inferSelect;
 
 // Editorial pipeline v2 types
 export const insertPipelineRunSchema = createInsertSchema(pipelineRuns).omit({
