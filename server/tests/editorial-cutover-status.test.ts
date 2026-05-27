@@ -7,6 +7,8 @@ test("cutover status exposes required safety flags", () => {
   assert.equal(typeof status.featureFlagEnabled, "boolean");
   assert.equal(status.requiredHumanApproval, true);
   assert.equal(typeof status.defaultModel, "string");
+  assert.equal(typeof status.shortCircuitOnReject, "boolean");
   assert.equal(status.cutoverReadyChecks.humanApprovalGatePresent, true);
   assert.equal(status.cutoverReadyChecks.parallelModeOnly, true);
+  assert.equal(typeof status.cutoverReadyChecks.shortCircuitOnReject, "boolean");
 });

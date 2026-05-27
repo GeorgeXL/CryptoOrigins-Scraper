@@ -21,8 +21,10 @@ import { entityExtractor } from "../services/entity-extractor";
 import { sql } from "drizzle-orm";
 import { aiService } from "../services/ai";
 import { duplicateDetector } from "../services/duplicate-detector";
+import OpenAI from "openai";
 
 const router = Router();
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 router.post("/api/manual-entries", async (req, res) => {
   try {
@@ -418,7 +420,7 @@ Return a comprehensive analysis with:
 - Strategic reasoning about the cluster`;
 
     // Call OpenAI with structured output for holistic analysis
-    const openaiResponse = await aiService.openai.chat.completions.create({
+    const openaiResponse = await openai.chat.completions.create({
       messages: [
         { role: 'system', content: 'You are a Bitcoin news analyst performing strategic cluster analysis. Provide holistic recommendations.' },
         { role: 'user', content: prompt }
@@ -528,7 +530,7 @@ For example:
 
 Return groups of dates that overlap. Keep the first date in each group, mark others as duplicates.`;
 
-    const overlapResponse = await aiService.openai.chat.completions.create({
+    const overlapResponse = await openai.chat.completions.create({
       messages: [
         { role: 'system', content: 'You are a Bitcoin news analyst detecting duplicate coverage.' },
         { role: 'user', content: overlapPrompt }
@@ -676,7 +678,7 @@ TASK: Select the BEST article that:
 Return the article ID and explain why it doesn't overlap.`;
 
         try {
-          const suggestionResponse = await aiService.openai.chat.completions.create({
+          const suggestionResponse = await openai.chat.completions.create({
             messages: [
               { role: 'system', content: 'You are a Bitcoin news analyst selecting non-overlapping coverage.' },
               { role: 'user', content: suggestionPrompt }

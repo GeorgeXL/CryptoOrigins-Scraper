@@ -21,7 +21,19 @@ function Calendar({
         months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",
         month: "space-y-4",
         caption: "flex justify-center pt-1 relative items-center",
-        caption_label: "text-sm font-medium",
+        /** Visually hidden (react-day-picker puts "Month:" / full caption here for a11y). Requires styles when not importing rdp/style.css. */
+        vhidden: "sr-only",
+        /** Dropdown caption layout — mirrors rdp/style.css so native <select> overlays the visible label. */
+        caption_dropdowns: "flex justify-center gap-2",
+        dropdown:
+          "absolute inset-0 z-20 h-full w-full cursor-pointer appearance-none border-0 bg-transparent p-0 opacity-0",
+        dropdown_month:
+          "relative inline-flex h-8 min-w-[5.75rem] items-center justify-center rounded-md border border-input bg-background px-2 text-sm text-foreground shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background",
+        dropdown_year:
+          "relative inline-flex h-8 min-w-[4.25rem] items-center justify-center rounded-md border border-input bg-background px-2 text-sm text-foreground shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background",
+        dropdown_icon: "ml-0.5 size-3 shrink-0 text-muted-foreground",
+        caption_label:
+          "relative z-[1] inline-flex items-center text-sm font-medium text-foreground",
         nav: "space-x-1 flex items-center",
         nav_button: cn(
           buttonVariants({ variant: "outline" }),

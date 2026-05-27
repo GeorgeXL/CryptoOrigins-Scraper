@@ -30,7 +30,10 @@ export class UnifiedAiService {
     
     // Fallback logic for default provider
     if (!this.providers.has('openai') && this.providers.size > 0) {
-      this.defaultProvider = this.providers.keys().next().value;
+      const firstProviderType = this.providers.keys().next().value;
+      if (firstProviderType) {
+        this.defaultProvider = firstProviderType;
+      }
     }
   }
 
@@ -42,8 +45,10 @@ export class UnifiedAiService {
       // Fallback to any available provider
       if (this.providers.size > 0) {
         const fallback = this.providers.values().next().value;
-        console.warn(`Provider ${targetType} not available, falling back to ${fallback.getName()}`);
-        return fallback;
+        if (fallback) {
+          console.warn(`Provider ${targetType} not available, falling back to ${fallback.getName()}`);
+          return fallback;
+        }
       }
       throw new Error(`No AI providers available. Requested: ${targetType}`);
     }
@@ -62,7 +67,6 @@ export class UnifiedAiService {
 }
 
 export const aiService = UnifiedAiService.getInstance();
-
 
 
 

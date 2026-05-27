@@ -60,6 +60,7 @@ export const historicalNewsAnalyses = pgTable("historical_news_analyses", {
   reVerificationWinner: text("re_verification_winner"), // 'original', 'corrected' - which date had better coverage
   tags: jsonb("tags"), // Array of extracted entities: [{name: "Bitcoin", category: "crypto"}, {name: "Tesla", category: "company"}]
   tagsVersion2: text("tags_version2").array(), // Simple array of tag names: ["Elon Musk", "Obama", "NFT", "Bitcoin"]
+  suppressedTagSuggestions: text("suppressed_tag_suggestions").array(), // Operator-declined proposed tags for this date
 }, (table) => ({
   // Critical indexes for performance
   dateIdx: index("idx_historical_news_date").on(table.date),
@@ -499,10 +500,12 @@ export const insertEventConflictSchema = createInsertSchema(eventConflicts).omit
 export type InsertEventConflict = z.infer<typeof insertEventConflictSchema>;
 export type EventConflict = typeof eventConflicts.$inferSelect;
 
-export const insertTagMetadataSchema = createInsertSchema(tagMetadata).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
+export const insertTagMetadataSchema = z.object({
+  name: z.string(),
+  category: z.string(),
+  parentTagId: z.string().uuid().nullable().optional(),
+  normalizedName: z.string().nullable().optional(),
+  usageCount: z.number().nullable().optional(),
 });
 
 export type InsertTagMetadata = z.infer<typeof insertTagMetadataSchema>;

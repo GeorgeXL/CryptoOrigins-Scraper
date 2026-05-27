@@ -280,7 +280,7 @@ export function AnalysesTable({
                 </Button>
               )}
             </div>
-            {(bulkActions.actions?.length > 0 || bulkActions.customActions || bulkActions.onClearSelection || (onDateDeselect && selectedDates.size > 0)) && (
+            {((bulkActions.actions?.length ?? 0) > 0 || bulkActions.customActions || bulkActions.onClearSelection || (onDateDeselect && selectedDates.size > 0)) && (
               <div className="flex items-center space-x-2">
                 {bulkActions.actions?.map((action, index) => (
                   <Button
@@ -474,4 +474,3 @@ export function AnalysesTable({
     </div>
   );
 }
-

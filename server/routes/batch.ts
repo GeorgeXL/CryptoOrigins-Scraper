@@ -20,6 +20,17 @@ import { perplexityCleaner } from "../services/perplexity-cleaner";
 import { entityExtractor } from "../services/entity-extractor";
 import { sql } from "drizzle-orm";
 import { aiService } from "../services/ai";
+import type { IAiProvider } from "../services/ai/types";
+
+type EventSummaryProvider = IAiProvider & Required<Pick<IAiProvider, "evaluateEventSummary" | "enhanceEventSummary">>;
+
+function getEventSummaryProvider(): EventSummaryProvider {
+  const provider = aiService.getProvider("openai");
+  if (!provider.evaluateEventSummary || !provider.enhanceEventSummary) {
+    throw new Error("OpenAI event summary helpers are not available");
+  }
+  return provider as EventSummaryProvider;
+}
 
 // Utility function to parse date strings from Perplexity
 // Note: All 1,025 existing Perplexity dates are already in YYYY-MM-DD format
@@ -130,7 +141,8 @@ router.post('/api/event-cockpit/enhance/:eventId', async (req, res) => {
     
     // Always evaluate - even if previously enhanced, user wants fresh AI assessment
     const currentSummary = event.enhancedSummary || event.originalSummary;
-    const evaluation = await aiService.evaluateEventSummary(currentSummary, event.originalDate, event.originalGroup);
+    const eventSummaryProvider = getEventSummaryProvider();
+    const evaluation = await eventSummaryProvider.evaluateEventSummary(currentSummary, event.originalDate, event.originalGroup);
     
     if (!evaluation.needsEnhancement) {
       // Mark as enhanced but keep original summary
@@ -151,7 +163,7 @@ router.post('/api/event-cockpit/enhance/:eventId', async (req, res) => {
     }
     
     // Enhance the summary
-    const enhanced = await aiService.enhanceEventSummary(event.originalSummary, event.originalDate, event.originalGroup);
+    const enhanced = await eventSummaryProvider.enhanceEventSummary(event.originalSummary, event.originalDate, event.originalGroup);
     
     // Update the event with enhanced summary
     const updatedEvent = await storage.updateBatchEvent(eventId, {
@@ -206,7 +218,8 @@ router.post('/api/event-cockpit/enhance-batch', async (req, res) => {
         console.log(`🤖 Evaluating event ${eventId} from ${event.originalDate}`);
         
         // Evaluate and enhance the event
-        const evaluation = await aiService.evaluateEventSummary(event.originalSummary, event.originalDate, event.originalGroup);
+        const eventSummaryProvider = getEventSummaryProvider();
+        const evaluation = await eventSummaryProvider.evaluateEventSummary(event.originalSummary, event.originalDate, event.originalGroup);
         
         if (!evaluation.needsEnhancement) {
           // Mark as enhanced but keep original
@@ -219,7 +232,7 @@ router.post('/api/event-cockpit/enhance-batch', async (req, res) => {
           console.log(`✅ Event ${eventId} already perfect`);
         } else {
           // Enhance the summary
-          const enhanced_result = await aiService.enhanceEventSummary(event.originalSummary, event.originalDate, event.originalGroup);
+          const enhanced_result = await eventSummaryProvider.enhanceEventSummary(event.originalSummary, event.originalDate, event.originalGroup);
           
           await storage.updateBatchEvent(eventId, {
             enhancedSummary: enhanced_result.summary,

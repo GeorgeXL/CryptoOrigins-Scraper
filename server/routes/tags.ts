@@ -18,7 +18,7 @@ import { batchProcessor } from "../services/batch-processor";
 import { conflictClusterer } from "../services/conflict-clusterer";
 import { perplexityCleaner } from "../services/perplexity-cleaner";
 import { entityExtractor } from "../services/entity-extractor";
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { aiService } from "../services/ai";
 import { db } from "../db";
 import { findSimilarTags, calculateSimilarity, normalizeTagName } from "../services/tag-similarity";
@@ -624,8 +624,8 @@ router.get("/api/tags/catalog", async (req, res) => {
       `);
     }
     
-    const data = result.rows[0];
-    let entitiesByCategory = data.entities_by_category || {};
+    const data = result.rows[0] as any;
+    let entitiesByCategory: Record<string, any[]> = data.entities_by_category || {};
     
     // Apply hierarchy transformation: reorganize currencies into subcategories
     const { tagMetadata } = await import("@shared/schema");
@@ -926,7 +926,7 @@ router.get("/api/tags/catalog-v2", async (req, res) => {
       `);
     }
     
-    const data = result.rows[0];
+    const data = result.rows[0] as any;
     
     const response = {
       tags: data.tags || [],
@@ -1266,7 +1266,7 @@ router.get("/api/tags/analyses", async (req, res) => {
     if (manualOnly === 'true') {
       // Check cache first (30 second TTL for manual-only queries)
       const manualCacheKey = 'tags:analyses:manual';
-      const cachedManual = cacheManager.get(manualCacheKey);
+      const cachedManual = cacheManager.get<HistoricalNewsAnalysis[]>(manualCacheKey);
       if (cachedManual) {
         console.log(`📊 Using cached manual analyses (${cachedManual.length} items)`);
         allAnalyses = cachedManual;
@@ -1286,7 +1286,7 @@ router.get("/api/tags/analyses", async (req, res) => {
     } else {
       // Check cache first (30 second TTL for base dataset)
       const baseCacheKey = 'tags:analyses:all';
-      const cached = cacheManager.get(baseCacheKey);
+      const cached = cacheManager.get<HistoricalNewsAnalysis[]>(baseCacheKey);
       if (cached) {
         console.log(`📊 Using cached analyses (${cached.length} items)`);
         allAnalyses = cached;

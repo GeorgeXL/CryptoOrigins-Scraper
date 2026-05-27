@@ -5,6 +5,8 @@ import { storage } from '../storage';
 import type { ArticleData, TieredArticles, InsertHistoricalNewsAnalysis } from '@shared/schema';
 import { z } from 'zod';
 
+const LEGACY_ANALYSIS_OPENAI_MODEL = 'gpt-5.4-mini';
+
 export interface AnalysisModeResult {
   summary: string;
   topArticleId: string;
@@ -65,14 +67,17 @@ export async function analyzeDay(options: AnalysisModeOptions): Promise<Analysis
   const [bitcoinArticles, cryptoArticles, macroArticles] = await Promise.all([
     hierarchicalSearch.searchBitcoinTier(date, {
       ...requestContext,
+      requestId,
       source: `${requestContext?.source || 'UNKNOWN'}-ANALYSE-DAY-BITCOIN`
     }),
     hierarchicalSearch.searchCryptoTier(date, {
       ...requestContext,
+      requestId,
       source: `${requestContext?.source || 'UNKNOWN'}-ANALYSE-DAY-CRYPTO`
     }),
     hierarchicalSearch.searchMacroTier(date, {
       ...requestContext,
+      requestId,
       source: `${requestContext?.source || 'UNKNOWN'}-ANALYSE-DAY-MACRO`
     })
   ]);
@@ -449,7 +454,7 @@ Return JSON:
     
     const result = await openaiProvider.generateJson<{ isSignificant: boolean; topArticleId: string | null; reasoning: string }>({
       prompt,
-      model: 'gpt-4o-mini',
+      model: LEGACY_ANALYSIS_OPENAI_MODEL,
       temperature: 0.2,
       maxTokens: 500,
       schema: validationSchema
@@ -522,7 +527,7 @@ IMPORTANT: After writing your summary, count the characters. If it's not between
     
     let summaryResult = await openaiProvider.generateCompletion({
       prompt: summaryPrompt,
-      model: 'gpt-4o-mini',
+      model: LEGACY_ANALYSIS_OPENAI_MODEL,
       maxTokens: 150,
       temperature: 0.2,
       context: 'summary-generation',
@@ -549,7 +554,7 @@ Return ONLY the expanded summary text (100-110 chars), nothing else.`;
         
         const adjusted = await openaiProvider.generateCompletion({
           prompt: adjustPrompt,
-          model: 'gpt-4o-mini',
+          model: LEGACY_ANALYSIS_OPENAI_MODEL,
           maxTokens: 150,
           temperature: 0.2,
           context: 'summary-adjustment',
@@ -568,7 +573,7 @@ Return ONLY the shortened summary text (100-110 chars), nothing else.`;
         
         const adjusted = await openaiProvider.generateCompletion({
           prompt: adjustPrompt,
-          model: 'gpt-4o-mini',
+          model: LEGACY_ANALYSIS_OPENAI_MODEL,
           maxTokens: 150,
           temperature: 0.2,
           context: 'summary-adjustment',
@@ -591,12 +596,16 @@ Return ONLY the shortened summary text (100-110 chars), nothing else.`;
       throw new Error(`Summary generation failed for ${date} - OpenAI returned empty summary`);
     }
     
-    // Warn if still outside range but use it anyway
+    // Final validation: summary length is a hard cleanup gate.
     if (length < 100 || length > 110) {
-      console.warn(`⚠️ [${requestId}] Summary length ${length} chars is outside 100-110 range, but using it anyway: "${finalSummary.substring(0, 50)}..."`);
-    } else {
-      console.log(`✅ [${requestId}] Summary generated successfully: ${length} chars`);
+      apiMonitor.updateRequest(summaryRequestId, {
+        status: 'error',
+        error: `Summary length ${length} chars is outside 100-110 range`
+      });
+      throw new Error(`Summary generation failed for ${date} - final summary length ${length} is outside 100-110`);
     }
+
+    console.log(`✅ [${requestId}] Summary generated successfully: ${length} chars`);
     
     apiMonitor.updateRequest(summaryRequestId, {
       status: 'success'
@@ -674,7 +683,7 @@ Format: "id"`;
   try {
     const result = await openaiProvider.generateCompletion({
       prompt,
-      model: 'gpt-4o-mini',
+      model: LEGACY_ANALYSIS_OPENAI_MODEL,
       maxTokens: 50,
       temperature: 0.2
     });
@@ -694,4 +703,3 @@ Format: "id"`;
     throw error;
   }
 }
-

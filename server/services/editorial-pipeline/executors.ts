@@ -1,6 +1,21 @@
+import OpenAI from "openai";
+import { z } from "zod";
 import { buildStepOutput, type PipelineAgentName, type TriageItem } from "./contracts";
-import { getExistingDay, getExistingVerificationSignals, runExistingSearchAndSummaryForDate } from "./tools";
+import { getModelForAgent } from "./model-config";
+import {
+  detectCanonicalDateMismatch,
+  evaluateTagConsistency,
+  getEditorialDuplicateNeighborContext,
+  getExistingDay,
+  getExistingVerificationSignals,
+  getDayTaxonomy,
+  getTagCoverageForDate,
+  topicLabelsFromRow,
+  runExistingSearchAndSummaryForDate,
+  type TaxonomyDuplicateNeighbor,
+} from "./tools";
 import { detectMilestoneGapsInWindow } from "./milestones";
+import { evaluateSummaryQuality, isEditorialSummaryWeak, isValidPipelineTopArticleId } from "./editorial-quality";
 
 export type ExecutorContext = {
   runId: string;
@@ -16,14 +31,103 @@ export type ExecutorResult = {
 
 type AgentExecutor = (ctx: ExecutorContext) => Promise<ExecutorResult>;
 
-const noop: AgentExecutor = async (ctx) => ({
+const dateConsistencyVerdictSchema = z.object({
+  plausible: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  issues: z.array(z.string()).max(12).default([]),
+  /** If set to another YYYY-MM-DD, focal copy likely belongs on that neighbor day (taxonomy overlap). */
+  duplicateOfDate: z
+    .union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.null()])
+    .optional(),
+});
+
+function parseDateConsistencyVerdict(raw: string): z.infer<typeof dateConsistencyVerdictSchema> | null {
+  let text = raw.trim();
+  const fence = text.match(/^```(?:json)?\s*([\s\S]*?)```$/im);
+  if (fence) text = fence[1].trim();
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const r = dateConsistencyVerdictSchema.safeParse(parsed);
+    return r.success ? r.data : null;
+  } catch {
+    return null;
+  }
+}
+
+const newsManagerAgent: AgentExecutor = async (ctx) => ({
   status: "completed",
   confidence: ctx.triageItem.confidence,
   output: buildStepOutput({
-    summary: `${ctx.triageItem.date}: no-op placeholder executor`,
-    findings: ["Executor scaffolding active"],
+    summary: "Triage routed the day into the editorial cleanup chain",
+    findings: [
+      `Route=${ctx.triageItem.route}`,
+      `Required checks=${ctx.triageItem.requiredAgents.filter((agent) => agent !== "NewsManager").join(" -> ")}`,
+      ...ctx.triageItem.reasons.slice(0, 5),
+    ],
+    handoff: {
+      analysisId: ctx.triageItem.analysisId,
+      date: ctx.triageItem.date,
+      status: "needs_review",
+      confidence: ctx.triageItem.confidence,
+      reason: ctx.triageItem.reasons.join("; "),
+      nextAgent: ctx.triageItem.requiredAgents.find((agent) => agent !== "NewsManager"),
+      metadata: {
+        route: ctx.triageItem.route,
+        requiredAgents: ctx.triageItem.requiredAgents,
+      },
+    },
   }),
 });
+
+const relevanceCheckerAgent: AgentExecutor = async (ctx) => {
+  const existing = await getExistingDay(ctx.triageItem.date);
+  if (!existing) {
+    return {
+      status: "skipped",
+      confidence: 0.5,
+      output: buildStepOutput({
+        summary: "No persisted day yet for relevance validation",
+        findings: ["SourceFinder must produce a candidate before relevance can be checked."],
+      }),
+    };
+  }
+
+  const summaryIssue = evaluateSummaryQuality(existing.summary);
+  const validArticle = isValidPipelineTopArticleId(existing.topArticleId);
+  if (summaryIssue || !validArticle) {
+    return {
+      status: "rejected",
+      confidence: 0.66,
+      output: buildStepOutput({
+        summary: "Candidate event is not ready for relevance approval",
+        findings: [
+          summaryIssue?.message ?? "Summary length/content passed",
+          validArticle ? "Winning article id is present" : "Winning article id is missing or placeholder",
+        ],
+        rejection: {
+          status: "rejected",
+          agent: "RelevanceCheckerAgent",
+          reason: summaryIssue?.message ?? "No valid winning article for relevance check",
+          confidence: 0.66,
+          suggestedAction: "retry_with_new_source",
+          returnTo: "NewsManager",
+        },
+      }),
+    };
+  }
+
+  return {
+    status: "completed",
+    confidence: 0.82,
+    output: buildStepOutput({
+      summary: "Candidate event has a usable article and editorial summary",
+      findings: [
+        `top_article_id=${existing.topArticleId}`,
+        `summary chars=${existing.summary.length}`,
+      ],
+    }),
+  };
+};
 
 const milestoneAgent: AgentExecutor = async (ctx) => {
   const gaps = await detectMilestoneGapsInWindow(ctx.triageItem.date, ctx.triageItem.date);
@@ -56,6 +160,23 @@ const sourceFinderAgent: AgentExecutor = async (ctx) => {
   }
 
   const discovered = await runExistingSearchAndSummaryForDate(ctx.triageItem.date);
+  if (isEditorialSummaryWeak(discovered.summary)) {
+    return {
+      status: "rejected",
+      confidence: 0.55,
+      output: buildStepOutput({
+        rejection: {
+          status: "rejected",
+          agent: "SourceFinderAgent",
+          reason:
+            "Summary is still missing, too short, or a failure placeholder after the search/summarize pass — cannot treat this day as ready.",
+          confidence: 0.55,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+    };
+  }
   return {
     status: "completed",
     confidence: Math.min(0.99, Math.max(0.4, discovered.confidenceScore / 100)),
@@ -72,6 +193,17 @@ const sourceFinderAgent: AgentExecutor = async (ctx) => {
     },
   };
 };
+
+function verificationAgreementPercent(signals: {
+  factCheckConfidence: string | null;
+  perplexityConfidence: string | null;
+  confidenceScore: string | null;
+}): number {
+  const raw = signals.factCheckConfidence ?? signals.perplexityConfidence ?? signals.confidenceScore;
+  if (raw == null) return 70;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 70;
+}
 
 const verificationAgent: AgentExecutor = async (ctx) => {
   const signals = await getExistingVerificationSignals(ctx.triageItem.date);
@@ -91,14 +223,17 @@ const verificationAgent: AgentExecutor = async (ctx) => {
       }),
     };
   }
+  const pct = verificationAgreementPercent(signals);
   return {
     status: "completed",
-    confidence: Number(signals.agreementScore ?? 70) / 100,
+    confidence: Math.min(1, Math.max(0, pct / 100)),
     output: buildStepOutput({
       summary: "Verification pass completed from existing verification signals",
       findings: [
-        `verificationStatus=${signals.verificationStatus ?? "unknown"}`,
         `factCheckVerdict=${signals.factCheckVerdict ?? "unknown"}`,
+        `perplexityVerdict=${signals.perplexityVerdict ?? "unknown"}`,
+        `geminiApproved=${signals.geminiApproved === null ? "unknown" : String(signals.geminiApproved)}`,
+        `perplexityApproved=${signals.perplexityApproved === null ? "unknown" : String(signals.perplexityApproved)}`,
       ],
     }),
   };
@@ -122,6 +257,38 @@ const summaryAgent: AgentExecutor = async (ctx) => {
       }),
     };
   }
+  if (isEditorialSummaryWeak(existing.summary)) {
+    return {
+      status: "rejected",
+      confidence: 0.62,
+      output: buildStepOutput({
+        rejection: {
+          status: "rejected",
+          agent: "SummaryAgent",
+          reason: "Persisted summary is still too short or a failure placeholder",
+          confidence: 0.62,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+    };
+  }
+  if (!isValidPipelineTopArticleId(existing.topArticleId)) {
+    return {
+      status: "rejected",
+      confidence: 0.62,
+      output: buildStepOutput({
+        rejection: {
+          status: "rejected",
+          agent: "SummaryAgent",
+          reason: "No valid winning article (top_article_id) on this day",
+          confidence: 0.62,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+    };
+  }
   return {
     status: "completed",
     confidence: 0.82,
@@ -134,35 +301,594 @@ const summaryAgent: AgentExecutor = async (ctx) => {
   };
 };
 
-const finalEditorAgent: AgentExecutor = async (ctx) => ({
-  status: "completed",
-  confidence: 0.88,
-  output: buildStepOutput({
-    summary: "Final editor assembled package for human review queue",
-    findings: [`Route=${ctx.triageItem.route}`, "Human approval required before write"],
-    handoff: {
-      analysisId: ctx.triageItem.analysisId,
-      date: ctx.triageItem.date,
-      status: "needs_review",
+const topicManagerAgent: AgentExecutor = async (ctx) => {
+  const cov = await getTagCoverageForDate(ctx.triageItem.date);
+  if (!cov) {
+    return {
+      status: "skipped",
+      confidence: 0.5,
+      output: buildStepOutput({
+        summary: "No analysis row for topic review",
+        findings: ["Missing historical_news_analyses row for this date"],
+      }),
+    };
+  }
+  const gaps: string[] = [];
+  if (cov.topicCategoriesCount === 0) gaps.push("topic_categories is empty");
+  if (cov.tagsVersion2Count === 0 && cov.legacyTagsCount === 0) gaps.push("No topic labels on the analysis row");
+  return {
+    status: "completed",
+    confidence: gaps.length ? 0.45 : 0.85,
+    output: buildStepOutput({
+      summary:
+        gaps.length ?
+          "Topic metadata missing — add categories in your admin / analysis flow"
+        : "Topic categories present on row",
+      findings: gaps.length ? gaps : [`topic_categories entries: ${cov.topicCategoriesCount}`],
+    }),
+    evidence: { ...cov },
+  };
+};
+
+function isStrongTaxonomyNearDuplicate(n: TaxonomyDuplicateNeighbor): boolean {
+  const j = n.tokenJaccard;
+  const st = n.sharedTags.length;
+  const sp = n.sharedTopics.length;
+  if (j >= 0.92 && st >= 1) return true;
+  if (j >= 0.84 && st >= 2) return true;
+  if (j >= 0.8 && st >= 2 && sp >= 1) return true;
+  if (j >= 0.76 && st >= 3) return true;
+  return false;
+}
+
+const duplicateCheckerAgent: AgentExecutor = async (ctx) => {
+  if (!ctx.triageItem.analysisId) {
+    return {
+      status: "skipped",
       confidence: 0.88,
-      nextAgent: "NewsManager",
-      reason: "Mandatory human gate",
+      output: buildStepOutput({
+        summary: "Duplicate check skipped — no analysis id",
+        findings: ["DuplicateCheckerAgent expects a persisted analysis row"],
+      }),
+    };
+  }
+
+  const context = await getEditorialDuplicateNeighborContext({
+    date: ctx.triageItem.date,
+    analysisId: ctx.triageItem.analysisId,
+  });
+
+  if (!context) {
+    return {
+      status: "skipped",
+      confidence: 0.85,
+      output: buildStepOutput({
+        summary: "No focal analysis row for taxonomy duplicate scan",
+        findings: ["Missing or mismatched historical_news_analyses row"],
+      }),
+    };
+  }
+
+  const strong = context.neighbors.find(isStrongTaxonomyNearDuplicate);
+  if (strong) {
+    return {
+      status: "rejected",
+      confidence: 0.88,
+      output: buildStepOutput({
+        summary: "Near-duplicate of another calendar day (tags/topics + summary similarity)",
+        findings: [
+          `Strong overlap with ${strong.date}: shared_tags=[${strong.sharedTags.slice(0, 8).join(", ")}] token_jaccard=${strong.tokenJaccard}`,
+        ],
+        rejection: {
+          status: "rejected",
+          agent: "DuplicateCheckerAgent",
+          reason: `Summary closely matches ${strong.date} with overlapping taxonomy — likely wrong calendar slot`,
+          confidence: 0.88,
+          suggestedAction: "merge_existing",
+          returnTo: "NewsManager",
+        },
+      }),
+      evidence: {
+        neighborDate: strong.date,
+        tokenJaccard: strong.tokenJaccard,
+        sharedTags: strong.sharedTags,
+        sharedTopics: strong.sharedTopics,
+        suggestedDate: strong.date,
+      },
+    };
+  }
+
+  const findings =
+    context.neighbors.length === 0 ?
+      ["No taxonomy-overlap neighbors in the calendar window with meaningful summary similarity"]
+    : context.neighbors.slice(0, 5).map(
+        (n) =>
+          `neighbor ${n.date}: jaccard=${n.tokenJaccard} tags=${n.sharedTags.slice(0, 4).join("|") || "—"} topics=${n.sharedTopics.slice(0, 3).join("|") || "—"}`
+      );
+
+  return {
+    status: "completed",
+    confidence: context.neighbors.length ? 0.74 : 0.9,
+    output: buildStepOutput({
+      summary:
+        context.neighbors.length ?
+          "Taxonomy-aware duplicate scan — overlapping neighbor days listed for review"
+        : "No weighted taxonomy neighbors in window",
+      findings,
+    }),
+    evidence: {
+      focalTags: context.focalTags,
+      focalTopics: context.focalTopics,
+      topNeighbors: context.neighbors.slice(0, 8),
     },
-  }),
-});
+  };
+};
+
+const tagManagerAgent: AgentExecutor = async (ctx) => {
+  const cov = await getTagCoverageForDate(ctx.triageItem.date);
+  if (!cov) {
+    return {
+      status: "skipped",
+      confidence: 0.5,
+      output: buildStepOutput({
+        summary: "No analysis row for tag review",
+        findings: ["Missing historical_news_analyses row for this date"],
+      }),
+    };
+  }
+  const gaps: string[] = [];
+  if (cov.pagesAndTagsCount === 0) gaps.push("pages_and_tags has no links for this page");
+  if (cov.tagsVersion2Count === 0) gaps.push("tags_version2 is empty");
+  return {
+    status: "completed",
+    confidence: cov.pagesAndTagsCount > 0 ? 0.88 : 0.42,
+    output: buildStepOutput({
+      summary:
+        cov.pagesAndTagsCount > 0 ?
+          "Normalized tag links exist"
+        : "No normalized tag links yet — use Tags admin or migrate-to-normalized-tags tooling",
+      findings:
+        cov.pagesAndTagsCount > 0 ?
+          [`pages_and_tags rows: ${cov.pagesAndTagsCount}`, `tags_version2 count: ${cov.tagsVersion2Count}`]
+        : gaps,
+    }),
+    evidence: { ...cov },
+  };
+};
+
+const topicApplierAgent: AgentExecutor = async (ctx) => {
+  const cov = await getTagCoverageForDate(ctx.triageItem.date);
+  if (!cov) {
+    return {
+      status: "skipped",
+      confidence: 0.5,
+      output: buildStepOutput({
+        summary: "No analysis row for topic application check",
+        findings: ["TopicApplierAgent expects a persisted analysis row"],
+      }),
+    };
+  }
+
+  if (cov.topicCategoriesCount === 0) {
+    return {
+      status: "rejected",
+      confidence: 0.6,
+      output: buildStepOutput({
+        summary: "Topic application is incomplete",
+        findings: ["topic_categories is empty"],
+        rejection: {
+          status: "rejected",
+          agent: "TopicApplierAgent",
+          reason: "No topic category has been applied to this day",
+          confidence: 0.6,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+      evidence: { ...cov },
+    };
+  }
+
+  return {
+    status: "completed",
+    confidence: 0.86,
+    output: buildStepOutput({
+      summary: "Topic application confirmed",
+      findings: [`topic_categories entries: ${cov.topicCategoriesCount}`],
+    }),
+    evidence: { ...cov },
+  };
+};
+
+const tagApplierAgent: AgentExecutor = async (ctx) => {
+  const cov = await getTagCoverageForDate(ctx.triageItem.date);
+  if (!cov) {
+    return {
+      status: "skipped",
+      confidence: 0.5,
+      output: buildStepOutput({
+        summary: "No analysis row for tag application check",
+        findings: ["TagApplierAgent expects a persisted analysis row"],
+      }),
+    };
+  }
+
+  const hasAppliedTags = cov.tagsVersion2Count > 0 || cov.pagesAndTagsCount > 0;
+  if (!hasAppliedTags) {
+    return {
+      status: "rejected",
+      confidence: 0.6,
+      output: buildStepOutput({
+        summary: "Tag application is incomplete",
+        findings: ["No tags_version2 values or normalized pages_and_tags links exist"],
+        rejection: {
+          status: "rejected",
+          agent: "TagApplierAgent",
+          reason: "No tag has been applied to this day",
+          confidence: 0.6,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+      evidence: { ...cov },
+    };
+  }
+
+  return {
+    status: "completed",
+    confidence: cov.pagesAndTagsCount > 0 ? 0.88 : 0.78,
+    output: buildStepOutput({
+      summary: "Tag application confirmed",
+      findings: [
+        `tags_version2 count=${cov.tagsVersion2Count}`,
+        `pages_and_tags rows=${cov.pagesAndTagsCount}`,
+      ],
+    }),
+    evidence: { ...cov },
+  };
+};
+
+const finalEditorAgent: AgentExecutor = async (ctx) => {
+  const existing = await getExistingDay(ctx.triageItem.date);
+  if (!existing) {
+    return {
+      status: "rejected",
+      confidence: 0.55,
+      output: buildStepOutput({
+        rejection: {
+          status: "rejected",
+          agent: "FinalEditorAgent",
+          reason: "No persisted analysis row for final gate",
+          confidence: 0.55,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+    };
+  }
+  if (isEditorialSummaryWeak(existing.summary) || !isValidPipelineTopArticleId(existing.topArticleId)) {
+    return {
+      status: "rejected",
+      confidence: 0.72,
+      output: buildStepOutput({
+        rejection: {
+          status: "rejected",
+          agent: "FinalEditorAgent",
+          reason:
+            "Day is not publishable yet (summary too weak / failure text, or no winning article). Fix on the day page before human approval.",
+          confidence: 0.72,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+    };
+  }
+  return {
+    status: "completed",
+    confidence: 0.88,
+    output: buildStepOutput({
+      summary: "Final editor assembled package for human review queue",
+      findings: [`Route=${ctx.triageItem.route}`, "Human approval required before write"],
+      handoff: {
+        analysisId: ctx.triageItem.analysisId,
+        date: ctx.triageItem.date,
+        status: "needs_review",
+        confidence: 0.88,
+        nextAgent: "NewsManager",
+        reason: "Mandatory human gate",
+      },
+    }),
+  };
+};
+
+const dateConsistencyAgent: AgentExecutor = async (ctx) => {
+  if (!ctx.triageItem.analysisId) {
+    return {
+      status: "skipped",
+      confidence: 0.9,
+      output: buildStepOutput({
+        summary: "No analysis id — cannot load summary for date check",
+        findings: ["DateConsistencyAgent expects a persisted analysis row"],
+      }),
+    };
+  }
+
+  const existing = await getExistingDay(ctx.triageItem.date);
+  if (!existing || existing.id !== ctx.triageItem.analysisId) {
+    return {
+      status: "skipped",
+      confidence: 0.85,
+      output: buildStepOutput({
+        summary: "Analysis row missing or triage id mismatch — skipping date check",
+        findings: ["Expected historical_news_analyses row matching triage analysisId"],
+      }),
+    };
+  }
+
+  const summary = String(existing.summary ?? "").trim();
+  if (summary.length < 20) {
+    return {
+      status: "completed",
+      confidence: 0.55,
+      output: buildStepOutput({
+        summary: "Summary too short for reliable calendar anchoring",
+        findings: ["Skipped strict date check for very short summary"],
+      }),
+    };
+  }
+
+  const canonicalMismatch = detectCanonicalDateMismatch(summary, ctx.triageItem.date);
+  if (canonicalMismatch) {
+    return {
+      status: "rejected",
+      confidence: 0.9,
+      output: buildStepOutput({
+        summary: "Summary matches a known canonical date, not this day",
+        findings: [canonicalMismatch.reason],
+        rejection: {
+          status: "rejected",
+          agent: "DateConsistencyAgent",
+          reason: canonicalMismatch.reason,
+          confidence: 0.9,
+          suggestedAction: "merge_existing",
+          returnTo: "NewsManager",
+        },
+      }),
+      evidence: {
+        canonicalDate: canonicalMismatch.expectedDate,
+        suggestedDate: canonicalMismatch.expectedDate,
+        canonicalRule: canonicalMismatch.ruleId,
+      },
+    };
+  }
+
+  if (!process.env.OPENAI_API_KEY?.trim()) {
+    return {
+      status: "skipped",
+      confidence: 1,
+      output: buildStepOutput({
+        summary: "Date consistency check skipped (OPENAI_API_KEY not set)",
+        findings: ["Set OPENAI_API_KEY to enable calendar-vs-summary verification without reading sources"],
+      }),
+    };
+  }
+
+  const dupContext =
+    (await getEditorialDuplicateNeighborContext({
+      date: ctx.triageItem.date,
+      analysisId: ctx.triageItem.analysisId,
+    })) ?? { focalTags: [], focalTopics: [], focalSummaryPreview: "", neighbors: [] as TaxonomyDuplicateNeighbor[] };
+
+  const system = `You verify whether a short "day in history" summary plausibly belongs on a given calendar date.
+You do NOT have access to source articles — use only public knowledge, the focal summary, focal tags/topics, and the taxonomy_neighbors list (other days' summaries are short previews only; same DB metadata editors see).
+1) Calendar fit: set plausible=false when the narrative clearly anchors a different famous calendar date (wrong year/month/day) than calendar_date.
+2) Wrong-slot / duplicate: when taxonomy_neighbors shows another date that shares tags/topics with the focal row and the neighbor_summary_preview reads like the SAME story that is historically tied to that neighbor date (not the focal date), set plausible=false and duplicateOfDate to that neighbor's date (YYYY-MM-DD). If overlap is coincidental (e.g. generic "Bitcoin rally" on many days), keep plausible=true and duplicateOfDate=null.
+3) Otherwise plausible=true.
+Return JSON only: {"plausible":boolean,"confidence":number between 0 and 1,"issues":string[],"duplicateOfDate":string YYYY-MM-DD or null}. Omit duplicateOfDate or use null when not a duplicate.`;
+
+  const userPayload = JSON.stringify({
+    calendar_date: ctx.triageItem.date,
+    summary,
+    focal_tags: dupContext.focalTags,
+    focal_topics: dupContext.focalTopics,
+    taxonomy_neighbors: dupContext.neighbors.map((n) => ({
+      date: n.date,
+      shared_tags: n.sharedTags,
+      shared_topics: n.sharedTopics,
+      token_jaccard: n.tokenJaccard,
+      neighbor_summary_preview: n.summaryPreview,
+    })),
+  });
+
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  let verdict: z.infer<typeof dateConsistencyVerdictSchema> | null = null;
+  try {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const completion = await openai.chat.completions.create({
+        model: getModelForAgent("DateConsistencyAgent"),
+        temperature: 0.05,
+        max_completion_tokens: 720,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          {
+            role: "user",
+            content:
+              userPayload +
+              (attempt === 2 ?
+                "\n\nYour previous reply was not valid JSON with plausible, confidence, issues, and duplicateOfDate (YYYY-MM-DD or null). Reply with ONLY valid JSON."
+              : ""),
+          },
+        ],
+      });
+      const content = completion.choices[0]?.message?.content ?? "";
+      verdict = parseDateConsistencyVerdict(content);
+      if (verdict) break;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      status: "error",
+      confidence: 0.5,
+      output: buildStepOutput({
+        summary: "Date consistency OpenAI request failed",
+        findings: [msg.slice(0, 240)],
+      }),
+    };
+  }
+
+  if (!verdict) {
+    return {
+      status: "rejected",
+      confidence: 0.72,
+      output: buildStepOutput({
+        summary: "Could not parse date-consistency verdict from model output",
+        findings: ["parse_failed"],
+        rejection: {
+          status: "rejected",
+          agent: "DateConsistencyAgent",
+          reason: "Model returned unusable JSON for calendar-vs-summary check",
+          confidence: 0.72,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+    };
+  }
+
+  const dupDate = verdict.duplicateOfDate;
+  const duplicateMismatch =
+    typeof dupDate === "string" && dupDate.length === 10 && dupDate !== ctx.triageItem.date;
+  const effectivePlausible = verdict.plausible && !duplicateMismatch;
+  const mergedIssues = [...verdict.issues];
+  if (duplicateMismatch) {
+    const hint = `Taxonomy neighbor ${dupDate} may be the canonical home for this story`;
+    if (!mergedIssues.some((x) => x.includes(dupDate))) mergedIssues.push(hint);
+  }
+
+  if (!effectivePlausible) {
+    return {
+      status: "rejected",
+      confidence: verdict.confidence,
+      output: buildStepOutput({
+        summary: duplicateMismatch
+          ? "Summary likely misplaced or duplicate of another tagged day"
+          : "Summary does not plausibly match the calendar date (no-source check)",
+        findings: mergedIssues.length ? mergedIssues : ["Model flagged calendar or duplicate mismatch"],
+        rejection: {
+          status: "rejected",
+          agent: "DateConsistencyAgent",
+          reason: mergedIssues[0] || "Summary appears anchored to a different date than the page",
+          confidence: verdict.confidence,
+          suggestedAction: duplicateMismatch ? "merge_existing" : "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+      evidence: {
+        calendar_date: ctx.triageItem.date,
+        verdict,
+        duplicateOfDate: dupDate ?? null,
+        suggestedDate: duplicateMismatch ? dupDate : null,
+      },
+    };
+  }
+
+  return {
+    status: "completed",
+    confidence: verdict.confidence,
+    output: buildStepOutput({
+      summary: "Calendar date, taxonomy neighbors, and summary appear consistent (no-source check)",
+      findings: mergedIssues.length ? mergedIssues : ["No strong calendar or duplicate mismatch detected"],
+    }),
+    evidence: { calendar_date: ctx.triageItem.date, verdict },
+  };
+};
+
+const tagConsistencyAgent: AgentExecutor = async (ctx) => {
+  if (!ctx.triageItem.analysisId) {
+    return {
+      status: "skipped",
+      confidence: 0.9,
+      output: buildStepOutput({
+        summary: "Tag consistency check skipped — no analysis id",
+        findings: ["TagConsistencyAgent expects a persisted analysis row"],
+      }),
+    };
+  }
+
+  const row = await getDayTaxonomy(ctx.triageItem.date);
+  if (!row || row.id !== ctx.triageItem.analysisId) {
+    return {
+      status: "skipped",
+      confidence: 0.85,
+      output: buildStepOutput({
+        summary: "Tag consistency check skipped — analysis row missing",
+        findings: ["Missing or mismatched historical_news_analyses row"],
+      }),
+    };
+  }
+
+  const tags = Array.isArray(row.tagsVersion2) ? row.tagsVersion2.filter((t) => typeof t === "string") : [];
+  const topics = topicLabelsFromRow(row.topicCategories);
+  const summary = String(row.summary ?? "").trim();
+  const evaluation = evaluateTagConsistency({ summary, tags, topics });
+
+  if (evaluation.issues.length) {
+    return {
+      status: "rejected",
+      confidence: 0.6,
+      output: buildStepOutput({
+        summary: "Tag/topic consistency conflicts detected",
+        findings: evaluation.issues.map((issue) => issue.message),
+        rejection: {
+          status: "rejected",
+          agent: "TagConsistencyAgent",
+          reason: evaluation.issues[0]?.message ?? "Tag/topic consistency conflicts detected",
+          confidence: 0.6,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+      evidence: {
+        normalizedTags: evaluation.normalizedTags,
+        normalizedTopics: evaluation.normalizedTopics,
+        issues: evaluation.issues,
+      },
+    };
+  }
+
+  return {
+    status: "completed",
+    confidence: 0.86,
+    output: buildStepOutput({
+      summary: "Tag/topic consistency checks passed",
+      findings: [
+        `tags_version2 count=${tags.length}`,
+        `topic_categories count=${topics.length}`,
+      ],
+    }),
+    evidence: {
+      normalizedTags: evaluation.normalizedTags,
+      normalizedTopics: evaluation.normalizedTopics,
+    },
+  };
+};
 
 export const executorRegistry: Record<PipelineAgentName, AgentExecutor> = {
-  NewsManager: noop,
+  NewsManager: newsManagerAgent,
   MilestoneAgent: milestoneAgent,
   SourceFinderAgent: sourceFinderAgent,
-  RelevanceCheckerAgent: noop,
+  RelevanceCheckerAgent: relevanceCheckerAgent,
   VerificationAgent: verificationAgent,
-  TopicManagerAgent: noop,
-  TagManagerAgent: noop,
-  TopicApplierAgent: noop,
-  TagApplierAgent: noop,
-  DuplicateCheckerAgent: noop,
+  TopicManagerAgent: topicManagerAgent,
+  TagManagerAgent: tagManagerAgent,
+  TopicApplierAgent: topicApplierAgent,
+  TagApplierAgent: tagApplierAgent,
+  DuplicateCheckerAgent: duplicateCheckerAgent,
   SummaryAgent: summaryAgent,
+  DateConsistencyAgent: dateConsistencyAgent,
+  TagConsistencyAgent: tagConsistencyAgent,
   FinalEditorAgent: finalEditorAgent,
 };
 

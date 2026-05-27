@@ -42,7 +42,11 @@ CRITICAL RULES:
 12. Extract organizations even if abbreviated (e.g., "AFL-CIO", "FINTRAC", "G20", "LHC")
 13. Extract product names if they're proper nouns (e.g., "MT5", "Simplecoin")
 14. Extract countries even if mentioned in possessive form (e.g., "Russia's" → extract "Russia")
-14. Do NOT extract: generic job titles (lawmakers, ministers, officials, governors, regulators), generic departments without specific names (just "Treasury"), abstract concepts (regulation, compliance, adoption), amounts, percentages, version numbers, generic terms (cryptocurrency, blockchain, market)
+15. Tags must be concrete named entities. Prefer companies, exchanges, protocols, countries/regions, agencies, products, people, and named laws/events.
+16. Do NOT extract sentence fragments or count phrases. "Five U.S." is invalid; from "five U.S. investment banks" extract only "U.S." if useful.
+17. Do NOT extract generic classes or broad descriptors: banks, investment banks, firms, companies, investors, markets, financial hub, job concerns, concerns, regulation, adoption, mining.
+18. Do NOT extract unnamed groups unless they are a formal named organization or political party. If no specific bank/company is named, do not invent one.
+19. Do NOT extract: generic job titles (lawmakers, ministers, officials, governors, regulators), generic departments without specific names (just "Treasury"), abstract concepts, amounts, percentages, version numbers, generic terms (cryptocurrency, blockchain, market)
 
 Return as a JSON array of strings only: ["Entity1", "Entity2"]
 
@@ -71,13 +75,15 @@ Examples:
 "FINTRAC announces penalties" → ["FINTRAC"]
 "The Economist highlights rise" → ["The Economist"]
 "Russia's oligarchs decline" → ["Russia"]
-"Simplecoin v5.0 framework" → ["Simplecoin"]`;
+"Simplecoin v5.0 framework" → ["Simplecoin"]
+"Five U.S. investment banks support London after Brexit" → ["U.S.", "London", "Brexit"]
+"Investment banks warn of job concerns" → []`;
 
     try {
       const openai = aiService.getProvider('openai');
       const result = await openai.generateCompletion({
         prompt,
-        systemPrompt: 'You are an expert at entity extraction. Extract ALL proper named entities including: people, companies, exchanges, services, platforms, banks, organizations, agencies, universities, countries, cryptocurrencies, and specific protocols/laws. Be thorough but precise - extract specific named entities, not generic terms. Always return valid JSON arrays only.',
+        systemPrompt: 'You are an expert at strict editorial tag extraction. Extract only concrete proper named entities: named people, companies, exchanges, services, organizations, agencies, universities, countries/regions, cryptocurrencies, and specific protocols/laws/events. Never return fragments, count phrases, generic classes, broad descriptors, or abstract concepts. Always return valid JSON arrays only.',
         model: 'gpt-4o-mini',
         temperature: 0.15,
         context: 'entity-extraction',
@@ -173,6 +179,9 @@ Examples:
           
           // Reject "X million/billion" patterns (even without currency)
           if (/^\d+[,\d]*\s*(million|billion|thousand|trillion)/i.test(name)) return false;
+
+          // Reject count-led fragments like "Five U.S." / "two banks".
+          if (/^(one|two|three|four|five|six|seven|eight|nine|ten|several|many|multiple|various)\b/i.test(name)) return false;
           
           // Reject generic job titles and roles
           const genericJobTitles = [
@@ -202,7 +211,8 @@ Examples:
             'ring-fencing', 'ring fencing', 'regulation', 'regulations', 'adoption',
             'compliance', 'enforcement', 'oversight', 'supervision', 'governance',
             'policy', 'policies', 'framework', 'frameworks', 'initiative', 'initiatives',
-            'reform', 'reforms', 'legislation', 'legislative', 'jurisdiction', 'jurisdictions'
+            'reform', 'reforms', 'legislation', 'legislative', 'jurisdiction', 'jurisdictions',
+            'mining', 'hashrate', 'difficulty', 'concern', 'concerns', 'job concerns'
           ];
           if (abstractConcepts.includes(nameLower)) return false;
           
@@ -210,7 +220,9 @@ Examples:
           const tooGeneric = [
             'market cap', 'trading engines', 'market', 'markets', 'economy', 'economies',
             'cryptocurrency', 'cryptocurrencies', 'digital asset', 'digital assets',
-            'blockchain', 'blockchains', 'technology', 'technologies'
+            'blockchain', 'blockchains', 'technology', 'technologies',
+            'bank', 'banks', 'investment bank', 'investment banks', 'financial hub',
+            'firm', 'firms', 'company', 'companies', 'business', 'businesses'
           ];
           if (tooGeneric.includes(nameLower)) return false;
           
@@ -311,7 +323,12 @@ CRITICAL RULES:
 13. Extract product names if they're proper nouns (e.g., "MT5", "Simplecoin")
 14. Extract countries even if mentioned in possessive form (e.g., "Russia's" → extract "Russia")
 15. Use the full article content to find entities that may be mentioned there but not explicitly in the summary
-16. Do NOT extract: generic job titles (lawmakers, ministers, officials, governors, regulators), generic departments without specific names (just "Treasury"), abstract concepts (regulation, compliance, adoption), amounts, percentages, version numbers, generic terms (cryptocurrency, blockchain, market)
+16. Tags must be concrete named entities. Prefer companies, exchanges, protocols, countries/regions, agencies, products, people, and named laws/events.
+17. Do NOT extract sentence fragments or count phrases. "Five U.S." is invalid; from "five U.S. investment banks" extract only "U.S." if useful.
+18. Do NOT extract generic classes or broad descriptors: banks, investment banks, firms, companies, investors, markets, financial hub, job concerns, concerns, regulation, adoption, mining.
+19. Do NOT extract unnamed groups unless they are a formal named organization or political party. If no specific bank/company is named, do not invent one.
+20. Use the full article only to recover central named entities, not background institutions or generic industry groups.
+21. Do NOT extract: generic job titles (lawmakers, ministers, officials, governors, regulators), generic departments without specific names (just "Treasury"), abstract concepts, amounts, percentages, version numbers, generic terms (cryptocurrency, blockchain, market)
 
 Return as a JSON array of strings only: ["Entity1", "Entity2"]
 
@@ -340,13 +357,15 @@ Examples:
 "FINTRAC announces penalties" → ["FINTRAC"]
 "The Economist highlights rise" → ["The Economist"]
 "Russia's oligarchs decline" → ["Russia"]
-"Simplecoin v5.0 framework" → ["Simplecoin"]`;
+"Simplecoin v5.0 framework" → ["Simplecoin"]
+"Five U.S. investment banks support London after Brexit" → ["U.S.", "London", "Brexit"]
+"Investment banks warn of job concerns" → []`;
 
     try {
       const openai = aiService.getProvider('openai');
       const result = await openai.generateCompletion({
         prompt,
-        systemPrompt: 'You are an expert at entity extraction. Extract ALL proper named entities including: people, companies, exchanges, services, platforms, banks, organizations, agencies, universities, countries, cryptocurrencies, and specific protocols/laws. Use the full article content to find entities that may not be explicitly mentioned in the summary. Be thorough but precise - extract specific named entities, not generic terms. Always return valid JSON arrays only.',
+        systemPrompt: 'You are an expert at strict editorial tag extraction. Extract only concrete proper named entities: named people, companies, exchanges, services, organizations, agencies, universities, countries/regions, cryptocurrencies, and specific protocols/laws/events. Use article context only for central named entities. Never return fragments, count phrases, generic classes, broad descriptors, or abstract concepts. Always return valid JSON arrays only.',
         model: 'gpt-4o-mini',
         temperature: 0.15,
         context: 'entity-extraction-with-context',
@@ -422,6 +441,9 @@ Examples:
           if (/^\d+\.?\d*%$/.test(name)) return false;
           if (/\d+[,\d]*\s*(BTC|Bitcoin|LTC|ETH|mBTC)/i.test(name)) return false;
           if (/^\d+[,\d]*\s*(million|billion|thousand|trillion)/i.test(name)) return false;
+
+          // Reject count-led fragments like "Five U.S." / "two banks".
+          if (/^(one|two|three|four|five|six|seven|eight|nine|ten|several|many|multiple|various)\b/i.test(name)) return false;
           
           const genericJobTitles = [
             'lawmakers', 'lawmaker', 'minister', 'ministers', 'official', 'officials',
@@ -446,14 +468,17 @@ Examples:
             'ring-fencing', 'ring fencing', 'regulation', 'regulations', 'adoption',
             'compliance', 'enforcement', 'oversight', 'supervision', 'governance',
             'policy', 'policies', 'framework', 'frameworks', 'initiative', 'initiatives',
-            'reform', 'reforms', 'legislation', 'legislative', 'jurisdiction', 'jurisdictions'
+            'reform', 'reforms', 'legislation', 'legislative', 'jurisdiction', 'jurisdictions',
+            'mining', 'hashrate', 'difficulty', 'concern', 'concerns', 'job concerns'
           ];
           if (abstractConcepts.includes(nameLower)) return false;
           
           const tooGeneric = [
             'market cap', 'trading engines', 'market', 'markets', 'economy', 'economies',
             'cryptocurrency', 'cryptocurrencies', 'digital asset', 'digital assets',
-            'blockchain', 'blockchains', 'technology', 'technologies'
+            'blockchain', 'blockchains', 'technology', 'technologies',
+            'bank', 'banks', 'investment bank', 'investment banks', 'financial hub',
+            'firm', 'firms', 'company', 'companies', 'business', 'businesses'
           ];
           if (tooGeneric.includes(nameLower)) return false;
           

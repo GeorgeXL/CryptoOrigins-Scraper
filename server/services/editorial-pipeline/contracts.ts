@@ -25,6 +25,8 @@ export const pipelineAgentSchema = z.enum([
   "TagApplierAgent",
   "DuplicateCheckerAgent",
   "SummaryAgent",
+  "DateConsistencyAgent",
+  "TagConsistencyAgent",
   "FinalEditorAgent",
 ]);
 

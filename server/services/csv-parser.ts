@@ -86,8 +86,8 @@ export class CsvParserService {
           if (validationResult.success) {
             events.push(validationResult.data);
           } else {
-            const fieldErrors = validationResult.error.errors
-              .map(err => `${err.path.join('.')}: ${err.message}`)
+            const fieldErrors = validationResult.error.issues
+              .map((err) => `${err.path.join('.')}: ${err.message}`)
               .join(', ');
             errors.push(`Line ${i + 1}: ${fieldErrors}`);
           }

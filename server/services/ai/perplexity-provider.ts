@@ -450,7 +450,10 @@ Return JSON: {
         responseSize: data.usage?.total_tokens
       });
 
-      return validated;
+      return {
+        ...validated,
+        citations: validated.citations ?? [],
+      };
     } catch (error) {
       apiMonitor.updateRequest(requestId, {
         status: 'error',
@@ -604,7 +607,7 @@ Format: ["id1", "id2", ...]`;
           console.warn(`🟣 [Perplexity] JSON repair failed, trying regex extraction...`);
           
           // Extract potential IDs using regex (look for quoted strings that look like IDs)
-          const idMatches = cleanContent.match(/"([^"]{10,})"/g) || [];
+          const idMatches: string[] = cleanContent.match(/"([^"]{10,})"/g) || [];
           const extractedIds = idMatches
             .map(match => match.replace(/"/g, ''))
             .filter(id => id.length > 10); // Filter to reasonable ID lengths
@@ -638,7 +641,7 @@ Format: ["id1", "id2", ...]`;
       // Validate it's an array of strings
       if (!Array.isArray(articleIds)) {
         console.warn('Perplexity returned non-array, returning empty array');
-        return [];
+        return { articleIds: [], status: 'error', error: 'Perplexity returned non-array article selection' };
       }
 
       // Try to match by ID first, then by URL if ID doesn't match
@@ -763,4 +766,3 @@ Format: ["id1", "id2", ...]`;
     }
   }
 }
-

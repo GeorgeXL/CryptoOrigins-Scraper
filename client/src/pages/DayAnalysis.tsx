@@ -94,7 +94,8 @@ import {
   Tag,
   Minus,
   Plus,
-  Flag
+  Flag,
+  Info
 } from "lucide-react";
 import { getCategoryColor, getCategoryIcon, getTagCategory } from "@/utils/tagHelpers";
 import { getCategoryKeyFromPath, getCategoryDisplayMeta } from "@shared/taxonomy";
@@ -116,6 +117,7 @@ interface DayAnalysisData {
     flaggedAt?: string | null;
     veriBadge?: 'Manual' | 'Orphan' | 'Verified' | 'Not Available' | null;
     tagsVersion2?: string[];
+    topicCategories?: string[];
     articleTags?: {
       totalArticles: number;
       topSources: string[];
@@ -163,6 +165,61 @@ interface DayAnalysisData {
   };
 }
 
+type PipelineReviewStepSummary = {
+  stepIndex: number;
+  agentName: string;
+  status: string;
+  summary?: string;
+  findings?: string[];
+  rejectionReason?: string | null;
+  suggestedAction?: string | null;
+};
+
+type PipelineReviewLatest = {
+  id: string;
+  status: string;
+  triageRoute: string | null;
+  runId: string;
+  createdAt: string | null;
+  reviewedAt: string | null;
+  reviewer: string | null;
+  steps?: PipelineReviewStepSummary[];
+};
+
+function formatTriageRouteLabel(route: string | null): string {
+  if (!route) return "—";
+  const labels: Record<string, string> = {
+    existing_ok: "Agents OK",
+    existing_needs_correction: "Needs agent work",
+    empty_day: "Empty day",
+    missing_day: "Missing analysis",
+  };
+  return labels[route] ?? route;
+}
+
+function pipelineStepStatusClass(status: string): string {
+  if (status === "completed") {
+    return "border-emerald-500/40 text-emerald-800 dark:text-emerald-200 bg-emerald-500/10 dark:bg-emerald-950/40";
+  }
+  if (status === "rejected" || status === "error") {
+    return "border-red-500/45 text-red-800 dark:text-red-200 bg-red-500/10 dark:bg-red-950/35";
+  }
+  if (status === "skipped") {
+    return "border-border text-muted-foreground bg-muted/50";
+  }
+  return "border-border text-foreground bg-muted/40";
+}
+
+function formatPipelineAgentLabel(agentName: string): string {
+  return agentName.replace(/Agent$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function pipelineReviewBadgeText(l: PipelineReviewLatest): string {
+  const triage = formatTriageRouteLabel(l.triageRoute);
+  if (l.status === "approved") return `Signed off · ${triage}`;
+  if (l.status === "rejected") return `Rejected · ${triage}`;
+  return `Review pending · ${triage}`;
+}
 
 export default function DayAnalysis() {
   const { date } = useParams();
@@ -270,6 +327,7 @@ export default function DayAnalysis() {
             isFlagged: false,
             flagReason: '',
             tagsVersion2: [],
+            topicCategories: [],
             articleTags: {
               totalArticles: 0,
               topSources: [],
@@ -321,6 +379,18 @@ export default function DayAnalysis() {
           flagReason: analysis.flag_reason || '',
           veriBadge: analysis.veri_badge as 'Manual' | 'Orphan' | 'Verified' | 'Not Available' | null | undefined,
           tagsVersion2: analysis.tags_version2 || [],
+          topicCategories: Array.isArray(analysis.topic_categories)
+            ? analysis.topic_categories
+                .map((topic: unknown) => {
+                  if (typeof topic === "string") return topic;
+                  if (topic && typeof topic === "object") {
+                    const raw = topic as { label?: unknown; name?: unknown; slug?: unknown };
+                    return [raw.label, raw.name, raw.slug].find((v): v is string => typeof v === "string" && v.trim().length > 0) ?? "";
+                  }
+                  return "";
+                })
+                .filter((topic: string) => topic.trim().length > 0)
+            : [],
           articleTags: {
             totalArticles: analysis.total_articles_fetched || 0,
             topSources: [],
@@ -345,6 +415,21 @@ export default function DayAnalysis() {
         }
       };
     },
+  });
+
+  const { data: pipelineReviewSummary } = useQuery({
+    queryKey: ["pipeline-review-summary", date],
+    queryFn: async (): Promise<{ latest: PipelineReviewLatest | null }> => {
+      if (!date) return { latest: null };
+      const res = await fetch(`/api/analysis/date/${date}/pipeline-review-summary`, {
+        credentials: "include",
+      });
+      if (!res.ok) return { latest: null };
+      return res.json();
+    },
+    enabled: Boolean(date),
+    staleTime: 60_000,
+    retry: false,
   });
 
   // Query for all available tags (for the add tag dialog)
@@ -1733,6 +1818,25 @@ export default function DayAnalysis() {
                       <p className="text-sm text-muted-foreground">No tags applied</p>
                     )}
                   </div>
+
+                  <div className="mt-4">
+                    <h5 className="mb-2 text-sm font-semibold text-foreground">Topics</h5>
+                    {dayData.analysis.topicCategories && dayData.analysis.topicCategories.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {dayData.analysis.topicCategories.map((topic, idx) => (
+                          <Badge
+                            key={`${topic}-${idx}`}
+                            variant="outline"
+                            className="border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-xs text-sky-200"
+                          >
+                            {topic}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No topics assigned</p>
+                    )}
+                  </div>
                   
                   {/* More */}
                   <div className="mt-6 space-y-2">
@@ -1743,6 +1847,123 @@ export default function DayAnalysis() {
                         onBadgeChange={(newBadge) => updateVeriBadgeMutation.mutate(newBadge)}
                         date={date}
                       />
+                      {pipelineReviewSummary?.latest ? (
+                        <div className="inline-flex items-center gap-1.5">
+                          <Badge
+                            variant="outline"
+                            className={
+                              pipelineReviewSummary.latest.status === "approved"
+                                ? "cursor-default border-emerald-500/45 bg-emerald-950/35 text-emerald-100"
+                                : pipelineReviewSummary.latest.status === "rejected"
+                                  ? "cursor-default border-red-500/50 bg-red-950/30 text-red-100"
+                                  : "cursor-default border-amber-500/45 bg-amber-950/30 text-amber-100"
+                            }
+                          >
+                            <Bot className="mr-1 h-3 w-3 opacity-80" />
+                            {pipelineReviewBadgeText(pipelineReviewSummary.latest)}
+                          </Badge>
+                          <HoverCard openDelay={120}>
+                            <HoverCardTrigger asChild>
+                              <button
+                                type="button"
+                                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border/90 bg-muted/50 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                aria-label="View editorial pipeline agent steps for this day"
+                              >
+                                <Info className="h-3.5 w-3.5" strokeWidth={2.25} />
+                              </button>
+                            </HoverCardTrigger>
+                            <HoverCardContent
+                              className="w-[min(22rem,calc(100vw-2rem))] max-h-[min(70vh,24rem)] overflow-y-auto space-y-3 text-sm"
+                              align="start"
+                            >
+                              <div>
+                                <p className="font-medium text-foreground">Editorial pipeline</p>
+                                <p className="mt-1 text-muted-foreground">
+                                  Agent steps for this calendar date (latest run linked to review).
+                                </p>
+                                <p className="mt-2 text-xs text-muted-foreground">
+                                  Triage route{" "}
+                                  <span className="font-mono text-foreground">
+                                    {pipelineReviewSummary.latest.triageRoute ?? "—"}
+                                  </span>
+                                  {" · "}
+                                  Run{" "}
+                                  <span className="font-mono text-foreground">
+                                    {pipelineReviewSummary.latest.runId}
+                                  </span>
+                                  {pipelineReviewSummary.latest.reviewedAt ? (
+                                    <>
+                                      {" · reviewed "}
+                                      {pipelineReviewSummary.latest.reviewedAt}
+                                    </>
+                                  ) : null}
+                                  {pipelineReviewSummary.latest.reviewer ? (
+                                    <>
+                                      {" · "}
+                                      {pipelineReviewSummary.latest.reviewer}
+                                    </>
+                                  ) : null}
+                                </p>
+                              </div>
+                              {pipelineReviewSummary.latest.steps &&
+                              pipelineReviewSummary.latest.steps.length > 0 ? (
+                                <ul className="space-y-2 border-t border-border pt-2">
+                                  {pipelineReviewSummary.latest.steps.map((st) => (
+                                    <li
+                                      key={`${st.stepIndex}-${st.agentName}`}
+                                      className="rounded-md border px-2 py-1.5 text-xs"
+                                    >
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="font-mono text-[10px] text-muted-foreground">
+                                          #{st.stepIndex}
+                                        </span>
+                                        <span className="font-medium text-foreground">
+                                          {formatPipelineAgentLabel(st.agentName)}
+                                        </span>
+                                        <Badge
+                                          variant="outline"
+                                          className={`h-5 px-1.5 text-[10px] font-normal ${pipelineStepStatusClass(st.status)}`}
+                                        >
+                                          {st.status}
+                                        </Badge>
+                                      </div>
+                                      {st.summary ? (
+                                        <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+                                          {st.summary}
+                                        </p>
+                                      ) : null}
+                                      {st.findings && st.findings.length > 0 ? (
+                                        <ul className="mt-1 list-inside list-disc text-[11px] text-muted-foreground">
+                                          {st.findings.map((f, i) => (
+                                            <li key={i}>{f}</li>
+                                          ))}
+                                        </ul>
+                                      ) : null}
+                                      {st.rejectionReason ? (
+                                        <p className="mt-1 text-[11px] text-red-600 dark:text-red-300">
+                                          {st.rejectionReason}
+                                          {st.suggestedAction ? (
+                                            <span className="text-muted-foreground">
+                                              {" "}
+                                              → {st.suggestedAction}
+                                            </span>
+                                          ) : null}
+                                        </p>
+                                      ) : null}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="border-t border-border pt-2 text-xs text-muted-foreground">
+                                  No per-step records matched this date for this run (older runs or
+                                  different input shape). Open Admin → Pipeline and select the run
+                                  for full trace if needed.
+                                </p>
+                              )}
+                            </HoverCardContent>
+                          </HoverCard>
+                        </div>
+                      ) : null}
                       <Badge
                         variant={dayData.analysis.isFlagged ? "destructive" : "outline"}
                         className="cursor-pointer inline-flex items-center gap-1.5"
@@ -2075,7 +2296,11 @@ export default function DayAnalysis() {
                 variant="outline"
                 className="w-full justify-start text-orange-400 border-orange-500/30 hover:bg-orange-500/10"
                 onClick={() => {
-                  addTagMutation.mutate(tagSearchQuery.trim());
+                  addTagMutation.mutate({
+                    tagName: tagSearchQuery.trim(),
+                    currentTags: dayData?.analysis?.tagsVersion2 ?? [],
+                    summary: dayData?.analysis?.summary,
+                  });
                   setTagSearchQuery('');
                   setIsAddTagDialogOpen(false);
                 }}

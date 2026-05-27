@@ -98,9 +98,9 @@ export default function AppLayout({ children }: AppLayoutProps) {
                         <li>
                           <NavigationMenuLink asChild>
                             <Link href="/admin/agents" className="block select-none space-y-0.5 rounded-md p-2 leading-none no-underline outline-none transition-all duration-200 bg-card hover:bg-muted focus:bg-muted focus:text-foreground cursor-pointer group">
-                              <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Admin agents</div>
+                              <div className="text-xs font-medium leading-none group-hover:text-primary transition-colors">Admin Agent</div>
                               <p className="line-clamp-2 text-xs leading-snug text-muted-foreground group-hover:text-foreground/80 transition-colors">
-                                Review scans and approve agent actions.
+                                Run cleanup agents and review proposed actions.
                               </p>
                             </Link>
                           </NavigationMenuLink>

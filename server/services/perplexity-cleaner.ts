@@ -1,6 +1,6 @@
 import { storage } from '../storage';
 import { apiMonitor } from './api-monitor';
-import { type HistoricalNewsAnalysis, type TieredArticles, type ArticleData } from "@shared/schema";
+import { type HistoricalNewsAnalysis, type TieredArticles, type ArticleData, type InsertHistoricalNewsAnalysis } from "@shared/schema";
 import { aiService } from './ai';
 import { hierarchicalSearch } from './hierarchical-search';
 
@@ -92,7 +92,7 @@ class PerplexityCleanerService {
       console.log(`[PerplexityCleaner] Corrected date ${correctDateText} has no analysis. Moving summary.`);
       
       // Create new analysis for correct date
-      const newAnalysisForCorrectDate: Omit<HistoricalNewsAnalysis, 'id' | 'lastAnalyzed'> = {
+      const newAnalysisForCorrectDate: InsertHistoricalNewsAnalysis = {
         date: correctDateText,
         summary: contradictedAnalysis.summary,
         reasoning: `Summary moved from contradicted date ${contradictedAnalysis.date}. Original reasoning: ${contradictedAnalysis.reasoning || 'N/A'}`,
@@ -109,11 +109,10 @@ class PerplexityCleanerService {
         uniqueArticlesAnalyzed: 0,
         tierUsed: null,
         winningTier: null,
-        tieredArticles: contradictedAnalysis.tieredArticles,
+        tieredArticles: contradictedAnalysis.tieredArticles as any,
         analyzedArticles: null,
         isFlagged: false,
         flagReason: null,
-        flaggedAt: null,
         factCheckVerdict: null,
         factCheckConfidence: null,
         factCheckReasoning: null,
@@ -135,6 +134,7 @@ class PerplexityCleanerService {
         reVerificationStatus: null,
         reVerificationWinner: null,
         tags: [],
+        tagsVersion2: [],
       };
 
       await storage.createAnalysis(newAnalysisForCorrectDate);
@@ -145,7 +145,11 @@ class PerplexityCleanerService {
     // Both dates have analyses - compare summaries using Perplexity
     console.log(`[PerplexityCleaner] Comparing summaries between ${contradictedAnalysis.date} and ${correctDateAnalysis.date}`);
     
-    const comparison = await aiService.getProvider('perplexity').compareSummaries(
+    const perplexityProvider = aiService.getProvider('perplexity');
+    if (!perplexityProvider.compareSummaries) {
+      throw new Error('Perplexity compareSummaries helper is not available');
+    }
+    const comparison = await perplexityProvider.compareSummaries(
       contradictedAnalysis.date,
       contradictedAnalysis.summary,
       correctDateText,
@@ -329,7 +333,11 @@ class PerplexityCleanerService {
     for (const article of availableArticles) {
       console.log(`[PerplexityCleaner] Validating ${tier} article: ${article.title.substring(0, 60)}...`);
       
-      const validation = await aiService.getProvider('perplexity').validateArticleIsDateSpecificEvent(article, targetDate);
+      const perplexityProvider = aiService.getProvider('perplexity');
+      if (!perplexityProvider.validateArticleIsDateSpecificEvent) {
+        throw new Error('Perplexity date-specific validation helper is not available');
+      }
+      const validation = await perplexityProvider.validateArticleIsDateSpecificEvent(article, targetDate);
       
       if (validation.isValid && validation.confidence >= 50) {
         console.log(`[PerplexityCleaner] ✅ Article validated: ${validation.reasoning}`);
@@ -458,4 +466,3 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
 }
 
 export const perplexityCleaner = new PerplexityCleanerService();
-

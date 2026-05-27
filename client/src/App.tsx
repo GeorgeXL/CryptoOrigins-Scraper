@@ -15,7 +15,7 @@ import TagManagerPage from "@/pages/TagManagerPage";
 import ConflictCockpit from "@/pages/ConflictCockpit";
 import IsolatedLab from "@/pages/IsolatedLab";
 import Admin from "@/pages/Admin";
-import AdminAgentsPage from "@/pages/AdminAgentsPage";
+import AdminAgentsV2Page from "@/pages/AdminAgentsV2Page";
 import EventsManager from "@/pages/EventsManager";
 import NotFound from "@/pages/not-found";
 import AppLayout from "@/components/AppLayout";
@@ -35,7 +35,14 @@ function Router() {
         <Route path="/conflict/:sourceDate" component={ConflictCockpit} />
         <Route path="/violation/:date" component={ConflictCockpit} />
         <Route path="/fact-check/:date" component={ConflictCockpit} />
-        <Route path="/admin/agents" component={AdminAgentsPage} />
+        <Route path="/admin/agents/agent" component={AdminAgentsV2Page} />
+        <Route path="/admin/agents/system" component={AdminAgentsV2Page} />
+        <Route path="/admin/agents/review-lab" component={AdminAgentsV2Page} />
+        <Route path="/admin/agents" component={AdminAgentsV2Page} />
+        <Route path="/admin/agents-v2/agent" component={AdminAgentsV2Page} />
+        <Route path="/admin/agents-v2/system" component={AdminAgentsV2Page} />
+        <Route path="/admin/agents-v2/review-lab" component={AdminAgentsV2Page} />
+        <Route path="/admin/agents-v2" component={AdminAgentsV2Page} />
         <Route path="/admin" component={Admin} />
         <Route path="/lab/isolated" component={IsolatedLab} />
         <Route component={NotFound} />

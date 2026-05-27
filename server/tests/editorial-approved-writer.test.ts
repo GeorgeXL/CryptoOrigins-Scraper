@@ -14,7 +14,7 @@ test("determineApprovedAction routes missing day to reanalyze", () => {
   assert.equal(out.action?.date, "2024-01-01");
 });
 
-test("determineApprovedAction routes correction to manual apply", () => {
+test("determineApprovedAction routes correction to apply_corrections", () => {
   const out = determineApprovedAction({
     triage: {
       date: "2024-01-02",
@@ -22,7 +22,19 @@ test("determineApprovedAction routes correction to manual apply", () => {
     },
   });
   assert.equal(out.ok, true);
-  assert.equal(out.action?.kind, "manual_apply");
+  assert.equal(out.action?.kind, "apply_corrections");
+  assert.equal(out.action?.date, "2024-01-02");
+});
+
+test("determineApprovedAction routes existing_ok to noop_review", () => {
+  const out = determineApprovedAction({
+    triage: {
+      date: "2024-01-03",
+      route: "existing_ok",
+    },
+  });
+  assert.equal(out.ok, true);
+  assert.equal(out.action?.kind, "noop_review");
 });
 
 test("determineApprovedAction fails without triage date", () => {

@@ -22,6 +22,8 @@ export const agentModelOverrides: Partial<Record<PipelineAgentName, string>> = {
   TagApplierAgent: process.env.TAG_APPLIER_AGENT_MODEL?.trim(),
   DuplicateCheckerAgent: process.env.DUPLICATE_CHECKER_AGENT_MODEL?.trim(),
   SummaryAgent: process.env.SUMMARY_AGENT_MODEL?.trim(),
+  DateConsistencyAgent: process.env.DATE_CONSISTENCY_AGENT_MODEL?.trim(),
+  TagConsistencyAgent: process.env.TAG_CONSISTENCY_AGENT_MODEL?.trim(),
   FinalEditorAgent: process.env.FINAL_EDITOR_AGENT_MODEL?.trim(),
 };
 

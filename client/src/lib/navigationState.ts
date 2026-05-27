@@ -75,7 +75,7 @@ export function serializePageState(state: HomePageState | MonthlyViewState): str
 /**
  * Deserialize URL search params to page state
  */
-export function deserializePageState(searchParams: URLSearchParams): Partial<HomePageState | MonthlyViewState> | null {
+export function deserializePageState(searchParams: URLSearchParams): HomePageState | MonthlyViewState | null {
   const from = searchParams.get('from');
   
   // If 'from' is 'monthly', it's monthly view
@@ -211,4 +211,3 @@ export function reconstructPageUrl(state: HomePageState | MonthlyViewState): str
     return `${basePath}${query ? `?${query}` : ''}`;
   }
 }
-

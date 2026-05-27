@@ -2,7 +2,7 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { newsAnalyzer } from "../services/news-analyzer";
 import { exaService } from "../services/exa";
-import { type ArticleData } from "@shared/schema";
+import { type ArticleData, type TieredArticles } from "@shared/schema";
 import { periodDetector } from "../services/period-detector";
 import { hierarchicalSearch } from "../services/hierarchical-search";
 import { type HistoricalNewsAnalysis, type InsertHistoricalNewsAnalysis } from "@shared/schema";
@@ -15,10 +15,10 @@ import { batchProcessor } from "../services/batch-processor";
 import { conflictClusterer } from "../services/conflict-clusterer";
 import { perplexityCleaner } from "../services/perplexity-cleaner";
 import { entityExtractor } from "../services/entity-extractor";
-import { sql, eq } from "drizzle-orm";
+import { sql, eq, desc, and, asc } from "drizzle-orm";
 import { aiService } from "../services/ai";
 import { db } from "../db";
-import { historicalNewsAnalyses } from "@shared/schema";
+import { historicalNewsAnalyses, humanReviewQueue, pipelineSteps } from "@shared/schema";
 
 const router = Router();
 
@@ -144,6 +144,94 @@ function parsePerplexityDate(dateText: string | null): string | null {
       });
     } catch (error) {
       console.error(`💥 Error retrieving analysis for ${req.params.date}:`, error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  /** Latest editorial pipeline human-review row for this calendar date (if any). */
+  router.get("/api/analysis/date/:date/pipeline-review-summary", async (req, res) => {
+    try {
+      const { date } = req.params;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
+      }
+
+      const [row] = await db
+        .select({
+          id: humanReviewQueue.id,
+          status: humanReviewQueue.status,
+          package: humanReviewQueue.package,
+          runId: humanReviewQueue.runId,
+          createdAt: humanReviewQueue.createdAt,
+          reviewedAt: humanReviewQueue.reviewedAt,
+          reviewer: humanReviewQueue.reviewer,
+        })
+        .from(humanReviewQueue)
+        .where(eq(humanReviewQueue.eventDate, date))
+        .orderBy(desc(humanReviewQueue.createdAt))
+        .limit(1);
+
+      if (!row) {
+        return res.json({ latest: null });
+      }
+
+      let triageRoute: string | null = null;
+      const pkg = row.package as { triage?: { route?: string }; operatorSnapshot?: unknown } | null;
+      if (pkg && typeof pkg === "object" && pkg.triage && typeof pkg.triage.route === "string") {
+        triageRoute = pkg.triage.route;
+      }
+
+      const stepRows = await db
+        .select({
+          stepIndex: pipelineSteps.stepIndex,
+          agentName: pipelineSteps.agentName,
+          status: pipelineSteps.status,
+          input: pipelineSteps.input,
+          output: pipelineSteps.output,
+          rejectionReason: pipelineSteps.rejectionReason,
+          suggestedAction: pipelineSteps.suggestedAction,
+        })
+        .from(pipelineSteps)
+        .where(
+          and(
+            eq(pipelineSteps.runId, row.runId),
+            sql`coalesce((${pipelineSteps.input})::jsonb -> 'triageItem' ->> 'date', (${pipelineSteps.input})::jsonb ->> 'date') = ${date}`,
+          ),
+        )
+        .orderBy(asc(pipelineSteps.stepIndex));
+
+      const steps = stepRows.map((s) => {
+        const out = (s.output ?? {}) as {
+          summary?: string;
+          findings?: string[];
+          rejection?: { reason?: string; suggestedAction?: string };
+        };
+        const findings = Array.isArray(out.findings) ? out.findings.slice(0, 10) : undefined;
+        return {
+          stepIndex: s.stepIndex,
+          agentName: s.agentName,
+          status: s.status,
+          summary: typeof out.summary === "string" ? out.summary : undefined,
+          findings: findings && findings.length ? findings : undefined,
+          rejectionReason: s.rejectionReason ?? out.rejection?.reason ?? null,
+          suggestedAction: s.suggestedAction ?? out.rejection?.suggestedAction ?? null,
+        };
+      });
+
+      res.json({
+        latest: {
+          id: row.id,
+          status: row.status,
+          triageRoute,
+          runId: row.runId,
+          createdAt: row.createdAt?.toISOString?.() ?? null,
+          reviewedAt: row.reviewedAt?.toISOString?.() ?? null,
+          reviewer: row.reviewer ?? null,
+          steps,
+        },
+      });
+    } catch (error) {
+      console.error(`pipeline-review-summary ${req.params.date}:`, error);
       res.status(500).json({ error: (error as Error).message });
     }
   });
@@ -357,7 +445,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
       const { analyzeDay } = await import('../services/analysis-modes');
       
       // Always use Analyse Day
-      let analysisResult;
+      let analysisResult: any;
       let tieredArticles: any = { bitcoin: [], crypto: [], macro: [] }; // Preserve articles even on error
       
       try {
@@ -705,8 +793,8 @@ function parsePerplexityDate(dateText: string | null): string | null {
       }
       
       // Find the article in tieredArticles
-      const tieredArticles = existingAnalysis.tieredArticles || { bitcoin: [], crypto: [], macro: [] };
-      const allArticles = [
+      const tieredArticles = (existingAnalysis.tieredArticles || { bitcoin: [], crypto: [], macro: [] }) as Partial<TieredArticles>;
+      const allArticles: ArticleData[] = [
         ...(tieredArticles.bitcoin || []),
         ...(tieredArticles.crypto || []),
         ...(tieredArticles.macro || [])
@@ -800,8 +888,8 @@ function parsePerplexityDate(dateText: string | null): string | null {
       }
       
       // Find the article in tieredArticles
-      const tieredArticles = existingAnalysis.tieredArticles || { bitcoin: [], crypto: [], macro: [] };
-      const allArticles = [
+      const tieredArticles = (existingAnalysis.tieredArticles || { bitcoin: [], crypto: [], macro: [] }) as Partial<TieredArticles>;
+      const allArticles: ArticleData[] = [
         ...(tieredArticles.bitcoin || []),
         ...(tieredArticles.crypto || []),
         ...(tieredArticles.macro || [])
@@ -1479,8 +1567,8 @@ function parsePerplexityDate(dateText: string | null): string | null {
               geminiProvider.selectRelevantArticles?.(allArticles, analysis.date) || Promise.resolve({ articleIds: [], status: 'error', error: 'Method not available' })
             ]);
 
-            const perplexityIds = perplexityResult.articleIds || [];
-            const geminiIds = geminiResult.articleIds || [];
+            const perplexityIds: string[] = perplexityResult.articleIds || [];
+            const geminiIds: string[] = geminiResult.articleIds || [];
 
             console.log(`🔵 Perplexity selected: ${perplexityIds.length} articles (status: ${perplexityResult.status})`);
             if (perplexityResult.status === 'error') {
@@ -1541,7 +1629,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
               // Multiple matches - use OpenAI to select best one
               console.log(`🔀 Multiple matches (${intersection.length}), asking OpenAI to select best...`);
               
-              const candidateArticles = [];
+              const candidateArticles: ArticleData[] = [];
               for (const articleId of intersection) {
                 for (const tier of tiers) {
                   const tierArticles = tieredArticles[tier] || [];
@@ -2080,9 +2168,9 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
             summary: analysis.summary,
             violations: issues.map(issue => issue.message),
             length: analysis.summary.length,
-            tags_version2: analysis.tags_version2 || null,
-            readyForTagging: analysis.readyForTagging,
-            doubleCheckReasoning: analysis.doubleCheckReasoning
+            tags_version2: analysis.tagsVersion2 || null,
+            readyForTagging: (analysis as any).readyForTagging,
+            doubleCheckReasoning: (analysis as any).doubleCheckReasoning
           });
         }
       }
@@ -2665,7 +2753,7 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
               readyForTagging: checkResult.isValid,
               doubleCheckReasoning: checkResult.reasoning,
               doubleCheckedAt: new Date(),
-            });
+            } as any);
 
             return { 
               success: true, 

@@ -233,6 +233,9 @@ export class DatabaseStorage implements IStorage {
     // Handle tags_version2 (can come as tags_version2 or tagsVersion2)
     if (analysis.tagsVersion2 !== undefined) updateData.tagsVersion2 = analysis.tagsVersion2;
     if ((analysis as any).tags_version2 !== undefined) updateData.tagsVersion2 = (analysis as any).tags_version2;
+    if ((analysis as any).suppressedTagSuggestions !== undefined) {
+      updateData.suppressedTagSuggestions = (analysis as any).suppressedTagSuggestions;
+    }
     // Handle verification fields - these trigger the veri_badge calculation
     if (analysis.geminiApproved !== undefined) updateData.geminiApproved = analysis.geminiApproved;
     if (analysis.perplexityApproved !== undefined) updateData.perplexityApproved = analysis.perplexityApproved;
@@ -880,7 +883,9 @@ export class DatabaseStorage implements IStorage {
       reVerificationStatus: historicalNewsAnalyses.reVerificationStatus,
       reVerificationWinner: historicalNewsAnalyses.reVerificationWinner,
       tags: historicalNewsAnalyses.tags,
-      tagNames: historicalNewsAnalyses.tagNames,
+      isOrphan: historicalNewsAnalyses.isOrphan,
+      tagsVersion2: historicalNewsAnalyses.tagsVersion2,
+      suppressedTagSuggestions: historicalNewsAnalyses.suppressedTagSuggestions,
       geminiApproved: historicalNewsAnalyses.geminiApproved,
       perplexityApproved: historicalNewsAnalyses.perplexityApproved,
       finalAnalysisCheckedAt: historicalNewsAnalyses.finalAnalysisCheckedAt,
