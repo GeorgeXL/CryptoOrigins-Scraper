@@ -29,6 +29,7 @@ import type {
   ArticleCandidate,
   CalendarDecisionPackage,
   CorrectionApprovalPackage,
+  CorrectionProposal,
   DuplicateDecisionPackage,
 } from "./review-package";
 import {
@@ -40,6 +41,7 @@ import {
 } from "./tools";
 import { buildCorrectionProposals } from "./proposals";
 import { loadCanonicalTagIndex } from "./tag-grounding";
+import { applyCorrectionProposals } from "./approved-writer";
 
 const controllers = new Map<string, AbortController>();
 const EDITORIAL_PIPELINE_ENABLED = process.env.EDITORIAL_PIPELINE_ENABLED !== "0";
@@ -60,6 +62,41 @@ const STORYLINE_REVIEW_MIN_SCORE_GAP = 0.24;
 const STORYLINE_REVIEW_GOOD_CURRENT_SCORE = 0.44;
 const STORYLINE_REVIEW_STRONG_REPLACEMENT_SCORE = 0.88;
 const STORYLINE_REVIEW_COLLISION_WINDOW_DAYS = 10;
+
+const AUTO_CORRECTION_PROPOSAL_KINDS = new Set<CorrectionProposal["kind"]>([
+  "set_topic_categories",
+  "merge_redundant_tags",
+]);
+
+function splitAutomaticCorrectionProposals(proposals: CorrectionProposal[]): {
+  automatic: CorrectionProposal[];
+  manual: CorrectionProposal[];
+} {
+  const automatic: CorrectionProposal[] = [];
+  const manual: CorrectionProposal[] = [];
+  for (const proposal of proposals) {
+    if (AUTO_CORRECTION_PROPOSAL_KINDS.has(proposal.kind)) automatic.push(proposal);
+    else manual.push(proposal);
+  }
+  return { automatic, manual };
+}
+
+async function applyAutomaticCorrectionProposals(opts: {
+  date: string;
+  proposals: CorrectionProposal[];
+}): Promise<string[]> {
+  if (opts.proposals.length === 0) return [];
+  const result = await applyCorrectionProposals({
+    date: opts.date,
+    proposals: opts.proposals,
+    acceptedIds: opts.proposals.map((proposal) => proposal.id),
+    reviewer: "pipeline:auto",
+  });
+  if (!result.ok) {
+    throw new Error(result.message);
+  }
+  return result.applied;
+}
 
 type StartOpts = {
   dateFrom: string;
@@ -754,8 +791,13 @@ export async function continueExistingDayChecksAfterKeepingStoryline(opts: {
     canonicalTagIndex,
     suppressedGroundedTags: row.suppressedTagSuggestions,
   });
+  const { automatic: automaticProposals, manual: manualProposals } = splitAutomaticCorrectionProposals(proposals);
+  const autoApplied = await applyAutomaticCorrectionProposals({
+    date: opts.date,
+    proposals: automaticProposals,
+  });
 
-  if (proposals.length > 0 || opts.triage.route === "existing_needs_correction") {
+  if (manualProposals.length > 0 || (opts.triage.route === "existing_needs_correction" && proposals.length === 0)) {
     const [queued] = await db
       .insert(humanReviewQueue)
       .values({
@@ -767,10 +809,10 @@ export async function continueExistingDayChecksAfterKeepingStoryline(opts: {
         package: {
           phase: "awaiting_correction_approval",
           triage: opts.triage,
-          proposals,
+          proposals: manualProposals,
           note:
-            proposals.length > 0
-              ? `Current summary kept. Pipeline detected ${proposals.length} remaining suggested fix(es).`
+            manualProposals.length > 0
+              ? `Current summary kept. Pipeline auto-applied ${automaticProposals.length} safe fix(es) and detected ${manualProposals.length} remaining suggested fix(es).`
               : "Current summary kept. Pipeline still sees issues but has no safe automatic fix.",
         },
         reviewer: null,
@@ -781,7 +823,14 @@ export async function continueExistingDayChecksAfterKeepingStoryline(opts: {
     return {
       ok: true,
       queuedReviewId: queued?.id,
-      message: `Kept current summary for ${opts.date}; queued ${proposals.length} remaining fix(es).`,
+      message: `Kept current summary for ${opts.date}; auto-applied ${autoApplied.length} safe fix(es), queued ${manualProposals.length} remaining fix(es).`,
+    };
+  }
+
+  if (autoApplied.length > 0) {
+    return {
+      ok: true,
+      message: `Kept current summary for ${opts.date}; auto-applied ${autoApplied.join("; ")}.`,
     };
   }
 
@@ -1067,15 +1116,20 @@ async function runV3ExistingDayChecks(opts: {
     canonicalTagIndex,
     suppressedGroundedTags: row.suppressedTagSuggestions,
   });
+  const { automatic: automaticProposals, manual: manualProposals } = splitAutomaticCorrectionProposals(proposals);
+  const autoApplied = await applyAutomaticCorrectionProposals({
+    date: triage.date,
+    proposals: automaticProposals,
+  });
 
-  if (proposals.length > 0 || triage.route === "existing_needs_correction") {
+  if (manualProposals.length > 0 || (triage.route === "existing_needs_correction" && proposals.length === 0)) {
     const correctionPkg: CorrectionApprovalPackage = {
       phase: "awaiting_correction_approval",
       triage,
-      proposals,
+      proposals: manualProposals,
       note:
-        proposals.length > 0
-          ? `Pipeline detected ${proposals.length} suggested fix(es). Each is opt-in below.`
+        manualProposals.length > 0
+          ? `Pipeline auto-applied ${automaticProposals.length} safe fix(es) and detected ${manualProposals.length} suggested fix(es). Each remaining fix is opt-in below.`
           : "Pipeline detected issues but has no safe automatic fix. Use the action plan to edit, reject, or find another event.",
     };
     const stepId = await createStep({
@@ -1086,8 +1140,11 @@ async function runV3ExistingDayChecks(opts: {
       confidence: 0.8,
       input: { date: triage.date, route: triage.route },
       output: buildStepOutput({
-        summary: `Built ${proposals.length} correction proposal(s) for operator review.`,
-        findings: proposals.map((p) => `${p.kind}`),
+        summary: `Auto-applied ${automaticProposals.length} safe correction(s); built ${manualProposals.length} correction proposal(s) for operator review.`,
+        findings: [
+          ...automaticProposals.map((p) => `auto:${p.kind}`),
+          ...manualProposals.map((p) => `${p.kind}`),
+        ],
       }),
       evidence: {
         v2TagCountBefore: normalizedTagsFromRow(row.tagsVersion2).length,
@@ -1107,6 +1164,26 @@ async function runV3ExistingDayChecks(opts: {
       reviewedAt: null,
     });
     return { nextStepIndex: stepIndex, autoApproved: false };
+  }
+
+  if (autoApplied.length > 0) {
+    await createStep({
+      runId,
+      stepIndex,
+      agentName: "TagManagerAgent",
+      status: "approved",
+      confidence: 0.88,
+      input: { date: triage.date, route: triage.route },
+      output: buildStepOutput({
+        summary: `Approved after auto-applying safe correction(s): ${autoApplied.join("; ")}.`,
+        findings: automaticProposals.map((p) => `auto:${p.kind}`),
+      }),
+      evidence: {
+        autoAppliedCorrections: automaticProposals.map((p) => p.kind),
+      },
+    });
+    stepIndex += 1;
+    return { nextStepIndex: stepIndex, autoApproved: true };
   }
 
   // 4. No issue detected — auto-approve. This is the v3 "I looked and the

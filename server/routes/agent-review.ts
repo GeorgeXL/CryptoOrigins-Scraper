@@ -45,6 +45,28 @@ const DUPLICATE_DECISIONS: DuplicateDecisionInput[] = [
   "find_another_event",
 ];
 
+function isTransientDbNetworkError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    code === "ENOTFOUND" ||
+    code === "EAI_AGAIN" ||
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    /getaddrinfo|timeout|connection terminated/i.test(message)
+  );
+}
+
+async function withTransientDbRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (!isTransientDbNetworkError(error)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    return await fn();
+  }
+}
+
 function suppressionNoteForCandidate(candidate: ArticleCandidate | null | undefined, reason: string): string | null {
   if (!candidate) return null;
   const id = candidate.id?.trim();
@@ -427,6 +449,7 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
     requireAgentSecret(req);
     const status = (req.query.status as string) || "pending";
     const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const items = await withTransientDbRetry(async () => {
     const rows = await db
       .select()
       .from(humanReviewQueue)
@@ -463,7 +486,7 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
       }
     }
 
-    const items = rows.map((r) => {
+    const mappedItems = rows.map((r) => {
       const ymd = normalizeEventDate(r.eventDate);
       const extra = ymd ? analysisByDate.get(ymd) : undefined;
       const pkg = r.package;
@@ -536,6 +559,9 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
         /** Derived operator-facing plan: what Approve will do, what still needs hand-fixing. */
         actionPlan,
       };
+    });
+
+    return mappedItems;
     });
 
     res.json({ items });

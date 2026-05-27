@@ -355,7 +355,7 @@ export async function applyArticlePickApproval(opts: {
 // Phase: correction proposals
 // ---------------------------------------------------------------------------
 
-async function applyCorrectionProposals(opts: {
+export async function applyCorrectionProposals(opts: {
   date: string;
   proposals: CorrectionProposal[];
   acceptedIds: string[];

@@ -92,6 +92,30 @@ test("findGroundedTaxonomyTagsMissingFromRow: surfaces taxonomy names in text no
   assert.ok(!hints.includes("Belgium"));
 });
 
+test("findGroundedTaxonomyTagsMissingFromRow: does not propose fragments of full entity tags already on row", () => {
+  const idx = buildCanonicalTagIndex(["Bitcoin", "Satoshi", "Nakamoto", "Satoshi Nakamoto", "Bank of America", "America"]);
+  const hints = findGroundedTaxonomyTagsMissingFromRow({
+    texts: ["Satoshi Nakamoto cites Bank of America while discussing Bitcoin."],
+    currentTags: ["Bitcoin", "Satoshi Nakamoto", "Bank of America"],
+    index: idx,
+    limit: 12,
+  });
+  assert.ok(!hints.includes("Satoshi"));
+  assert.ok(!hints.includes("Nakamoto"));
+  assert.ok(!hints.includes("America"));
+});
+
+test("findGroundedTaxonomyTagsMissingFromRow: ignores possessive taxonomy artifacts", () => {
+  const idx = buildCanonicalTagIndex(["Japan", "Japan's", "Bitcoin"]);
+  const hints = findGroundedTaxonomyTagsMissingFromRow({
+    texts: ["Japan's reserves shift while Bitcoin keeps trading."],
+    currentTags: ["Bitcoin", "Japan"],
+    index: idx,
+    limit: 12,
+  });
+  assert.ok(!hints.includes("Japan's"));
+});
+
 test("findUngroundedTags: flags tags missing from summary+article", () => {
   const ungrounded = findUngroundedTags(
     ["Russia", "WTO", "Belgium"],
@@ -107,5 +131,10 @@ test("findRedundantTagPairs: surfaces shorter-canonical merges within a single t
 
 test("findRedundantTagPairs: no false positives on truly distinct tags", () => {
   const pairs = findRedundantTagPairs(["Bitcoin", "Ethereum", "Solana"]);
+  assert.deepEqual(pairs, []);
+});
+
+test("findRedundantTagPairs: does not collapse suffix fragments from organization names", () => {
+  const pairs = findRedundantTagPairs(["Royal Bank of Scotland", "Scotland", "Bank of America", "America"]);
   assert.deepEqual(pairs, []);
 });

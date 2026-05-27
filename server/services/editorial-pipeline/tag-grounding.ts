@@ -35,6 +35,10 @@ const TAG_GROUNDING_ALIASES: Record<string, string> = {
   "winklevoss twins": "winklevoss",
 };
 
+function isPossessiveArtifact(raw: string): boolean {
+  return /(?:'|’)s\b/i.test(raw.trim());
+}
+
 /** Lowercased + trimmed; punctuation collapsed to single spaces. */
 export function normalizeForMatch(raw: string): string {
   return raw
@@ -251,6 +255,27 @@ function tagKeyForRowMatch(raw: string): string {
   return TAG_GROUNDING_ALIASES[normalized] ?? normalized;
 }
 
+function isCoveredByExistingRowTag(candidate: string, currentTags: string[]): boolean {
+  const candidateKey = tagKeyForRowMatch(candidate);
+  if (!candidateKey) return false;
+  const candidateTokens = tokensOf(candidateKey);
+  if (candidateTokens.length === 0) return false;
+
+  for (const raw of currentTags) {
+    if (typeof raw !== "string") continue;
+    const rowKey = tagKeyForRowMatch(raw);
+    if (!rowKey) continue;
+    if (rowKey === candidateKey) return true;
+
+    const rowTokens = tokensOf(rowKey);
+    if (rowTokens.length <= candidateTokens.length) continue;
+    const rowTokenSet = new Set(rowTokens);
+    if (candidateTokens.every((tok) => rowTokenSet.has(tok))) return true;
+  }
+
+  return false;
+}
+
 /**
  * Taxonomy names that **are** grounded in the summary/article but are **not**
  * already on the row. Used next to "drop ungrounded tags" so operators see
@@ -283,9 +308,11 @@ export function findGroundedTaxonomyTagsMissingFromRow(opts: {
     if (out.length >= limit) break;
     const trimmed = canonical.trim();
     if (!trimmed) continue;
+    if (isPossessiveArtifact(trimmed)) continue;
     const key = tagKeyForRowMatch(trimmed);
     if (!key || key.length < 2) continue;
     if (onRow.has(key)) continue;
+    if (isCoveredByExistingRowTag(trimmed, currentTags)) continue;
     if (!isTagGroundedInTexts(trimmed, texts)) continue;
     const norm = normalizeForMatch(trimmed);
     if (!norm || seenNorm.has(norm)) continue;
@@ -315,14 +342,13 @@ export function findRedundantTagPairs(currentTags: string[]): { from: string; to
     const longer = names[i];
     const longerTokens = tokensOf(longer);
     if (longerTokens.length === 0) continue;
-    const longerSet = new Set(longerTokens);
     for (let j = 0; j < names.length; j += 1) {
       if (i === j) continue;
       const shorter = names[j];
       const shorterTokens = tokensOf(shorter);
       if (shorterTokens.length === 0) continue;
       if (shorterTokens.length >= longerTokens.length) continue;
-      if (!shorterTokens.every((tok) => longerSet.has(tok))) continue;
+      if (!shorterTokens.every((tok, idx) => longerTokens[idx] === tok)) continue;
       const key = `${longer}→${shorter}`;
       if (seen.has(key)) continue;
       seen.add(key);

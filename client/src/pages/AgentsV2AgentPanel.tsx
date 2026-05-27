@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { differenceInCalendarDays, endOfMonth, format, isValid, parse, parseISO, startOfMonth } from "date-fns";
+import { addDays, addMonths, differenceInCalendarDays, endOfMonth, format, isValid, parse, parseISO, startOfMonth } from "date-fns";
 import type { DateRange } from "react-day-picker";
-import { Check, Loader2, UserRound, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Loader2, UserRound, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
@@ -25,6 +35,8 @@ type DateMode = "day" | "range";
 type LogStatus = "pending" | "approved" | "rejected" | "review";
 
 type LogLine = { id: string; text: string; status: LogStatus };
+type RunWindow = { dateFrom: string; dateTo: string; maxDays: number; totalDays: number };
+type SlicePlan = { slices: RunWindow[]; currentIndex: number };
 
 const LUXURY_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const LOG_TRANSITION = { duration: 0.5, ease: LUXURY_EASE };
@@ -247,6 +259,32 @@ function logLinesEqual(a: LogLine[], b: LogLine[]): boolean {
   return true;
 }
 
+function namespaceLogLines(lines: LogLine[], runId: string): LogLine[] {
+  return lines.map((line) => ({ ...line, id: `${runId}-${line.id}` }));
+}
+
+function buildRunSlices(window: RunWindow): RunWindow[] {
+  if (window.totalDays <= 31) return [window];
+
+  const slices: RunWindow[] = [];
+  const finalEnd = parseISO(window.dateTo);
+  let cursor = parseISO(window.dateFrom);
+
+  while (cursor <= finalEnd) {
+    const sliceEnd = addDays(cursor, 30) < finalEnd ? addDays(cursor, 30) : finalEnd;
+    const totalDays = differenceInCalendarDays(sliceEnd, cursor) + 1;
+    slices.push({
+      dateFrom: format(cursor, "yyyy-MM-dd"),
+      dateTo: format(sliceEnd, "yyyy-MM-dd"),
+      maxDays: totalDays,
+      totalDays,
+    });
+    cursor = addDays(sliceEnd, 1);
+  }
+
+  return slices;
+}
+
 function StatusGlyph({ status }: { status: LogStatus }) {
   if (status === "pending") {
     return <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-orange-500" aria-hidden />;
@@ -270,8 +308,12 @@ export default function AgentsV2AgentPanel() {
   const [range, setRange] = useState<DateRange | undefined>();
   const [logLines, setLogLines] = useState<LogLine[]>([]);
   const [stopEnabledAtMs, setStopEnabledAtMs] = useState(0);
+  const [rangeLimitDialogOpen, setRangeLimitDialogOpen] = useState(false);
+  const [pendingRunWindow, setPendingRunWindow] = useState<RunWindow | null>(null);
   const startCancelRequestedRef = useRef(false);
   const logScrollRootRef = useRef<HTMLDivElement | null>(null);
+  const slicePlanRef = useRef<SlicePlan | null>(null);
+  const completedSliceLogLinesRef = useRef<LogLine[]>([]);
 
   const isRunningRef = useRef(isRunning);
   isRunningRef.current = isRunning;
@@ -289,11 +331,20 @@ export default function AgentsV2AgentPanel() {
     setRange({ from, to });
   };
 
-  const resolveRunDates = useCallback((): { dateFrom: string; dateTo: string; maxDays: number } | null => {
+  const shiftVisibleMonth = (offset: -1 | 1) => {
+    setMonth((current) => {
+      const next = addMonths(current, offset);
+      if (next < new Date(2009, 0, 1)) return new Date(2009, 0, 1);
+      if (next > new Date(2026, 11, 1)) return new Date(2026, 11, 1);
+      return next;
+    });
+  };
+
+  const resolveRunDates = useCallback((): RunWindow | null => {
     if (dateMode === "day") {
       const iso = parseSingleDayIso(singleDayIso);
       if (!iso) return null;
-      return { dateFrom: iso, dateTo: iso, maxDays: 1 };
+      return { dateFrom: iso, dateTo: iso, maxDays: 1, totalDays: 1 };
     }
     if (!range?.from || !range.to) return null;
     const start = range.from <= range.to ? range.from : range.to;
@@ -301,7 +352,7 @@ export default function AgentsV2AgentPanel() {
     const dateFrom = format(start, "yyyy-MM-dd");
     const dateTo = format(end, "yyyy-MM-dd");
     const inclusiveDays = differenceInCalendarDays(end, start) + 1;
-    return { dateFrom, dateTo, maxDays: Math.min(Math.max(inclusiveDays, 1), 31) };
+    return { dateFrom, dateTo, maxDays: Math.min(Math.max(inclusiveDays, 1), 31), totalDays: inclusiveDays };
   }, [dateMode, singleDayIso, range]);
 
   const normalizeSingleDayInput = useCallback(() => {
@@ -309,20 +360,17 @@ export default function AgentsV2AgentPanel() {
     if (iso) setSingleDayIso(iso);
   }, [singleDayIso]);
 
-  const startRun = async () => {
-    const window = resolveRunDates();
-    if (!window) {
-      toast({
-        title: "Invalid dates",
-        description:
-          dateMode === "day" ?
-            "Pick a valid calendar day."
-          : "Select a start date and an end date (two clicks on the calendar), or use “Use month as full range”.",
-        variant: "destructive",
-      });
-      return;
+  const startResolvedRun = async (
+    window: RunWindow,
+    options: { appendLog?: boolean; sliceIndex?: number; sliceTotal?: number } = {},
+  ) => {
+    setRangeLimitDialogOpen(false);
+    setPendingRunWindow(null);
+    if (!options.appendLog) {
+      completedSliceLogLinesRef.current = [];
+      slicePlanRef.current = null;
+      setLogLines([]);
     }
-    setLogLines([]);
     setRunId(null);
     setStopEnabledAtMs(Date.now() + STOP_GUARD_MS);
     startCancelRequestedRef.current = false;
@@ -358,13 +406,16 @@ export default function AgentsV2AgentPanel() {
       }
       setRunId(out.runId);
       rememberLastPipelineRunId(out.runId);
-      setLogLines([
-        {
-          id: "start",
-          text: `Pipeline run ${out.runId.slice(0, 8)}… · ${window.dateFrom}${window.dateFrom !== window.dateTo ? ` → ${window.dateTo}` : ""}`,
-          status: "approved",
-        },
-      ]);
+      const sliceLabel =
+        options.sliceIndex && options.sliceTotal ?
+          `Slice ${options.sliceIndex}/${options.sliceTotal} · `
+        : "";
+      const startLine: LogLine = {
+        id: `${out.runId}-start`,
+        text: `${sliceLabel}Pipeline run ${out.runId.slice(0, 8)}… · ${window.dateFrom}${window.dateFrom !== window.dateTo ? ` → ${window.dateTo}` : ""}`,
+        status: "approved",
+      };
+      setLogLines([...completedSliceLogLinesRef.current, startLine]);
     } catch (e) {
       setIsRunning(false);
       if (!startCancelRequestedRef.current) {
@@ -376,6 +427,45 @@ export default function AgentsV2AgentPanel() {
         });
       }
     }
+  };
+
+  const startSlicedRun = async (window: RunWindow) => {
+    const slices = buildRunSlices(window);
+    slicePlanRef.current = { slices, currentIndex: 0 };
+    completedSliceLogLinesRef.current = [
+      {
+        id: `slice-plan-${Date.now()}`,
+        text: `Range split into ${slices.length} run(s) · ${window.dateFrom} → ${window.dateTo}`,
+        status: "approved",
+      },
+    ];
+    setLogLines(completedSliceLogLinesRef.current);
+    await startResolvedRun(slices[0], {
+      appendLog: true,
+      sliceIndex: 1,
+      sliceTotal: slices.length,
+    });
+  };
+
+  const startRun = async () => {
+    const window = resolveRunDates();
+    if (!window) {
+      toast({
+        title: "Invalid dates",
+        description:
+          dateMode === "day" ?
+            "Pick a valid calendar day."
+          : "Select a start date and an end date (two clicks on the calendar), or use “Use month as full range”.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (dateMode === "range" && window.totalDays > window.maxDays) {
+      setPendingRunWindow(window);
+      setRangeLimitDialogOpen(true);
+      return;
+    }
+    await startResolvedRun(window);
   };
 
   const stopRun = async () => {
@@ -409,6 +499,7 @@ export default function AgentsV2AgentPanel() {
     setRunId(null);
     setIsRunning(false);
     setStopEnabledAtMs(0);
+    slicePlanRef.current = null;
     try {
       await stopPipelineRun(rid);
     } catch {
@@ -434,12 +525,44 @@ export default function AgentsV2AgentPanel() {
       try {
         const detail = await fetchPipelineRun(runId);
         if (cancelled) return;
-        const built = buildActivityLogFromDetail(detail);
-        setLogLines((prev) => (logLinesEqual(prev, built) ? prev : built));
+        const built = namespaceLogLines(buildActivityLogFromDetail(detail), detail.run.id);
+        const visibleLines = [...completedSliceLogLinesRef.current, ...built];
+        setLogLines((prev) => (logLinesEqual(prev, visibleLines) ? prev : visibleLines));
         if (detail.run.status !== "running") {
+          const plan = slicePlanRef.current;
+          const canContinueSlicedRun =
+            detail.run.status === "completed" &&
+            plan &&
+            plan.currentIndex < plan.slices.length - 1 &&
+            !startCancelRequestedRef.current;
+
+          if (canContinueSlicedRun && plan) {
+            const nextIndex = plan.currentIndex + 1;
+            slicePlanRef.current = { ...plan, currentIndex: nextIndex };
+            completedSliceLogLinesRef.current = [
+              ...visibleLines,
+              {
+                id: `slice-next-${detail.run.id}-${nextIndex}`,
+                text: `Starting next slice · ${nextIndex + 1}/${plan.slices.length}`,
+                status: "pending",
+              },
+            ];
+            setLogLines(completedSliceLogLinesRef.current);
+            setRunId(null);
+            setStopEnabledAtMs(0);
+            void startResolvedRun(plan.slices[nextIndex], {
+              appendLog: true,
+              sliceIndex: nextIndex + 1,
+              sliceTotal: plan.slices.length,
+            });
+            return;
+          }
+
           setIsRunning(false);
           setRunId(null);
           setStopEnabledAtMs(0);
+          slicePlanRef.current = null;
+          completedSliceLogLinesRef.current = visibleLines;
           const pending = humanReviewQueuedCount(detail.run.stats);
           toast({
             title: detail.run.status === "completed" ? "Run finished" : "Run stopped",
@@ -562,7 +685,31 @@ export default function AgentsV2AgentPanel() {
             </TabsContent>
 
             <TabsContent value="range" className="mt-3 space-y-3 outline-none focus-visible:outline-none focus-visible:ring-0">
-              <div className="w-fit rounded-lg border bg-background p-1 shadow-sm">
+              <div className="relative w-fit rounded-lg border bg-background p-1 shadow-sm">
+                <div className="pointer-events-none absolute left-4 right-4 top-4 z-10 flex items-center justify-between">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="pointer-events-auto h-7 w-7 rounded-md border border-border/80 bg-background/90 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={() => shiftVisibleMonth(-1)}
+                    disabled={isRunning || month <= new Date(2009, 0, 1)}
+                    aria-label="Previous month"
+                  >
+                    <ChevronLeft className="h-4 w-4" aria-hidden />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="pointer-events-auto h-7 w-7 rounded-md border border-border/80 bg-background/90 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={() => shiftVisibleMonth(1)}
+                    disabled={isRunning || month >= new Date(2026, 11, 1)}
+                    aria-label="Next month"
+                  >
+                    <ChevronRight className="h-4 w-4" aria-hidden />
+                  </Button>
+                </div>
                 <Calendar
                   mode="range"
                   month={month}
@@ -651,6 +798,38 @@ export default function AgentsV2AgentPanel() {
           </motion.div>
         ) : null}
       </AnimatePresence>
+
+      <AlertDialog open={rangeLimitDialogOpen} onOpenChange={setRangeLimitDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Run the full range in slices?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You selected {pendingRunWindow?.totalDays ?? 0} days from{" "}
+              <span className="font-mono text-foreground">{pendingRunWindow?.dateFrom}</span> to{" "}
+              <span className="font-mono text-foreground">{pendingRunWindow?.dateTo}</span>. One pipeline run can process
+              31 days, so the agent will run this as several 31-day slices and continue automatically until the full
+              range is complete.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setPendingRunWindow(null);
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!pendingRunWindow) return;
+                void startSlicedRun(pendingRunWindow);
+              }}
+            >
+              Run all slices
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

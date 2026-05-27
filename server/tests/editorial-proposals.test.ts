@@ -259,6 +259,49 @@ test("does not propose generic capitalized words as grounded tags", () => {
   assert.equal(add, undefined);
 });
 
+test("does not propose person or organization fragments as grounded tags", () => {
+  const idx = buildCanonicalTagIndex([
+    "Bitcoin",
+    "Satoshi",
+    "Nakamoto",
+    "Satoshi Nakamoto",
+    "Bank of America",
+    "America",
+  ]);
+  const proposals = buildCorrectionProposals({
+    date: "2009-01-15",
+    summary: "Satoshi Nakamoto discusses Bitcoin while Bank of America faces pressure.",
+    topArticleId: "https://example.com/full-entities",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Bitcoin", "Satoshi Nakamoto", "Bank of America"],
+    topicCategories: ["Bitcoin culture"],
+    legacyTags: [],
+    articleText: "Satoshi Nakamoto discusses Bitcoin while Bank of America faces pressure.",
+    canonicalTagIndex: idx,
+  });
+  const add = proposals.find((p) => p.kind === "add_grounded_tags");
+  assert.equal(add, undefined);
+});
+
+test("does not propose generic macro words as grounded tags", () => {
+  const idx = buildCanonicalTagIndex(["Bitcoin", "Unemployment", "Jobs", "President", "dollar"]);
+  const proposals = buildCorrectionProposals({
+    date: "2009-06-06",
+    summary: "Bitcoin forum activity grows as unemployment, jobs, and dollar worries dominate headlines.",
+    topArticleId: "https://example.com/macro",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Bitcoin"],
+    topicCategories: ["Bitcoin culture"],
+    legacyTags: [],
+    articleText: "Bitcoin forum activity grows as unemployment, jobs, and dollar worries dominate headlines.",
+    canonicalTagIndex: idx,
+  });
+  const add = proposals.find((p) => p.kind === "add_grounded_tags");
+  assert.equal(add, undefined);
+});
+
 test("does not re-propose grounded tags the operator suppressed for this date", () => {
   const proposals = buildCorrectionProposals({
     date: "2019-02-16",
