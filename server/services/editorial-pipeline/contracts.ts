@@ -30,6 +30,17 @@ export const pipelineAgentSchema = z.enum([
   "FinalEditorAgent",
 ]);
 
+export const pipelineCheckScopeSchema = z.enum([
+  "relevance",
+  "summary",
+  "topics",
+  "tags",
+  "duplicates",
+  "date",
+]);
+
+export const ALL_PIPELINE_CHECK_SCOPES = pipelineCheckScopeSchema.options;
+
 export const triageItemSchema = z.object({
   date: z.string(), // YYYY-MM-DD
   analysisId: z.string().uuid().nullable(),
@@ -104,6 +115,7 @@ export function buildHandoffChain(args: {
 }
 
 export type PipelineAgentName = z.infer<typeof pipelineAgentSchema>;
+export type PipelineCheckScope = z.infer<typeof pipelineCheckScopeSchema>;
 export type TriageRoute = z.infer<typeof triageRouteSchema>;
 export type TriageItem = z.infer<typeof triageItemSchema>;
 export type PipelineRejection = z.infer<typeof rejectionSchema>;

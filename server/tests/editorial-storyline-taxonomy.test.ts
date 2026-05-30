@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { inferStorylineLabels } from "../services/editorial-pipeline/storyline-taxonomy";
+import { inferStorylineLabels, inferTopicProposal } from "../services/editorial-pipeline/storyline-taxonomy";
 
 test("maps halving stories to the granular Bitcoin halving storyline", () => {
   const labels = inferStorylineLabels({
@@ -9,8 +9,7 @@ test("maps halving stories to the granular Bitcoin halving storyline", () => {
     summary: "Bitcoin completes another halving as block rewards fall and miners prepare for tighter economics.",
     tags: ["Bitcoin"],
   });
-  assert.ok(labels.includes("Halving events"));
-  assert.ok(labels.includes("Mining evolution"));
+  assert.deepEqual(labels, ["Halving events"]);
 });
 
 test("maps Canaan mining update to concrete mining storylines", () => {
@@ -19,8 +18,7 @@ test("maps Canaan mining update to concrete mining storylines", () => {
     summary: "Canaan boosts deployed bitcoin mining capacity to 9.91 EH/s, mines 86 BTC, and grows holdings to 1,750 BTC",
     tags: ["Canaan", "Bitcoin"],
   });
-  assert.ok(labels.includes("Mining companies"));
-  assert.ok(labels.includes("Mining evolution"));
+  assert.deepEqual(labels, ["Mining companies"]);
   assert.ok(!labels.includes("industry-news"));
 });
 
@@ -30,9 +28,7 @@ test("maps futures and bottom signals to market sub-storylines", () => {
     summary: "Bitcoin whales move BTC to futures exchanges, signaling a classic bottom as prices sink and hedging rises",
     tags: ["Bitcoin"],
   });
-  assert.ok(labels.includes("Derivatives"));
-  assert.ok(labels.includes("Bitcoin price action"));
-  assert.ok(labels.includes("Market cycles"));
+  assert.deepEqual(labels, ["Derivatives"]);
 });
 
 
@@ -71,7 +67,97 @@ test("maps exchange card purchases to exchanges and payment processors", () => {
     tags: ["Binance", "Bitcoin", "Ethereum", "Litecoin"],
   });
 
-  assert.ok(labels.includes("Exchanges"));
-  assert.ok(labels.includes("Payment processors"));
-  assert.equal(labels.includes("Mining evolution"), false);
+  assert.deepEqual(labels, ["Payment processors"]);
+});
+
+test("rejects broad model topics and keeps only hierarchy leaves", () => {
+  const labels = inferStorylineLabels({
+    summary:
+      "Satoshi Nakamoto warns WikiLeaks not to use Bitcoin, fearing it could damage the project's early stage",
+    tags: ["Bitcoin", "Satoshi Nakamoto", "WikiLeaks"],
+    modelTopics: ["historical", "bitcoin", "economic", "institutional"],
+  });
+
+  assert.deepEqual(labels, ["Satoshi identity"]);
+  assert.equal(labels.includes("historical"), false);
+  assert.equal(labels.includes("bitcoin"), false);
+  assert.equal(labels.includes("economic"), false);
+  assert.equal(labels.includes("institutional"), false);
+});
+
+test("maps macro and financial 2010 summaries into concrete leaves", () => {
+  const bribery = inferStorylineLabels({
+    summary:
+      "Nigeria's anti-corruption agency probes $15M in alleged Daimler bribes, underscoring its corruption fight",
+    tags: ["Nigeria", "Daimler"],
+  });
+  assert.ok(bribery.includes("Fraud and scams"));
+
+  const labor = inferStorylineLabels({
+    summary:
+      "Spanish unions call a general strike after labor reform plans deepen fears over Spain's fragile recovery",
+    tags: ["Spain", "Labor Reform"],
+  });
+  assert.ok(labor.includes("Labor market"));
+
+  const housing = inferStorylineLabels({
+    summary:
+      "Fannie Mae and Freddie Mac lose political support as the U.S. moves to overhaul the mortgage finance system",
+    tags: ["Fannie Mae", "Freddie Mac"],
+  });
+  assert.deepEqual(housing, ["Housing"]);
+
+  const banking = inferStorylineLabels({
+    summary:
+      "The Church of Ireland loses over 17 million euros as AIB shares collapse affecting major shareholders",
+    tags: ["AIB", "Church of Ireland"],
+  });
+  assert.deepEqual(banking, ["Banking stress"]);
+});
+
+test("maps midterm election spending to elections and campaign finance", () => {
+  const labels = inferStorylineLabels({
+    summary:
+      "Midterm election spending reaches $4 billion as Republicans outpace Democrats in funding contributions",
+    tags: ["Republicans", "Democrats"],
+  });
+  assert.deepEqual(labels, ["Politics and elections"]);
+});
+
+test("maps presidential election and Wall Street backing to politics", () => {
+  const labels = inferStorylineLabels({
+    summary:
+      "Wall Street executives heavily back Mitt Romney influencing the dynamics of the US presidential elections",
+    tags: ["Mitt Romney", "U.S."],
+  });
+  assert.deepEqual(labels, ["Politics and elections"]);
+});
+
+test("maps Bitcoin-Qt client releases to protocol development under Bitcoin", () => {
+  const labels = inferStorylineLabels({
+    summary:
+      "Bitcoin-Qt v0.5.3 introduces critical fixes and improvements to enhance user experience and stability",
+    tags: ["Bitcoin", "Bitcoin-Qt"],
+  });
+  assert.deepEqual(labels, ["Protocol development"]);
+});
+
+test("maps exchange expansion stories to trading activity from summary only", () => {
+  const summary =
+    "Ruxum announces expansion into Europe allowing Bitcoin trading in Euros Pounds and Swiss Francs starting soon";
+  const noisyArticle =
+    "ABC employee caught mining for Bitcoins on company servers An unrelated mining story with bitcoin mentions";
+
+  assert.deepEqual(
+    inferTopicProposal({ summary, tags: ["Bitcoin", "Ruxum"] }),
+    ["Trading activity"],
+  );
+  assert.deepEqual(
+    inferTopicProposal({ summary, articleText: noisyArticle, tags: ["Bitcoin", "Ruxum"] }),
+    ["Trading activity"],
+  );
+  assert.deepEqual(
+    inferStorylineLabels({ summary, articleText: noisyArticle, tags: ["Bitcoin", "Ruxum"] }),
+    ["Trading activity"],
+  );
 });

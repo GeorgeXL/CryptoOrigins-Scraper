@@ -68,5 +68,6 @@ export function isValidPipelineTopArticleId(id: string | null | undefined): bool
   if (v.startsWith("http://") || v.startsWith("https://")) return true;
   // Accept pipeline/manual synthetic winners used by the editorial flow.
   if (v.startsWith("article-") || v.startsWith("manual-") || v.startsWith("known-")) return true;
+  if (v.startsWith("pizza-milestone-")) return true;
   return false;
 }

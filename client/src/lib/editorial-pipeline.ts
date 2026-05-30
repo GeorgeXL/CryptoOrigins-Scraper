@@ -110,6 +110,7 @@ export type ApproveReviewOpts = {
   keepCurrentSummary?: boolean;
   acceptedProposalIds?: string[];
   proposalTagSelections?: Record<string, string[]>;
+  proposalTopicSelections?: Record<string, string[]>;
   calendarDecision?: "move_to_canonical" | "keep_as_is" | "delete";
   duplicateDecision?: "keep_both" | "delete_focal" | "delete_neighbor" | "differentiate" | "find_another_event";
   duplicateNeighborDate?: string;
@@ -133,6 +134,8 @@ export type PipelineAgentName =
   | "DateConsistencyAgent"
   | "TagConsistencyAgent"
   | "FinalEditorAgent";
+
+export type PipelineCheckScope = "relevance" | "summary" | "topics" | "tags" | "duplicates" | "date";
 
 export type PipelineRunDetail = {
   run: {
@@ -190,6 +193,7 @@ export async function startPipelineRun(body: {
   dateFrom: string;
   dateTo: string;
   maxDaysToConsider: number;
+  checkScopes?: PipelineCheckScope[];
 }) {
   const res = await fetch("/api/agent/pipeline/run", {
     method: "POST",

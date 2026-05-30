@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { buildCorrectionProposals } from "../services/editorial-pipeline/proposals";
 import { buildCanonicalTagIndex } from "../services/editorial-pipeline/tag-grounding";
+import { inferStorylineLabels } from "../services/editorial-pipeline/storyline-taxonomy";
 
 test("promotes v1 tags missing from v2 (Cboe case)", () => {
   const proposals = buildCorrectionProposals({
@@ -90,6 +91,54 @@ test("does not promote stale legacy tags from an old storyline after summary cha
   assert.equal(proposals.find((p) => p.kind === "promote_v1_to_v2_tags"), undefined);
 });
 
+test("does not suggest incidental currency or geography tags when primary entities are already tagged", () => {
+  const idx = buildCanonicalTagIndex(["AIB", "Church of Ireland", "Euros", "Ireland"]);
+  const proposals = buildCorrectionProposals({
+    date: "2010-10-29",
+    summary: "The Church of Ireland loses over 17 million euros as AIB shares collapse affecting major shareholders",
+    topArticleId: "https://www.bbc.com/news/world-europe-11652923",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["AIB", "Church of Ireland"],
+    topicCategories: ["Banking stress"],
+    legacyTags: [],
+    articleText: "The Church of Ireland loses over 17 million euros as AIB shares collapse affecting major shareholders.",
+    canonicalTagIndex: idx,
+  });
+
+  assert.equal(proposals.find((p) => p.kind === "add_grounded_tags"), undefined);
+});
+
+test("drops source/context tags and merges alias duplicates instead of contradicting v2 tags", () => {
+  const proposals = buildCorrectionProposals({
+    date: "2010-10-27",
+    summary: "Campaign spending data shows Democrats gaining support as midterm financing accelerates",
+    topArticleId: "https://example.com/campaign-spending",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Democrats", "Democratic Party", "Center for Responsive Politics"],
+    topicCategories: ["Government adoption"],
+    legacyTags: [{ name: "Democratic Party" }, { name: "Center for Responsive Politics" }],
+    articleText:
+      "Campaign spending data from the Center for Responsive Politics shows Democrats gaining support as midterm financing accelerates.",
+  });
+
+  const promote = proposals.find((p) => p.kind === "promote_v1_to_v2_tags");
+  assert.equal(promote, undefined);
+
+  const drop = proposals.find((p) => p.kind === "drop_ungrounded_tags");
+  assert.ok(drop);
+  if (drop && drop.kind === "drop_ungrounded_tags") {
+    assert.deepEqual(drop.proposedDrop, ["Center for Responsive Politics"]);
+  }
+
+  const merge = proposals.find((p) => p.kind === "merge_redundant_tags");
+  assert.ok(merge);
+  if (merge && merge.kind === "merge_redundant_tags") {
+    assert.ok(merge.merges.some((m) => m.from === "Democratic Party" && m.to === "Democrats"));
+  }
+});
+
 test("flags web2/web3 tag conflict and proposes drop", () => {
   const proposals = buildCorrectionProposals({
     date: "2024-01-15",
@@ -108,7 +157,7 @@ test("flags web2/web3 tag conflict and proposes drop", () => {
   }
 });
 
-test("proposes default topic category when missing", () => {
+test("does not invent a topic for generic placeholder summaries", () => {
   const proposals = buildCorrectionProposals({
     date: "2024-03-01",
     summary: "Some event happened.",
@@ -122,7 +171,47 @@ test("proposes default topic category when missing", () => {
   const topic = proposals.find((p) => p.kind === "set_topic_categories");
   assert.ok(topic);
   if (topic && topic.kind === "set_topic_categories") {
-    assert.deepEqual(topic.proposed, ["Bitcoin culture"]);
+    assert.deepEqual(topic.proposed, []);
+  }
+});
+
+test("auto-assigns topic for 2010-10-27 election spending day", () => {
+  const proposals = buildCorrectionProposals({
+    date: "2010-10-27",
+    summary:
+      "Midterm election spending reaches $4 billion as Republicans outpace Democrats in funding contributions",
+    topArticleId: "article-1",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Republicans"],
+    topicCategories: [],
+    legacyTags: [{ name: "Democrats", category: "regulation-law" }],
+  });
+  const topic = proposals.find((p) => p.kind === "set_topic_categories");
+  assert.ok(topic);
+  if (topic && topic.kind === "set_topic_categories") {
+    assert.deepEqual(topic.proposed, ["Politics and elections"]);
+  }
+});
+
+test("replaces broad model topics with concrete homepage hierarchy leaves", () => {
+  const proposals = buildCorrectionProposals({
+    date: "2010-12-05",
+    summary:
+      "Satoshi Nakamoto warns WikiLeaks not to use Bitcoin, fearing it could damage the project's early stage",
+    topArticleId: "https://example.com/satoshi-wikileaks",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Bitcoin", "Satoshi Nakamoto", "WikiLeaks"],
+    topicCategories: ["historical", "bitcoin", "economic"],
+    legacyTags: [],
+  });
+  const topic = proposals.find((p) => p.kind === "set_topic_categories");
+  assert.ok(topic);
+  if (topic && topic.kind === "set_topic_categories") {
+    assert.deepEqual(topic.proposed, ["Satoshi identity"]);
+    assert.equal(topic.proposed.includes("historical"), false);
+    assert.equal(topic.proposed.includes("bitcoin"), false);
   }
 });
 
@@ -156,12 +245,12 @@ test("proposes redo_summary only when weak AND top article id is valid", () => {
 test("clean day produces empty proposal list", () => {
   const proposals = buildCorrectionProposals({
     date: "2024-05-15",
-    summary: "Bitcoin hits all-time high amid record institutional inflows pushing market sentiment to new euphoria.",
+    summary: "Bitcoin ETF inflows push price to all-time high amid record institutional demand and market euphoria.",
     topArticleId: "https://example.com/ath",
     isOrphan: false,
     isFlagged: false,
     tagsVersion2: ["Bitcoin", "ETF"],
-    topicCategories: ["price", "institutional"],
+    topicCategories: ["Bitcoin price action"],
     legacyTags: [{ name: "Bitcoin" }, { name: "ETF" }],
   });
   assert.equal(proposals.length, 0);
@@ -341,6 +430,61 @@ test("replaces broad placeholder topics with specific inferred storylines", () =
   }
 });
 
+test("replaces mixed old and new topics with one valid hierarchy leaf", () => {
+  const proposals = buildCorrectionProposals({
+    date: "2010-01-04",
+    summary: "Bitcoin price rises as traders watch support levels and renewed market momentum",
+    topArticleId: "https://example.com/bitcoin-price",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Bitcoin"],
+    topicCategories: ["technology", "Bitcoin price action"],
+    legacyTags: [],
+    articleText: "Bitcoin price rises as traders watch support levels and renewed market momentum.",
+  });
+  const topic = proposals.find((p) => p.kind === "set_topic_categories");
+  assert.ok(topic);
+  if (topic && topic.kind === "set_topic_categories") {
+    assert.deepEqual(topic.current, ["technology", "Bitcoin price action"]);
+    assert.deepEqual(topic.proposed, ["Bitcoin price action"]);
+  }
+});
+
+test("replaces old 2010 economic topics when summary maps to banking stress", () => {
+  const proposals = buildCorrectionProposals({
+    date: "2010-10-29",
+    summary: "The Church of Ireland loses over 17 million euros as AIB shares collapse affecting major shareholders",
+    topArticleId: "https://www.bbc.com/news/world-europe-11652923",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["AIB", "Church of Ireland"],
+    topicCategories: ["economic", "institutional"],
+    legacyTags: [],
+    articleText: "The Church of Ireland loses over 17 million euros as AIB shares collapse affecting major shareholders.",
+  });
+  const topic = proposals.find((p) => p.kind === "set_topic_categories");
+  assert.ok(topic);
+  if (topic && topic.kind === "set_topic_categories") {
+    assert.deepEqual(topic.current, ["economic", "institutional"]);
+    assert.deepEqual(topic.proposed, ["Banking stress"]);
+  }
+});
+
+test("keeps exactly one valid hierarchy leaf when it matches the summary", () => {
+  const proposals = buildCorrectionProposals({
+    date: "2010-01-05",
+    summary: "Bitcoin price rises as traders watch support levels and renewed market momentum",
+    topArticleId: "https://example.com/bitcoin-price",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Bitcoin"],
+    topicCategories: ["Bitcoin price action"],
+    legacyTags: [],
+    articleText: "Bitcoin price rises as traders watch support levels and renewed market momentum.",
+  });
+  assert.equal(proposals.find((p) => p.kind === "set_topic_categories"), undefined);
+});
+
 test("does not promote dotted or generic legacy tags into v2", () => {
   const proposals = buildCorrectionProposals({
     date: "2022-03-01",
@@ -373,4 +517,133 @@ test("does not propose dotted or generic grounded tags from taxonomy hits", () =
   });
   const add = proposals.find((p) => p.kind === "add_grounded_tags");
   assert.equal(add, undefined);
+});
+
+test("Feb 2012: blocks vague debt crisis tag and realigns Obama debt-day topic", () => {
+  const idx = buildCanonicalTagIndex(["Obama", "U.S.", "Debt Crisis", "Europe", "Greece"]);
+  const proposals = buildCorrectionProposals({
+    date: "2012-02-09",
+    summary:
+      "Obama stresses European leaders must show commitment to resolve the debt crisis affecting the U.S. economy",
+    topArticleId: "https://example.com/obama-debt",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Obama"],
+    topicCategories: ["Government adoption"],
+    legacyTags: [{ name: "NO TAG", category: "miscellaneous" }],
+    articleText:
+      "Obama stresses European leaders must show commitment to resolve the debt crisis affecting the U.S. economy.",
+    canonicalTagIndex: idx,
+  });
+  const add = proposals.find((p) => p.kind === "add_grounded_tags");
+  if (add && add.kind === "add_grounded_tags") {
+    assert.ok(!add.proposedAdd.some((t) => /debt crisis/i.test(t)), "debt crisis is too vague for a tag");
+    assert.ok(add.proposedAdd.includes("U.S."));
+  }
+  const topic = proposals.find((p) => p.kind === "set_topic_categories");
+  assert.ok(topic);
+  if (topic && topic.kind === "set_topic_categories") {
+    assert.deepEqual(topic.proposed, ["Debt crises"]);
+  }
+});
+
+test("Feb 2012: fake Treasury bonds map to fraud topic, not mining evolution", () => {
+  const proposals = buildCorrectionProposals({
+    date: "2012-02-17",
+    summary: "Italian police seize fake U.S. Treasury bonds worth $6 trillion and arrest eight mafia-linked suspects",
+    topArticleId: "https://example.com/fake-bonds",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Italy", "U.S. Treasury"],
+    topicCategories: ["Mining evolution"],
+    legacyTags: [],
+    articleText:
+      "Italian police seize fake U.S. Treasury bonds worth $6 trillion and arrest eight mafia-linked suspects.",
+  });
+  const topic = proposals.find((p) => p.kind === "set_topic_categories");
+  assert.ok(topic);
+  if (topic && topic.kind === "set_topic_categories") {
+    assert.deepEqual(topic.proposed, ["Fraud and scams"]);
+  }
+});
+
+test("Feb 2012: drops tangential conservatives and blocks VAT legacy promotion", () => {
+  const proposals = buildCorrectionProposals({
+    date: "2012-02-19",
+    summary:
+      "Ed Balls proposes tax cuts including VAT reduction to boost growth while facing criticism from conservatives",
+    topArticleId: "https://example.com/ed-balls",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Ed Balls", "Conservatives"],
+    topicCategories: ["Global growth and recession"],
+    legacyTags: [{ name: "Ed Balls" }, { name: "VAT" }],
+    articleText:
+      "Ed Balls proposes tax cuts including VAT reduction to boost growth while facing criticism from conservatives.",
+  });
+  assert.equal(proposals.find((p) => p.kind === "promote_v1_to_v2_tags"), undefined);
+  const drop = proposals.find((p) => p.kind === "drop_ungrounded_tags");
+  assert.ok(drop);
+  if (drop && drop.kind === "drop_ungrounded_tags") {
+    assert.deepEqual(drop.proposedDrop, ["Conservatives"]);
+  }
+});
+
+test("Feb 2012: credit-rating day drops stale tags and blocks police legacy promotion", () => {
+  const proposals = buildCorrectionProposals({
+    date: "2012-02-28",
+    summary:
+      "Credit rating agencies draw scrutiny over downgrades leading to police investigation and parliamentary inquiry",
+    topArticleId: "https://example.com/credit-ratings",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Credit rating agencies", "Italy", "UK", "Alistair Darling", "BBC Radio 4"],
+    topicCategories: ["Mining companies"],
+    legacyTags: [
+      { name: "Credit rating agencies" },
+      { name: "police" },
+      { name: "parliamentary inquiry" },
+    ],
+    articleText:
+      "Credit rating agencies draw scrutiny over downgrades leading to police investigation and parliamentary inquiry. Italy and UK politicians including Alistair Darling spoke on BBC Radio 4.",
+  });
+  assert.equal(proposals.find((p) => p.kind === "promote_v1_to_v2_tags"), undefined);
+  const topic = proposals.find((p) => p.kind === "set_topic_categories");
+  assert.ok(topic);
+  if (topic && topic.kind === "set_topic_categories") {
+    assert.deepEqual(topic.proposed, ["Securities regulation"]);
+  }
+  const drop = proposals.find((p) => p.kind === "drop_ungrounded_tags");
+  assert.ok(drop);
+  if (drop && drop.kind === "drop_ungrounded_tags") {
+    assert.ok(drop.proposedDrop.includes("BBC Radio 4"));
+    assert.ok(drop.proposedDrop.includes("Italy"));
+  }
+});
+
+test("Feb 2012: Romney summary maps to politics, not mining evolution from article noise", () => {
+  const summary =
+    "Wall Street executives heavily back Mitt Romney influencing the dynamics of the US presidential elections";
+  const articleText =
+    "Wall Street in the White House? Bitcoin mining and botnet mining capabilities discussed in unrelated forum posts.";
+  const fromSummary = inferStorylineLabels({ summary, tags: ["Mitt Romney", "U.S."] });
+  assert.deepEqual(fromSummary, ["Politics and elections"]);
+  const withArticle = inferStorylineLabels({ summary, articleText, tags: ["Mitt Romney", "U.S."] });
+  assert.deepEqual(withArticle, ["Politics and elections"]);
+  const proposals = buildCorrectionProposals({
+    date: "2012-02-23",
+    summary,
+    topArticleId: "https://example.com/romney",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Mitt Romney", "U.S."],
+    topicCategories: ["Mining evolution"],
+    legacyTags: [],
+    articleText,
+  });
+  const topic = proposals.find((p) => p.kind === "set_topic_categories");
+  assert.ok(topic);
+  if (topic && topic.kind === "set_topic_categories") {
+    assert.deepEqual(topic.proposed, ["Politics and elections"]);
+  }
 });

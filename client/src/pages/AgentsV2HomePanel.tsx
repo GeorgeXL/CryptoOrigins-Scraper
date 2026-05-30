@@ -4,6 +4,7 @@ import { Link } from "wouter";
 
 import { AgentsV2ResumeSlicePanel } from "@/pages/agents-v2/AgentsV2ResumeSlicePanel";
 import { AgentsV2ReviewPhasePanel } from "@/pages/agents-v2/AgentsV2ReviewPhasePanels";
+import { formatCorrectionChangeLines, summarizeCorrectionProposals } from "@/lib/correction-proposal-view";
 import {
   expectedFirstOperatorExperienceV3,
   mapReviewItemToQueueRow,
@@ -555,9 +556,10 @@ function TailoredLiveReviewCard({
             <p className="mt-1 text-sm">{p.expectedDate}</p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Button
             size="sm"
+            className="w-full sm:w-auto"
             disabled={busy}
             onClick={() => {
               setCalendarPick("keep");
@@ -569,6 +571,7 @@ function TailoredLiveReviewCard({
           <Button
             size="sm"
             variant="outline"
+            className="w-full sm:w-auto"
             disabled={busy || p.canonicalDateOccupied}
             onClick={() => {
               setCalendarPick("move");
@@ -634,9 +637,10 @@ function TailoredLiveReviewCard({
             ))}
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Button
             size="sm"
+            className="w-full sm:w-auto"
             disabled={busy}
             onClick={() => {
               setDuplicatePick("keep");
@@ -648,6 +652,7 @@ function TailoredLiveReviewCard({
           <Button
             size="sm"
             variant="outline"
+            className="w-full sm:w-auto"
             disabled={busy}
             onClick={() => {
               setDuplicatePick("replace");
@@ -659,6 +664,7 @@ function TailoredLiveReviewCard({
           <Button
             size="sm"
             variant="outline"
+            className="w-full sm:w-auto"
             disabled={busy}
             onClick={() => {
               setDuplicatePick("delete_focal");
@@ -685,7 +691,7 @@ function TailoredLiveReviewCard({
     return (
       <div className="space-y-3">
         <div className="rounded-lg border border-border bg-background p-4">
-          <div className="grid gap-3 lg:grid-cols-[120px_minmax(0,1fr)_220px]">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[120px_minmax(0,1fr)_minmax(0,12rem)]">
             <div>
               <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Date</p>
               <p className="mt-1 text-sm font-medium">{row.date}</p>
@@ -705,9 +711,9 @@ function TailoredLiveReviewCard({
             <p className="mb-1 text-[11px] uppercase tracking-[0.14em] text-emerald-300">What will change</p>
             {proposedChanges.length ? (
               <ul className="space-y-1">
-                {proposedChanges.slice(0, 5).map((p) => (
-                  <li key={p.id} className="text-xs text-muted-foreground">
-                    • {p.kind.replaceAll("_", " ")}
+                {formatCorrectionChangeLines(summarizeCorrectionProposals(proposedChanges)).map((line) => (
+                  <li key={line} className="text-xs text-muted-foreground">
+                    • {line}
                   </li>
                 ))}
               </ul>
@@ -728,7 +734,7 @@ function TailoredLiveReviewCard({
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-border bg-background p-4">
-        <div className="grid gap-3 lg:grid-cols-[120px_minmax(0,1fr)_220px]">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[120px_minmax(0,1fr)_minmax(0,12rem)]">
           <div>
             <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Date</p>
             <p className="mt-1 text-sm font-medium">{row.date}</p>
@@ -867,7 +873,7 @@ function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove 
               <button
                 type="button"
                 className={cn(
-                  "flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/30",
+                  "flex w-full items-start gap-2 px-3 py-3.5 text-left transition-colors hover:bg-muted/30 sm:gap-3 sm:px-4",
                   open && "bg-muted/20",
                 )}
                 onClick={() => setExpandedId((id) => (id === row.id ? null : row.id))}
@@ -886,13 +892,13 @@ function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove 
                     <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal text-muted-foreground">
                       {phaseChipLabel(row.pipelinePhase)}
                     </Badge>
+                    {statusBadge(row.status)}
                   </div>
                   <p className="text-sm font-medium leading-snug text-foreground">{row.title}</p>
                   {row.subtitle ? (
                     <p className="text-xs leading-relaxed text-muted-foreground">{row.subtitle}</p>
                   ) : null}
                 </div>
-                <div className="shrink-0 pt-0.5">{statusBadge(row.status)}</div>
               </button>
 
               <AnimatePresence initial={false}>
@@ -930,12 +936,13 @@ function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove 
                         ) : null}
                         <div className="rounded-xl border border-border/70 bg-background/45 p-4">
                           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Actions</p>
-                          <div className="mt-3 flex flex-wrap gap-2">
+                          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                             {row.status === "pending" ? (
                               <Button
                                 type="button"
                                 variant="outline"
                                 size="sm"
+                                className="w-full sm:w-auto"
                                 disabled={busyId === row.id}
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -949,7 +956,7 @@ function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove 
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                              className="w-full border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
                               disabled={busyId === row.id}
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -962,10 +969,11 @@ function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove 
                               }}
                             >
                               <Trash2 className="mr-2 size-4 shrink-0" aria-hidden />
-                              Remove from queue
+                              <span className="sm:hidden">Remove</span>
+                              <span className="hidden sm:inline">Remove from queue</span>
                             </Button>
                             {/^\d{4}-\d{2}-\d{2}$/.test(row.date) ? (
-                              <Button type="button" variant="outline" size="sm" asChild>
+                              <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" asChild>
                                 <Link href={`/day/${row.date}`}>Open day</Link>
                               </Button>
                             ) : null}
@@ -1130,8 +1138,8 @@ export default function AgentsV2HomePanel() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6 md:p-8">
-      <header className="flex items-start justify-between gap-3">
+    <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 md:p-8">
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-foreground">Review queue</h2>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -1190,13 +1198,13 @@ export default function AgentsV2HomePanel() {
           <TabsTrigger value="all" className="rounded-lg px-2 text-xs text-muted-foreground data-[state=active]:bg-foreground data-[state=active]:text-background data-[state=active]:shadow-sm sm:text-sm">All</TabsTrigger>
         </TabsList>
 
-        <div className="mt-3 flex justify-end">
-          <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+          <label className="inline-flex w-full flex-col gap-1.5 text-xs text-muted-foreground sm:w-auto sm:flex-row sm:items-center sm:gap-2">
             Scenario
             <select
               value={scenarioFilter}
               onChange={(e) => setScenarioFilter(e.target.value as ScenarioFilter)}
-              className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none"
+              className="h-9 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none sm:h-8 sm:w-auto sm:min-w-[11rem]"
             >
               <option value="all">All scenarios</option>
               <option value="awaiting_article_pick">Article pick</option>

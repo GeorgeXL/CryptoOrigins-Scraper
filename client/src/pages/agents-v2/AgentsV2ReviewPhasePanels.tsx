@@ -1,72 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import type { ApproveReviewOpts, CorrectionProposal, EditorialReviewItem, ArticleCandidate } from "@/lib/editorial-pipeline";
+import type { ApproveReviewOpts, EditorialReviewItem, ArticleCandidate } from "@/lib/editorial-pipeline";
+import {
+  buildCorrectionApprovePayload,
+  formatCorrectionChangeLines,
+  summarizeCorrectionProposals,
+} from "@/lib/correction-proposal-view";
 import { effectiveReviewItemPhase } from "@/pages/agents-v2/map-review-queue";
+import { TOPIC_HIERARCHY, formatTopicLeafWithGroup } from "@shared/topic-hierarchy";
 
 type PanelProps = {
   item: EditorialReviewItem;
   onApprove: (id: string, opts?: ApproveReviewOpts) => void;
   busy?: boolean;
 };
-
-function describeProposal(p: CorrectionProposal): { title: string; current: string; proposed: string } {
-  switch (p.kind) {
-    case "promote_v1_to_v2_tags": {
-      const currentSet = new Set(p.current.map((tag) => tag.toLowerCase()));
-      const added = p.proposed.filter((tag) => !currentSet.has(tag.toLowerCase()));
-      return {
-        title: "Promote legacy tags",
-        current: p.current.join(", ") || "(empty)",
-        proposed: added.join(", ") || "(no new tags)",
-      };
-    }
-    case "set_topic_categories":
-      return {
-        title: "Set topics",
-        current: p.current.join(", ") || "(empty)",
-        proposed: p.proposed.join(", "),
-      };
-    case "fix_tag_conflict":
-      return {
-        title: "Tag conflict",
-        current: p.conflictingTags.join(" vs "),
-        proposed: `drop ${p.proposedDrop.join(", ")}`,
-      };
-    case "redo_summary":
-      return { title: "Redo summary", current: p.currentSummary || "(empty)", proposed: "(regenerate)" };
-    case "edit_summary":
-      return {
-        title: "Edit summary",
-        current: p.currentSummary || "(empty)",
-        proposed: `${p.targetMin}-${p.targetMax} chars`,
-      };
-    case "clear_orphan_flag":
-      return { title: "Clear orphan", current: "orphan", proposed: "cleared" };
-    case "clear_manual_flag":
-      return { title: "Clear flag", current: "flagged", proposed: "cleared" };
-    case "drop_ungrounded_tags":
-      return {
-        title: `Remove ${p.proposedDrop.join(", ")}`,
-        current: p.proposedDrop.join(", "),
-        proposed: "ungrounded tag",
-      };
-    case "add_grounded_tags":
-      return {
-        title: `Add tag: ${p.proposedAdd.join(", ")}`,
-        current: "(missing tag)",
-        proposed: "",
-      };
-    case "merge_redundant_tags":
-      return {
-        title: "Merge tags",
-        current: p.merges.map((m) => m.from).join(", "),
-        proposed: p.merges.map((m) => `${m.from}→${m.to}`).join(", "),
-      };
-  }
-}
 
 function ChipEditor({
   values,
@@ -169,7 +120,7 @@ function ArticlePickPanel({ item, onApprove, busy }: PanelProps) {
   }
 
   return (
-    <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+    <div className="max-h-[min(60vh,20rem)] space-y-2 overflow-y-auto pr-1 sm:max-h-52">
       {recommended ? (
         <div className="rounded-lg border border-primary/30 bg-primary/5 p-2.5 text-xs">
           <p className="font-medium">Recommended action</p>
@@ -408,20 +359,50 @@ function SummaryApprovalPanel({ item, onApprove, busy }: PanelProps) {
 function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
   const proposals = item.proposals ?? [];
   const isPending = item.status === "pending";
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(proposals.map((p) => p.id)));
-  const editSummaryProposal = proposals.find((p) => p.kind === "edit_summary");
-  const addGroundedTagProposals = proposals.filter((p): p is Extract<CorrectionProposal, { kind: "add_grounded_tags" }> => p.kind === "add_grounded_tags");
-  const [summaryDraft, setSummaryDraft] = useState(editSummaryProposal?.currentSummary ?? "");
-  const [proposalTagSelections, setProposalTagSelections] = useState<Record<string, Set<string>>>(() =>
-    Object.fromEntries(addGroundedTagProposals.map((proposal) => [proposal.id, new Set(proposal.proposedAdd)])),
+  const changeSummary = useMemo(() => summarizeCorrectionProposals(proposals), [proposals]);
+  const [selectedAdds, setSelectedAdds] = useState<Set<string>>(
+    () => new Set(changeSummary.tagsToAdd),
+  );
+  const [selectedRemoves, setSelectedRemoves] = useState<Set<string>>(
+    () => new Set(changeSummary.tagsToRemove),
+  );
+  const [includeTopic, setIncludeTopic] = useState(() => Boolean(changeSummary.topicProposalId));
+  const [topicSelection, setTopicSelection] = useState(
+    () => changeSummary.topicProposalDefault ?? "",
+  );
+  const [includeSummaryEdit, setIncludeSummaryEdit] = useState(() => Boolean(changeSummary.summaryEdit));
+  const [selectedMisc, setSelectedMisc] = useState<Set<string>>(
+    () => new Set(changeSummary.misc.map((m) => m.id)),
+  );
+  const [summaryDraft, setSummaryDraft] = useState(changeSummary.summaryEdit?.currentSummary ?? "");
+  const topicGroups = useMemo(
+    () =>
+      TOPIC_HIERARCHY.map((group) => ({
+        name: group.name,
+        leaves: [...group.leaves].sort((a, b) => a.localeCompare(b)),
+      })),
+    [],
   );
 
   useEffect(() => {
-    setSummaryDraft(editSummaryProposal?.currentSummary ?? "");
-    setProposalTagSelections(
-      Object.fromEntries(addGroundedTagProposals.map((proposal) => [proposal.id, new Set(proposal.proposedAdd)])),
-    );
-  }, [proposals, editSummaryProposal?.currentSummary]);
+    const next = summarizeCorrectionProposals(proposals);
+    setSelectedAdds(new Set(next.tagsToAdd));
+    setSelectedRemoves(new Set(next.tagsToRemove));
+    setIncludeTopic(Boolean(next.topicProposalId));
+    setTopicSelection(next.topicProposalDefault ?? "");
+    setIncludeSummaryEdit(Boolean(next.summaryEdit));
+    setSelectedMisc(new Set(next.misc.map((m) => m.id)));
+    setSummaryDraft(next.summaryEdit?.currentSummary ?? "");
+  }, [proposals]);
+
+  const toggleInSet = (value: string, checked: boolean, setter: Dispatch<SetStateAction<Set<string>>>) => {
+    setter((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(value);
+      else next.delete(value);
+      return next;
+    });
+  };
 
   if (!proposals.length) {
     return (
@@ -445,107 +426,193 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
     );
   }
 
-  const selectedEditSummary = editSummaryProposal ? selected.has(editSummaryProposal.id) : false;
   const summaryLen = summaryDraft.trim().length;
-  const summaryOk = !selectedEditSummary || (summaryLen >= 100 && summaryLen <= 110);
+  const summaryOk =
+    !includeSummaryEdit ||
+    (summaryLen >= (changeSummary.summaryEdit?.targetMin ?? 100) &&
+      summaryLen <= (changeSummary.summaryEdit?.targetMax ?? 110));
+  const topicOk = !includeTopic || Boolean(topicSelection.trim());
+  const hasAdds = changeSummary.tagsToAdd.length > 0 || Boolean(changeSummary.topicToAdd);
+  const hasRemoves = changeSummary.tagsToRemove.length > 0 || changeSummary.topicsToRemove.length > 0;
+  const hasChanges = hasAdds || hasRemoves || changeSummary.summaryEdit || changeSummary.misc.length > 0;
 
   return (
-    <div className="max-h-48 space-y-2 overflow-y-auto">
-      {editSummaryProposal ? (
+    <div className="max-h-none space-y-3 sm:max-h-56 sm:overflow-y-auto">
+      {changeSummary.summaryEdit ? (
         <div className="rounded-lg border border-border/70 p-2">
-          <p className="mb-1 text-[11px] font-medium">Summary edit</p>
+          <label className="mb-1 flex items-center gap-2 text-[11px] font-medium">
+            <input
+              type="checkbox"
+              checked={includeSummaryEdit}
+              disabled={!isPending || busy}
+              onChange={(e) => setIncludeSummaryEdit(e.target.checked)}
+            />
+            Summary edit
+          </label>
           <Textarea
             value={summaryDraft}
             onChange={(e) => setSummaryDraft(e.target.value)}
             rows={3}
-            disabled={!isPending || busy || !selectedEditSummary}
+            disabled={!isPending || busy || !includeSummaryEdit}
             className="text-xs"
           />
           <p className={cn("mt-1 text-[10px]", summaryOk ? "text-emerald-600" : "text-amber-600")}>
-            {summaryLen} chars · target 100-110
+            {summaryLen} chars · target {changeSummary.summaryEdit.targetMin}-{changeSummary.summaryEdit.targetMax}
           </p>
         </div>
       ) : null}
-      {proposals.map((p) => {
-        const meta = describeProposal(p);
-        const on = selected.has(p.id);
-        const tagSelection = p.kind === "add_grounded_tags" ? (proposalTagSelections[p.id] ?? new Set(p.proposedAdd)) : null;
-        return (
-          <div
-            key={p.id}
-            className={cn(
-              "w-full rounded-lg border p-2 text-left text-[11px]",
-              on ? "border-primary bg-primary/5" : "border-border/70",
-            )}
-          >
-            <button
-              type="button"
-              disabled={!isPending || busy}
-              onClick={() =>
-                setSelected((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(p.id)) next.delete(p.id);
-                  else next.add(p.id);
-                  return next;
-                })
-              }
-              className="w-full text-left"
-            >
-              <p className="font-medium">{meta.title}</p>
-              {meta.proposed ? <p className="text-muted-foreground">{meta.proposed}</p> : null}
-            </button>
-            {p.kind === "add_grounded_tags" ? (
-              <div className="mt-2 space-y-2">
-                <div className="flex flex-wrap gap-1.5">
-                  {p.proposedAdd.map((tag) => {
-                    const enabled = tagSelection?.has(tag) ?? false;
-                    return (
-                      <button
-                        key={`${p.id}:${tag}`}
-                        type="button"
-                        disabled={!isPending || busy || !on}
-                        onClick={() =>
-                          setProposalTagSelections((prev) => {
-                            const next = { ...prev };
-                            const values = new Set(next[p.id] ?? p.proposedAdd);
-                            if (values.has(tag)) values.delete(tag);
-                            else values.add(tag);
-                            next[p.id] = values;
-                            return next;
-                          })
-                        }
-                        className={cn(
-                          "rounded-full border px-2 py-0.5 text-[11px]",
-                          enabled ? "border-emerald-500 bg-emerald-500/10" : "border-border/70 text-muted-foreground",
-                        )}
-                      >
-                        {enabled ? "✓ " : ""}{tag}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+
+      {hasAdds ? (
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/[0.04] p-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Add</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {changeSummary.tagsToAdd.map((tag) => {
+              const on = selectedAdds.has(tag);
+              return (
+                <button
+                  key={`add-${tag}`}
+                  type="button"
+                  disabled={!isPending || busy}
+                  onClick={() => toggleInSet(tag, !on, setSelectedAdds)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[11px]",
+                    on ? "border-emerald-500 bg-emerald-500/10" : "border-border/70 text-muted-foreground",
+                  )}
+                >
+                  {on ? "✓ " : ""}{tag}
+                </button>
+              );
+            })}
+            {changeSummary.topicToAdd ? (
+              <button
+                type="button"
+                disabled={!isPending || busy}
+                onClick={() => setIncludeTopic((v) => !v)}
+                className={cn(
+                  "rounded-full border px-2 py-0.5 text-[11px]",
+                  includeTopic ? "border-emerald-500 bg-emerald-500/10" : "border-border/70 text-muted-foreground",
+                )}
+              >
+                {includeTopic ? "✓ " : ""}Topic: {changeSummary.topicToAdd}
+              </button>
             ) : null}
           </div>
-        );
-      })}
+          {changeSummary.topicProposalId && includeTopic ? (
+            <div className="mt-2">
+              <Select
+                value={topicSelection || undefined}
+                disabled={!isPending || busy}
+                onValueChange={setTopicSelection}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Choose topic">
+                    {topicSelection ? formatTopicLeafWithGroup(topicSelection) : undefined}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  {topicGroups.map((group) => (
+                    <SelectGroup key={group.name}>
+                      <SelectLabel className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {group.name}
+                      </SelectLabel>
+                      {group.leaves.map((leaf) => (
+                        <SelectItem key={leaf} value={leaf} className="pl-6 text-xs">
+                          {leaf}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {hasRemoves ? (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/[0.04] p-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-red-400">Remove</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {changeSummary.tagsToRemove.map((tag) => {
+              const on = selectedRemoves.has(tag);
+              return (
+                <button
+                  key={`remove-${tag}`}
+                  type="button"
+                  disabled={!isPending || busy}
+                  onClick={() => toggleInSet(tag, !on, setSelectedRemoves)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[11px]",
+                    on ? "border-red-500 bg-red-500/10" : "border-border/70 text-muted-foreground",
+                  )}
+                >
+                  {on ? "✓ " : ""}{tag}
+                </button>
+              );
+            })}
+            {changeSummary.topicsToRemove.map((topic) => (
+              <span
+                key={`topic-remove-${topic}`}
+                className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] text-red-200"
+              >
+                Topic: {topic}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {changeSummary.misc.length > 0 ? (
+        <div className="space-y-1 rounded-lg border border-border/70 p-2">
+          {changeSummary.misc.map((entry) => (
+            <label key={entry.id} className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={selectedMisc.has(entry.id)}
+                disabled={!isPending || busy}
+                onChange={(e) => {
+                  setSelectedMisc((prev) => {
+                    const next = new Set(prev);
+                    if (e.target.checked) next.add(entry.id);
+                    else next.delete(entry.id);
+                    return next;
+                  });
+                }}
+              />
+              {entry.label}
+            </label>
+          ))}
+        </div>
+      ) : null}
+
+      {!hasChanges ? (
+        <p className="text-xs text-muted-foreground">No metadata changes proposed.</p>
+      ) : null}
+
       {isPending ? (
         <Button
           type="button"
           size="sm"
           className="w-full"
-          disabled={busy || selected.size === 0 || !summaryOk}
+          disabled={busy || !summaryOk || !topicOk}
           onClick={() =>
-            onApprove(item.id, {
-              acceptedProposalIds: Array.from(selected),
-              proposalTagSelections: Object.fromEntries(
-                Object.entries(proposalTagSelections).map(([proposalId, values]) => [proposalId, Array.from(values)]),
-              ),
-              editedSummary: selectedEditSummary ? summaryDraft : undefined,
-            })
+            onApprove(
+              item.id,
+              buildCorrectionApprovePayload({
+                proposals,
+                summary: changeSummary,
+                selectedAdds,
+                selectedRemoves,
+                includeTopic,
+                topicSelection,
+                selectedMisc,
+                includeSummaryEdit,
+                editedSummary: summaryDraft,
+              }),
+            )
           }
         >
-          Apply {selected.size} fix{selected.size === 1 ? "" : "es"}
+          Apply changes
         </Button>
       ) : null}
     </div>

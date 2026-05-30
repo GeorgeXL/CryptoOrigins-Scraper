@@ -3,7 +3,12 @@ import { asc, desc, eq, and, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { historicalNewsAnalyses, humanReviewQueue, pipelineRuns } from "@shared/schema";
 import { requireAgentSecret } from "../services/agents-sdk/auth";
-import { pipelineAgentSchema } from "../services/editorial-pipeline/contracts";
+import {
+  ALL_PIPELINE_CHECK_SCOPES,
+  pipelineAgentSchema,
+  pipelineCheckScopeSchema,
+  type PipelineCheckScope,
+} from "../services/editorial-pipeline/contracts";
 import {
   getEditorialCutoverStatus,
   getEditorialPipelineRun,
@@ -278,12 +283,24 @@ router.post("/api/agent/pipeline/run", async (req, res) => {
     if (dateFrom > dateTo) {
       return res.status(400).json({ error: "dateFrom must be <= dateTo" });
     }
+    const rawCheckScopes = Array.isArray(req.body?.checkScopes) ? req.body.checkScopes : ALL_PIPELINE_CHECK_SCOPES;
+    const checkScopes: PipelineCheckScope[] = Array.from(
+      new Set(
+        rawCheckScopes.filter((scope: unknown): scope is PipelineCheckScope =>
+          pipelineCheckScopeSchema.safeParse(scope).success,
+        ),
+      ),
+    );
+    if (checkScopes.length === 0) {
+      return res.status(400).json({ error: "Select at least one pipeline check" });
+    }
 
     const out = await startEditorialPipelineRun({
       dateFrom,
       dateTo,
       maxDaysToConsider: Number(maxDaysToConsider) || 60,
       requestedBy: "admin-ui",
+      checkScopes,
     });
 
     res.json({
@@ -594,6 +611,15 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
             ]),
           )
         : undefined;
+    const proposalTopicSelections =
+      req.body?.proposalTopicSelections && typeof req.body.proposalTopicSelections === "object"
+        ? Object.fromEntries(
+            Object.entries(req.body.proposalTopicSelections as Record<string, unknown>).map(([proposalId, value]) => [
+              proposalId,
+              Array.isArray(value) ? value.filter((x): x is string => typeof x === "string") : [],
+            ]),
+          )
+        : undefined;
     const calendarDecision =
       typeof req.body?.calendarDecision === "string" &&
       (CALENDAR_DECISIONS as string[]).includes(req.body.calendarDecision)
@@ -749,6 +775,7 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
       selectedArticleId,
       acceptedProposalIds,
       proposalTagSelections,
+      proposalTopicSelections,
       calendarDecision,
       duplicateDecision,
       duplicateNeighborDate,

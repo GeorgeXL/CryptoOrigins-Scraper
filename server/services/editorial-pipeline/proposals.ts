@@ -8,7 +8,7 @@
  * real diff and `approved-writer` can apply only what the operator accepted.
  */
 
-import { normalizeTagList, normalizeTagValue, normalizeTopicList } from "./tools";
+import { normalizeTagList, normalizeTagValue } from "./tools";
 import type { CorrectionProposal } from "./review-package";
 import { isEditorialSummaryWeak, isValidPipelineTopArticleId } from "./editorial-quality";
 import {
@@ -18,7 +18,14 @@ import {
   isTagGroundedInTexts,
   type CanonicalTagIndex,
 } from "./tag-grounding";
-import { inferStorylineLabels } from "./storyline-taxonomy";
+import { inferStorylineLabels, inferTopicProposal, storedTopicMisaligned } from "./storyline-taxonomy";
+import { invalidTopicReasons } from "./topic-validation";
+import { formatTopicLeafWithGroup } from "@shared/topic-hierarchy";
+import {
+  editorialTagKey,
+  isEditorialEntityTagCandidate,
+  isEditoriallyInvalidCurrentTag,
+} from "./editorial-tag-rules";
 
 export type LegacyTag = { name?: unknown; category?: unknown } | string;
 
@@ -95,7 +102,7 @@ function mergeV2WithLegacyTags(currentV2: string[], legacy: string[], groundingT
   for (const legacyName of legacy) {
     const normalized = editorialTagKey(legacyName);
     if (!normalized) continue;
-    if (!isUsefulEditorialTagCandidate(legacyName)) continue;
+    if (!isEditorialEntityTagCandidate(legacyName)) continue;
     if (currentNormalized.has(normalized)) continue;
     if (shouldGround && !isTagGroundedInTexts(legacyName, groundingTexts)) continue;
     currentNormalized.add(normalized);
@@ -108,112 +115,54 @@ function mergeV2WithLegacyTags(currentV2: string[], legacy: string[], groundingT
   };
 }
 
-const DEFAULT_TOPIC_SUGGESTION = ["Bitcoin culture"];
-const DISALLOWED_EDITORIAL_TAGS = new Set([
-  "altcoin",
-  "america",
-  "block",
-  "bailout",
-  "business",
-  "central bank",
-  "chancellor",
-  "company",
-  "congress",
-  "concerns",
-  "casino",
-  "casinos",
-  "ceo",
-  "core",
-  "crypto",
-  "crypto market",
-  "crypto markets",
-  "cryptocurrency",
-  "dentist",
-  "dollar",
-  "foundation",
-  "financial crisis",
-  "gaming company",
-  "gold",
-  "gold-backed assets",
-  "government",
-  "interest rates",
-  "job",
-  "jobs",
-  "market",
-  "oil",
-  "pizza",
-  "pound",
-  "pounds",
-  "pound sterling",
-  "price",
-  "president",
-  "regulation",
-  "regulations",
-  "real estate",
-  "senate",
-  "security",
-  "singapore dollar",
-  "transaction",
-  "transactions",
-  "usd",
-  "unemployment",
-  "wave",
-]);
+const DEFAULT_TOPIC_SUGGESTION: string[] = [];
 
-const TAG_ALIASES: Record<string, string> = {
-  btc: "bitcoin",
-  eth: "ethereum",
-  "bitcoin price": "bitcoin",
-  fed: "federal reserve",
-  "lightning network": "lightning",
-  "c-lightning": "lightning",
-  "coin terra": "cointerra",
-  cointerra: "cointerra",
-  "united states": "us",
-  usa: "us",
-  "u.s": "us",
-  "u.s.": "us",
-  "new york city": "new york",
-  "winklevoss twins": "winklevoss",
-};
-
-function editorialTagKey(raw: string): string {
-  const normalized = normalizeTagValue(raw);
-  return TAG_ALIASES[normalized] ?? normalized;
+/** Tags that appear only as critics/opponents in the summary, not as the story subject. */
+function findTangentialCriticTags(summary: string, tags: string[]): string[] {
+  const patterns = [
+    /criticism from (?:the )?([^,.;]+)/gi,
+    /criticized by (?:the )?([^,.;]+)/gi,
+    /facing criticism from (?:the )?([^,.;]+)/gi,
+    /opposition from (?:the )?([^,.;]+)/gi,
+  ];
+  const criticKeys = new Set<string>();
+  for (const re of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(summary)) !== null) {
+      const phrase = match[1]?.trim() ?? "";
+      if (!phrase) continue;
+      criticKeys.add(normalizeTagValue(phrase));
+      for (const word of phrase.split(/\s+/)) {
+        const w = normalizeTagValue(word);
+        if (w.length > 3) criticKeys.add(w);
+      }
+    }
+  }
+  if (criticKeys.size === 0) return [];
+  return tags.filter((tag) => {
+    const normalized = normalizeTagValue(tag);
+    const key = editorialTagKey(tag);
+    return criticKeys.has(normalized) || criticKeys.has(key);
+  });
 }
 
-function isUsefulEditorialTagCandidate(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) return false;
-  if (trimmed.startsWith(".")) return false;
-  const normalized = normalizeTagValue(trimmed);
-  if (!normalized) return false;
-  const key = editorialTagKey(trimmed);
-  if (DISALLOWED_EDITORIAL_TAGS.has(normalized) || DISALLOWED_EDITORIAL_TAGS.has(key)) return false;
-  if (normalized.length <= 2 && !["us", "uk", "eu"].includes(normalized)) return false;
-  return true;
-}
-
-const BROAD_PLACEHOLDER_TOPICS = new Set([
-  "historical",
-  "bitcoin",
-  "market",
-  "company",
-  "adoption",
-  "economic",
-  "political",
-  "technology",
-  "investment",
-  "industry-news",
-  "regulation",
-]);
-
-function shouldReplaceBroadTopics(currentTopics: string[], inferredTopics: string[]): boolean {
-  if (inferredTopics.length === 0) return false;
-  const normalizedCurrent = normalizeTopicList(currentTopics);
-  if (normalizedCurrent.length === 0) return false;
-  if (!normalizedCurrent.every((topic) => BROAD_PLACEHOLDER_TOPICS.has(topic))) return false;
-  return inferredTopics.some((topic) => !normalizedCurrent.includes(normalizeTagValue(topic)));
+function aliasDuplicateTagPairs(currentTags: string[]): { from: string; to: string }[] {
+  const canonicalByKey = new Map<string, string>();
+  const out: { from: string; to: string }[] = [];
+  for (const raw of currentTags) {
+    const tag = raw.trim();
+    if (!tag) continue;
+    const key = editorialTagKey(tag);
+    if (!key) continue;
+    const existing = canonicalByKey.get(key);
+    if (!existing) {
+      canonicalByKey.set(key, tag);
+      continue;
+    }
+    if (existing.toLowerCase() === tag.toLowerCase()) continue;
+    out.push({ from: tag, to: existing });
+  }
+  return out;
 }
 
 function inferredMissingTagsFromSummary(
@@ -224,7 +173,7 @@ function inferredMissingTagsFromSummary(
   const current = new Set(currentTags.map((t) => editorialTagKey(t)).filter(Boolean));
   const out: string[] = [];
   const add = (tag: string) => {
-    if (!isUsefulEditorialTagCandidate(tag)) return;
+    if (!isEditorialEntityTagCandidate(tag)) return;
     const key = editorialTagKey(tag);
     if (!key || current.has(key)) return;
     if (out.some((x) => editorialTagKey(x) === key)) return;
@@ -239,7 +188,7 @@ function inferredMissingTagsFromSummary(
       currentTags: [...currentTags, ...out],
       index: canonicalTagIndex,
       limit: 6,
-    }).filter(isUsefulEditorialTagCandidate);
+    }).filter(isEditorialEntityTagCandidate);
     for (const hit of taxonomyHits) {
       add(hit);
     }
@@ -261,7 +210,6 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
     : [];
   const legacy = legacyTagNames(input.legacyTags);
   const topics = topicCategoryNames(input.topicCategories);
-  const normalizedTopics = normalizeTopicList(topics);
 
   // 1. v1 → v2 tag promotion
   if (legacy.length > 0) {
@@ -302,7 +250,7 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
     });
   }
 
-  // 3. Topic categories default when missing or obviously too broad
+  // 3. Topic categories — enforce exactly one new-system hierarchy leaf.
   const inferredStorylinesFromSummary = inferStorylineLabels({
     summary,
     tags: currentV2,
@@ -314,19 +262,37 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
         articleText: input.articleText,
         tags: currentV2,
       });
-  if (normalizedTopics.length === 0 || shouldReplaceBroadTopics(topics, inferredStorylinesFromSummary)) {
-    const proposed = inferredStorylinesFromSummary.length
-      ? inferredStorylinesFromSummary
-      : (inferredStorylinesFromArticle.length ? inferredStorylinesFromArticle : DEFAULT_TOPIC_SUGGESTION);
+  const inferredTopicProposal = inferTopicProposal({
+    summary,
+    articleText: input.articleText,
+    tags: currentV2,
+  });
+  const topicIssues = invalidTopicReasons(topics);
+  const resolvedTopicProposal =
+    inferredTopicProposal.length > 0
+      ? inferredTopicProposal
+      : inferredStorylinesFromSummary.length > 0
+        ? inferredStorylinesFromSummary
+        : inferredStorylinesFromArticle;
+  if (topicIssues.length > 0) {
+    const proposed = resolvedTopicProposal.length > 0 ? resolvedTopicProposal : DEFAULT_TOPIC_SUGGESTION;
     out.push({
       id: buildId(input.date, "set_topic_categories"),
       kind: "set_topic_categories",
       current: topics,
       proposed,
       rationale:
-        normalizedTopics.length === 0
-          ? "No storyline assigned. Pick the closest homepage storyline, or edit it if a new granular storyline is needed."
-          : "Current topics are too broad for the saved story. Replace them with more specific homepage storylines.",
+        proposed.length > 0
+          ? `${topicIssues.join("; ")}. Auto-assigned ${formatTopicLeafWithGroup(proposed[0])}.`
+          : `${topicIssues.join("; ")}. Could not infer a storyline leaf from the summary.`,
+    });
+  } else if (storedTopicMisaligned(topics, inferredTopicProposal)) {
+    out.push({
+      id: buildId(input.date, "set_topic_categories"),
+      kind: "set_topic_categories",
+      current: topics,
+      proposed: inferredTopicProposal,
+      rationale: `Stored topic "${topics[0]}" doesn't match the summary (inferred ${formatTopicLeafWithGroup(inferredTopicProposal[0])}).`,
     });
   }
 
@@ -372,14 +338,21 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
     });
   }
 
-  // 7. Ungrounded tags — drop tags that never appear in summary or article body.
-  //    Mitigates the "Belgium on a Russia article" / "Mitch McConnell on a TARP
-  //    blurb" hallucination patterns. We only run this check when an article
-  //    body is available: a terse summary alone is not sufficient ground truth
-  //    to drop legitimate operator-curated tags.
-  const articleText = (input.articleText ?? "").trim();
-  if (articleText.length > 0) {
-    const ungrounded = findUngroundedTags(currentV2, [summary, articleText]);
+  // 7. Ungrounded tags — summary is the editorial source of truth for what
+  //    belongs on the row. Tags absent from the summary (even if they appear
+  //    in an older article body) should be dropped.
+  if (summary.length > 0) {
+    const aliasDuplicateFrom = new Set(aliasDuplicateTagPairs(currentV2).map((pair) => pair.from.toLowerCase()));
+    const invalidCurrentTags = currentV2.filter(isEditoriallyInvalidCurrentTag);
+    const notInSummary = findUngroundedTags(currentV2, [summary]).filter(
+      (tag) => !aliasDuplicateFrom.has(tag.toLowerCase()),
+    );
+    const tangentialCritics = findTangentialCriticTags(summary, currentV2);
+    const ungrounded = Array.from(new Set([
+      ...invalidCurrentTags,
+      ...notInSummary,
+      ...tangentialCritics,
+    ]));
     const suppressedGrounded = new Set(
       (input.suppressedGroundedTags ?? []).map((tag) => editorialTagKey(tag)).filter(Boolean),
     );
@@ -395,7 +368,7 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
           currentTags: currentV2,
           index: input.canonicalTagIndex,
           limit: 12,
-        }).filter(isUsefulEditorialTagCandidate);
+        }).filter(isEditorialEntityTagCandidate);
         if (suggestedFocusTags.length === 0) suggestedFocusTags = undefined;
       }
       out.push({
@@ -403,7 +376,7 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
         kind: "drop_ungrounded_tags",
         proposedDrop: ungrounded,
         ...(suggestedFocusTags && suggestedFocusTags.length > 0 ? { suggestedFocusTags } : {}),
-        rationale: `Tag(s) "${ungrounded.slice(0, 4).join(", ")}${ungrounded.length > 4 ? "…" : ""}" don't appear in the summary or article body. Approve to drop.`,
+        rationale: `Tag(s) "${ungrounded.slice(0, 4).join(", ")}${ungrounded.length > 4 ? "…" : ""}" don't belong on this summary. Approve to drop.`,
       });
     }
     if (inferredMissingTags.length > 0) {
@@ -416,7 +389,7 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
               suppressed: (input.suppressedGroundedTags ?? []).filter(Boolean).slice(0, 12),
             }
           : {}),
-        rationale: `Summary mentions ${inferredMissingTags.slice(0, 4).join(", ")}${inferredMissingTags.length > 4 ? "…" : ""}, but the row does not tag it.`,
+        rationale: `Named entities grounded in the summary but missing from tags: ${inferredMissingTags.slice(0, 4).join(", ")}${inferredMissingTags.length > 4 ? "…" : ""}. (Policy themes and process nouns are not tagged.)`,
       });
     }
   }
@@ -424,7 +397,7 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
   // 8. Redundant tag pairs — e.g. "Schnorr" present alongside "Schnorr
   //    signatures". Merge the longer one into the shorter canonical so we
   //    don't grow a sea of near-duplicate tags.
-  const redundantPairs = findRedundantTagPairs(currentV2);
+  const redundantPairs = [...aliasDuplicateTagPairs(currentV2), ...findRedundantTagPairs(currentV2)];
   if (redundantPairs.length > 0) {
     out.push({
       id: buildId(input.date, "merge_redundant_tags"),

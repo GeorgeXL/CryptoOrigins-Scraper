@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addDays, addMonths, differenceInCalendarDays, endOfMonth, format, isValid, parse, parseISO, startOfMonth } from "date-fns";
 import type { DateRange } from "react-day-picker";
-import { Check, ChevronLeft, ChevronRight, Loader2, UserRound, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, UserRound, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 
 import {
@@ -16,6 +16,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,6 +35,7 @@ import {
   rememberLastPipelineRunId,
   startPipelineRun,
   stopPipelineRun,
+  type PipelineCheckScope,
   type PipelineRunDetail,
 } from "@/lib/editorial-pipeline";
 import { cn } from "@/lib/utils";
@@ -37,6 +46,16 @@ type LogStatus = "pending" | "approved" | "rejected" | "review";
 type LogLine = { id: string; text: string; status: LogStatus };
 type RunWindow = { dateFrom: string; dateTo: string; maxDays: number; totalDays: number };
 type SlicePlan = { slices: RunWindow[]; currentIndex: number };
+
+const PIPELINE_CHECK_OPTIONS: Array<{ value: PipelineCheckScope; label: string }> = [
+  { value: "relevance", label: "Relevance" },
+  { value: "summary", label: "Summary length" },
+  { value: "topics", label: "Topics" },
+  { value: "tags", label: "Tags" },
+  { value: "duplicates", label: "Duplicates" },
+  { value: "date", label: "Date check" },
+];
+const ALL_PIPELINE_CHECK_VALUES = PIPELINE_CHECK_OPTIONS.map((option) => option.value);
 
 const LUXURY_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const LOG_TRANSITION = { duration: 0.5, ease: LUXURY_EASE };
@@ -310,6 +329,7 @@ export default function AgentsV2AgentPanel() {
   const [stopEnabledAtMs, setStopEnabledAtMs] = useState(0);
   const [rangeLimitDialogOpen, setRangeLimitDialogOpen] = useState(false);
   const [pendingRunWindow, setPendingRunWindow] = useState<RunWindow | null>(null);
+  const [selectedChecks, setSelectedChecks] = useState<PipelineCheckScope[]>(ALL_PIPELINE_CHECK_VALUES);
   const startCancelRequestedRef = useRef(false);
   const logScrollRootRef = useRef<HTMLDivElement | null>(null);
   const slicePlanRef = useRef<SlicePlan | null>(null);
@@ -317,6 +337,23 @@ export default function AgentsV2AgentPanel() {
 
   const isRunningRef = useRef(isRunning);
   isRunningRef.current = isRunning;
+
+  const selectedCheckSummary = useMemo(() => {
+    if (selectedChecks.length === ALL_PIPELINE_CHECK_VALUES.length) return "All checks";
+    return PIPELINE_CHECK_OPTIONS.filter((option) => selectedChecks.includes(option.value))
+      .map((option) => option.label)
+      .join(", ");
+  }, [selectedChecks]);
+
+  const togglePipelineCheck = (value: PipelineCheckScope, checked: boolean) => {
+    setSelectedChecks((current) => {
+      if (checked) {
+        return Array.from(new Set([...current, value]));
+      }
+      if (current.length <= 1) return current;
+      return current.filter((item) => item !== value);
+    });
+  };
 
   const rangeLabel = useMemo(() => {
     if (!range?.from) return null;
@@ -380,6 +417,7 @@ export default function AgentsV2AgentPanel() {
         dateFrom: window.dateFrom,
         dateTo: window.dateTo,
         maxDaysToConsider: window.maxDays,
+        checkScopes: selectedChecks,
       });
       if (startCancelRequestedRef.current) {
         try {
@@ -412,7 +450,7 @@ export default function AgentsV2AgentPanel() {
         : "";
       const startLine: LogLine = {
         id: `${out.runId}-start`,
-        text: `${sliceLabel}Pipeline run ${out.runId.slice(0, 8)}… · ${window.dateFrom}${window.dateFrom !== window.dateTo ? ` → ${window.dateTo}` : ""}`,
+        text: `${sliceLabel}Pipeline run ${out.runId.slice(0, 8)}… · ${window.dateFrom}${window.dateFrom !== window.dateTo ? ` → ${window.dateTo}` : ""} · ${selectedCheckSummary}`,
         status: "approved",
       };
       setLogLines([...completedSliceLogLinesRef.current, startLine]);
@@ -620,7 +658,7 @@ export default function AgentsV2AgentPanel() {
   }, [logLines]);
 
   return (
-    <div className="max-w-2xl space-y-5 p-4 md:p-6">
+    <div className="w-full max-w-2xl space-y-5 p-4 md:p-6">
       <header>
         <h2 className="text-lg font-semibold tracking-tight text-foreground">Agent run</h2>
         <p className="mt-1 text-sm text-muted-foreground">Start an editorial pipeline run for a day or range.</p>
@@ -628,6 +666,50 @@ export default function AgentsV2AgentPanel() {
 
       <section className="space-y-3">
         <div className="w-full max-w-md space-y-2">
+          <div className="space-y-2">
+            <Label className="text-xs text-muted-foreground">Checks to run</Label>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-auto min-h-10 w-full justify-between rounded-xl px-3 py-2 text-left font-normal"
+                  disabled={isRunning}
+                >
+                  <span className="truncate">{selectedCheckSummary}</span>
+                  <ChevronDown className="ml-2 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64">
+                <DropdownMenuLabel className="text-xs text-muted-foreground">Pipeline checks</DropdownMenuLabel>
+                <DropdownMenuCheckboxItem
+                  checked={selectedChecks.length === ALL_PIPELINE_CHECK_VALUES.length}
+                  onSelect={(event) => event.preventDefault()}
+                  onCheckedChange={(checked) => {
+                    if (checked) setSelectedChecks(ALL_PIPELINE_CHECK_VALUES);
+                  }}
+                >
+                  All checks
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                {PIPELINE_CHECK_OPTIONS.map((option) => {
+                  const checked = selectedChecks.includes(option.value);
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={option.value}
+                      checked={checked}
+                      disabled={checked && selectedChecks.length === 1}
+                      onSelect={(event) => event.preventDefault()}
+                      onCheckedChange={(nextChecked) => togglePipelineCheck(option.value, Boolean(nextChecked))}
+                    >
+                      {option.label}
+                    </DropdownMenuCheckboxItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
           <Tabs
             value={dateMode}
             onValueChange={(v) => {
@@ -685,7 +767,8 @@ export default function AgentsV2AgentPanel() {
             </TabsContent>
 
             <TabsContent value="range" className="mt-3 space-y-3 outline-none focus-visible:outline-none focus-visible:ring-0">
-              <div className="relative w-fit rounded-lg border bg-background p-1 shadow-sm">
+              <div className="w-full max-w-full overflow-x-auto rounded-lg border bg-background p-1 shadow-sm">
+                <div className="relative mx-auto w-fit min-w-[17.5rem]">
                 <div className="pointer-events-none absolute left-4 right-4 top-4 z-10 flex items-center justify-between">
                   <Button
                     type="button"
@@ -722,13 +805,14 @@ export default function AgentsV2AgentPanel() {
                   toDate={new Date(2026, 11, 31)}
                   className="rounded-md"
                 />
+                </div>
               </div>
-              <div className="flex w-full flex-row flex-wrap items-center justify-start gap-2">
+              <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                 <Button
                   type="button"
                   variant={isRunning ? "destructive" : "default"}
                   size="default"
-                  className="w-fit shrink-0"
+                  className="w-full shrink-0 sm:w-fit"
                   onClick={() => void (isRunning ? stopRun() : startRun())}
                   disabled={isRunning && Date.now() < stopEnabledAtMs}
                 >
@@ -738,7 +822,7 @@ export default function AgentsV2AgentPanel() {
                   type="button"
                   variant="secondary"
                   size="default"
-                  className="w-fit shrink-0 whitespace-normal text-sm leading-snug"
+                  className="w-full shrink-0 whitespace-normal text-sm leading-snug sm:w-fit"
                   onClick={applyVisibleMonthAsRange}
                 >
                   Use {format(month, "MMMM yyyy")} as full range

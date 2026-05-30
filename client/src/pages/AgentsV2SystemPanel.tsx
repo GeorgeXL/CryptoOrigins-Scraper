@@ -149,7 +149,7 @@ export default function AgentsV2SystemPanel() {
   const [start, triage, source, summary, taxonomy, review, write] = FLOW_NODES;
 
   return (
-    <main className="max-w-6xl space-y-5 p-6 md:p-8">
+    <main className="max-w-6xl space-y-5 p-4 sm:p-6 md:p-8">
       <header className="space-y-1">
         <h2 className="text-lg font-semibold tracking-tight text-foreground">System</h2>
         <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">

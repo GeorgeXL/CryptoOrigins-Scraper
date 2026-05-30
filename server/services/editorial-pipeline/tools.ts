@@ -146,16 +146,17 @@ export function normalizedTagsFromRow(tagsVersion2: unknown): string[] {
   return [...new Set(out)].filter(Boolean);
 }
 
-/** Topic labels from `topic_categories` json (strings or `{ name }` objects). */
+/** Topic labels from `topic_categories` json (strings or `{ name | label | slug }` objects). */
 export function topicLabelsFromRow(topicCategories: unknown): string[] {
   if (!Array.isArray(topicCategories)) return [];
   const out: string[] = [];
   for (const x of topicCategories) {
     if (typeof x === "string" && x.trim()) {
       out.push(normalizeTopicValue(x));
-    } else if (x && typeof x === "object" && "name" in x) {
-      const n = (x as { name?: unknown }).name;
-      if (typeof n === "string" && n.trim()) out.push(normalizeTopicValue(n));
+    } else if (x && typeof x === "object") {
+      const o = x as Record<string, unknown>;
+      const cand = [o.label, o.name, o.slug].find((v) => typeof v === "string" && (v as string).trim());
+      if (typeof cand === "string") out.push(normalizeTopicValue(cand));
     }
   }
   return [...new Set(out)].filter(Boolean);

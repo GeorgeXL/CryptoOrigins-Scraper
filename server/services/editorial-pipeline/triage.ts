@@ -4,6 +4,7 @@ import { historicalNewsAnalyses, manualNewsEntries, pagesAndTags } from "@shared
 import type { TriageItem } from "./contracts";
 import { triageItemSchema } from "./contracts";
 import { evaluateSummaryQuality, isValidPipelineTopArticleId } from "./editorial-quality";
+import { invalidTopicReasons } from "./topic-validation";
 
 function isoDateRange(from: string, to: string): string[] {
   const out: string[] = [];
@@ -27,6 +28,22 @@ function topicCategoriesLen(v: unknown): number {
   if (v == null) return 0;
   if (!Array.isArray(v)) return 0;
   return v.length;
+}
+
+function topicCategoryNames(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry === "string") {
+      const v = entry.trim();
+      if (v) out.push(v);
+    } else if (entry && typeof entry === "object") {
+      const o = entry as Record<string, unknown>;
+      const cand = [o.label, o.name, o.slug].find((x) => typeof x === "string" && (x as string).trim());
+      if (typeof cand === "string") out.push(cand.trim());
+    }
+  }
+  return out;
 }
 
 /** Legacy `tags` json array length. */
@@ -101,7 +118,11 @@ export function triageExistingDay(input: {
   }
   if (Number(input.confidenceScore ?? 0) < 60) reasons.push("Low confidence score");
   if (taxonomyMissing) {
-    reasons.push("No topic tags or categories linked for this day");
+    reasons.push("No tags or topic categories linked for this day");
+  }
+  const topicIssues = invalidTopicReasons(topicCategoryNames(input.topicCategories));
+  if (topicIssues.length > 0 && !taxonomyMissing) {
+    reasons.push(`Topic hierarchy issue: ${topicIssues.join("; ")}`);
   }
 
   if (!reasons.length) {

@@ -1,5 +1,14 @@
+import { useState } from "react";
 import { Link, useLocation } from "wouter";
+import { Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import AgentsV2AgentPanel from "@/pages/AgentsV2AgentPanel";
 import AgentsV2HomePanel from "@/pages/AgentsV2HomePanel";
 import AgentsV2SystemPanel from "@/pages/AgentsV2SystemPanel";
@@ -23,6 +32,7 @@ function AgentsV2System() {
 
 export default function AdminAgentsV2Page() {
   const [loc] = useLocation();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const rawPath = loc.split("?")[0].replace(/\/$/, "") || "/";
   const path = rawPath === LEGACY_BASE || rawPath.startsWith(`${LEGACY_BASE}/`)
     ? rawPath.replace(LEGACY_BASE, BASE)
@@ -36,10 +46,55 @@ export default function AdminAgentsV2Page() {
     { href: SYSTEM, label: "System", match: isSystem },
   ];
 
+  const currentLabel = items.find((item) => item.match)?.label ?? "Admin Agent";
+
+  const navLinkClass = (active: boolean) =>
+    cn(
+      "block rounded-md px-3 py-2.5 text-sm no-underline transition-colors",
+      active
+        ? "bg-accent font-medium text-accent-foreground"
+        : "text-muted-foreground hover:bg-muted hover:text-foreground",
+    );
+
   return (
-    <div className="flex w-full min-h-[calc(100vh-5rem)] border border-border rounded-lg overflow-hidden bg-background">
-      <aside className="w-56 shrink-0 border-r border-border bg-muted/30 p-4 flex flex-col gap-1">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-2 mb-2">
+    <div className="flex min-h-[calc(100vh-4.5rem)] w-full flex-col overflow-hidden rounded-none border border-border bg-background sm:min-h-[calc(100vh-5rem)] sm:rounded-lg md:flex-row">
+      <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3 py-2 md:hidden">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Admin Agent</p>
+          <p className="text-sm font-medium text-foreground">{currentLabel}</p>
+        </div>
+        <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label="Open admin menu"
+            onClick={() => setMobileNavOpen(true)}
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+          <SheetContent side="right" className="w-[min(100vw-2rem,18rem)] p-0">
+            <SheetHeader className="border-b border-border px-4 py-4 text-left">
+              <SheetTitle>Admin Agent</SheetTitle>
+            </SheetHeader>
+            <nav className="flex flex-col gap-1 p-3">
+              {items.map((item) => (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={navLinkClass(item.match)}
+                  onClick={() => setMobileNavOpen(false)}
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+          </SheetContent>
+        </Sheet>
+      </div>
+
+      <aside className="hidden w-56 shrink-0 flex-col gap-1 border-r border-border bg-muted/30 p-4 md:flex">
+        <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Admin Agent
         </p>
         {items.map((item) => (
@@ -47,9 +102,9 @@ export default function AdminAgentsV2Page() {
             key={item.href}
             href={item.href}
             className={cn(
-              "rounded-md px-3 py-2 text-sm transition-colors no-underline",
+              "rounded-md px-3 py-2 text-sm no-underline transition-colors",
               item.match
-                ? "bg-accent text-accent-foreground font-medium"
+                ? "bg-accent font-medium text-accent-foreground"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground",
             )}
           >
@@ -57,7 +112,8 @@ export default function AdminAgentsV2Page() {
           </Link>
         ))}
       </aside>
-      <main className="flex-1 min-w-0 bg-card/20">
+
+      <main className="min-w-0 flex-1 overflow-x-hidden bg-card/20">
         {isAgent ? <AgentsV2Agent /> : isSystem ? <AgentsV2System /> : <AgentsV2Home />}
       </main>
     </div>

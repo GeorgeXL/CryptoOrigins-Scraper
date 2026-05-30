@@ -44,7 +44,7 @@ CRITICAL RULES:
 14. Extract countries even if mentioned in possessive form (e.g., "Russia's" → extract "Russia")
 15. Tags must be concrete named entities. Prefer companies, exchanges, protocols, countries/regions, agencies, products, people, and named laws/events.
 16. Do NOT extract sentence fragments or count phrases. "Five U.S." is invalid; from "five U.S. investment banks" extract only "U.S." if useful.
-17. Do NOT extract generic classes or broad descriptors: banks, investment banks, firms, companies, investors, markets, financial hub, job concerns, concerns, regulation, adoption, mining.
+17. Do NOT extract generic classes or broad descriptors: banks, investment banks, firms, companies, investors, markets, financial hub, job concerns, concerns, regulation, adoption, mining, budget deficits, stress tests, debt crisis, austerity, fiscal treaty, police, parliamentary inquiry, scrutiny, downgrades, reform, recession.
 18. Do NOT extract unnamed groups unless they are a formal named organization or political party. If no specific bank/company is named, do not invent one.
 19. Do NOT extract: generic job titles (lawmakers, ministers, officials, governors, regulators), generic departments without specific names (just "Treasury"), abstract concepts, amounts, percentages, version numbers, generic terms (cryptocurrency, blockchain, market)
 
@@ -77,13 +77,15 @@ Examples:
 "Russia's oligarchs decline" → ["Russia"]
 "Simplecoin v5.0 framework" → ["Simplecoin"]
 "Five U.S. investment banks support London after Brexit" → ["U.S.", "London", "Brexit"]
-"Investment banks warn of job concerns" → []`;
+"Investment banks warn of job concerns" → []
+"European leaders sign fiscal treaty to prevent budget deficits in Brussels" → ["Brussels"]
+"Banks pass stress tests after capital review" → []`;
 
     try {
       const openai = aiService.getProvider('openai');
       const result = await openai.generateCompletion({
         prompt,
-        systemPrompt: 'You are an expert at strict editorial tag extraction. Extract only concrete proper named entities: named people, companies, exchanges, services, organizations, agencies, universities, countries/regions, cryptocurrencies, and specific protocols/laws/events. Never return fragments, count phrases, generic classes, broad descriptors, or abstract concepts. Always return valid JSON arrays only.',
+        systemPrompt: 'You are an expert at strict editorial tag extraction. Extract only concrete proper named entities: named people, companies, exchanges, services, organizations, agencies, universities, countries/regions, cryptocurrencies, and specific protocols/laws/events. Never tag policy themes or process nouns (budget deficits, stress tests, debt crisis, VAT, austerity, police, parliamentary inquiry). Never return fragments, count phrases, generic classes, broad descriptors, or abstract concepts. Always return valid JSON arrays only.',
         model: 'gpt-4o-mini',
         temperature: 0.15,
         context: 'entity-extraction',
@@ -325,7 +327,7 @@ CRITICAL RULES:
 15. Use the full article content to find entities that may be mentioned there but not explicitly in the summary
 16. Tags must be concrete named entities. Prefer companies, exchanges, protocols, countries/regions, agencies, products, people, and named laws/events.
 17. Do NOT extract sentence fragments or count phrases. "Five U.S." is invalid; from "five U.S. investment banks" extract only "U.S." if useful.
-18. Do NOT extract generic classes or broad descriptors: banks, investment banks, firms, companies, investors, markets, financial hub, job concerns, concerns, regulation, adoption, mining.
+18. Do NOT extract generic classes or broad descriptors: banks, investment banks, firms, companies, investors, markets, financial hub, job concerns, concerns, regulation, adoption, mining, budget deficits, stress tests, debt crisis, austerity, fiscal treaty, police, parliamentary inquiry, scrutiny, downgrades, reform, recession.
 19. Do NOT extract unnamed groups unless they are a formal named organization or political party. If no specific bank/company is named, do not invent one.
 20. Use the full article only to recover central named entities, not background institutions or generic industry groups.
 21. Do NOT extract: generic job titles (lawmakers, ministers, officials, governors, regulators), generic departments without specific names (just "Treasury"), abstract concepts, amounts, percentages, version numbers, generic terms (cryptocurrency, blockchain, market)
@@ -359,13 +361,15 @@ Examples:
 "Russia's oligarchs decline" → ["Russia"]
 "Simplecoin v5.0 framework" → ["Simplecoin"]
 "Five U.S. investment banks support London after Brexit" → ["U.S.", "London", "Brexit"]
-"Investment banks warn of job concerns" → []`;
+"Investment banks warn of job concerns" → []
+"European leaders sign fiscal treaty to prevent budget deficits in Brussels" → ["Brussels"]
+"Banks pass stress tests after capital review" → []`;
 
     try {
       const openai = aiService.getProvider('openai');
       const result = await openai.generateCompletion({
         prompt,
-        systemPrompt: 'You are an expert at strict editorial tag extraction. Extract only concrete proper named entities: named people, companies, exchanges, services, organizations, agencies, universities, countries/regions, cryptocurrencies, and specific protocols/laws/events. Use article context only for central named entities. Never return fragments, count phrases, generic classes, broad descriptors, or abstract concepts. Always return valid JSON arrays only.',
+        systemPrompt: 'You are an expert at strict editorial tag extraction. Extract only concrete proper named entities: named people, companies, exchanges, services, organizations, agencies, universities, countries/regions, cryptocurrencies, and specific protocols/laws/events. Use article context only for central named entities. Never tag policy themes or process nouns (budget deficits, stress tests, debt crisis, VAT, austerity, police, parliamentary inquiry). Never return fragments, count phrases, generic classes, broad descriptors, or abstract concepts. Always return valid JSON arrays only.',
         model: 'gpt-4o-mini',
         temperature: 0.15,
         context: 'entity-extraction-with-context',

@@ -42,7 +42,7 @@ test("Jan 2026 E-FETCH scenario: zero corpus without manual event routes empty_d
     totalArticlesFetched: 0,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["market"],
+    topicCategories: ["Bitcoin price action"],
     tagLinkCount: 1,
   });
 
@@ -60,7 +60,7 @@ test("Jan 2026 E-SUM scenario: invalid summary with valid article and taxonomy r
     totalArticlesFetched: 4,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["market"],
+    topicCategories: ["Bitcoin price action"],
     tagLinkCount: 1,
   });
 
@@ -80,7 +80,7 @@ test("Jan 2026 O scenario: valid summary, article, tags, and topic routes existi
     totalArticlesFetched: 4,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["market"],
+    topicCategories: ["Bitcoin price action"],
     tagLinkCount: 1,
   });
 
@@ -98,7 +98,7 @@ test("Jan 2026 C-FLAG/C-TAX/C-CONF scenarios route existing_needs_correction", (
     totalArticlesFetched: 4,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["market"],
+    topicCategories: ["Bitcoin price action"],
     tagLinkCount: 1,
   });
   const noTaxonomy = triageExistingDay({
@@ -125,7 +125,7 @@ test("Jan 2026 C-FLAG/C-TAX/C-CONF scenarios route existing_needs_correction", (
     totalArticlesFetched: 4,
     confidenceScore: 42,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["market"],
+    topicCategories: ["Bitcoin price action"],
     tagLinkCount: 1,
   });
 
@@ -145,7 +145,7 @@ test("Jan 2026 C-TOP scenario: malformed winner id routes existing_needs_correct
     totalArticlesFetched: 3,
     confidenceScore: 88,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["market"],
+    topicCategories: ["Bitcoin price action"],
     tagLinkCount: 1,
   });
 
@@ -184,7 +184,7 @@ test("Known/manual event scenario: no fetched articles can still be clean", () =
     totalArticlesFetched: 0,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["culture"],
+    topicCategories: ["Bitcoin adoption"],
     tagLinkCount: 1,
   });
 

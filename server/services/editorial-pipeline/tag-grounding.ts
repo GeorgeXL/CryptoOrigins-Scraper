@@ -19,6 +19,7 @@
 import { db } from "../../db";
 import { tags } from "@shared/schema";
 import { normalizeTagValue } from "./tools";
+import { isEditorialEntityTagCandidate } from "./editorial-tag-rules";
 
 const TAG_GROUNDING_ALIASES: Record<string, string> = {
   eth: "ethereum",
@@ -138,11 +139,22 @@ export function canonicaliseAgainstIndex(
 /**
  * Check whether a tag is grounded in any of the provided texts.
  * "Grounded" = the tag's normalised form appears as a contiguous-word substring
- * of at least one text.
- *
- * We intentionally do NOT split on syllables / partial words — "Belgium" must
- * appear as a whole word, not as part of "Belgian" or "Belgrano".
+ * of at least one text, or a known demonym/adjective form matches (Italy ↔ Italian).
  */
+const TAG_DEMONYM_GROUNDING: Record<string, string[]> = {
+  italy: ["italian", "italy"],
+  uk: ["british", "uk", "u k", "united kingdom"],
+  us: ["u s", "american", "united states"],
+  europe: ["european", "europe"],
+  greece: ["greek", "greece"],
+  germany: ["german", "germany"],
+  france: ["french", "france"],
+  spain: ["spanish", "spain"],
+  china: ["chinese", "china"],
+  russia: ["russian", "russia"],
+  nigeria: ["nigerian", "nigeria"],
+};
+
 export function isTagGroundedInTexts(tagName: string, texts: string[]): boolean {
   const tagTokens = tokensOf(tagName);
   if (tagTokens.length === 0) return false;
@@ -154,11 +166,15 @@ export function isTagGroundedInTexts(tagName: string, texts: string[]): boolean 
     const haystackPadded = ` ${haystack} `;
     const needle = ` ${joinedNormalizedTag} `;
     if (haystackPadded.includes(needle)) return true;
+    const demonyms = TAG_DEMONYM_GROUNDING[joinedNormalizedTag.replace(/\./g, "")];
+    if (demonyms?.some((form) => haystackPadded.includes(` ${form} `) || haystack.includes(form))) {
+      return true;
+    }
   }
   return false;
 }
 
-export type GroundingDrop = { name: string; reason: "ungrounded" | "redundant" };
+export type GroundingDrop = { name: string; reason: "ungrounded" | "redundant" | "not_entity" };
 export type GroundingMerge = { from: string; to: string; reason: "exact" | "merge_into_shorter" | "merge_via_subset" };
 
 export type GroundingResult = {
@@ -198,6 +214,11 @@ export function groundAndCanonicaliseTags(opts: {
     if (typeof raw !== "string") continue;
     const name = raw.trim();
     if (!name) continue;
+
+    if (!isEditorialEntityTagCandidate(name)) {
+      dropped.push({ name, reason: "not_entity" });
+      continue;
+    }
 
     // Grounding gate
     if (groundingEnabled && !isTagGroundedInTexts(name, texts)) {
@@ -314,6 +335,7 @@ export function findGroundedTaxonomyTagsMissingFromRow(opts: {
     if (onRow.has(key)) continue;
     if (isCoveredByExistingRowTag(trimmed, currentTags)) continue;
     if (!isTagGroundedInTexts(trimmed, texts)) continue;
+    if (!isEditorialEntityTagCandidate(trimmed)) continue;
     const norm = normalizeForMatch(trimmed);
     if (!norm || seenNorm.has(norm)) continue;
     seenNorm.add(norm);

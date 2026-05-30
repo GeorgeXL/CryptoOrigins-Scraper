@@ -26,7 +26,7 @@ function Calendar({
         /** Dropdown caption layout — mirrors rdp/style.css so native <select> overlays the visible label. */
         caption_dropdowns: "flex justify-center gap-2",
         dropdown:
-          "absolute inset-0 z-20 h-full w-full cursor-pointer appearance-none border-0 bg-transparent p-0 opacity-0",
+          "absolute inset-0 z-20 h-full w-full cursor-pointer appearance-none border-0 bg-background p-0 text-foreground opacity-0 [&>option]:bg-background [&>option]:text-foreground",
         dropdown_month:
           "relative inline-flex h-8 min-w-[5.75rem] items-center justify-center rounded-md border border-input bg-background px-2 text-sm text-foreground shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background",
         dropdown_year:

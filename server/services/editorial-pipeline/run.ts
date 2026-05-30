@@ -12,10 +12,12 @@ import {
   type ArticleData,
 } from "@shared/schema";
 import {
+  ALL_PIPELINE_CHECK_SCOPES,
   EDITORIAL_DEFAULT_MODEL,
   buildHandoffChain,
   buildHandoffPayload,
   buildStepOutput,
+  type PipelineCheckScope,
   type PipelineAgentName,
   type TriageItem,
 } from "./contracts";
@@ -42,6 +44,7 @@ import {
 import { buildCorrectionProposals } from "./proposals";
 import { loadCanonicalTagIndex } from "./tag-grounding";
 import { applyCorrectionProposals } from "./approved-writer";
+import { invalidTopicReasons } from "./topic-validation";
 
 const controllers = new Map<string, AbortController>();
 const EDITORIAL_PIPELINE_ENABLED = process.env.EDITORIAL_PIPELINE_ENABLED !== "0";
@@ -64,6 +67,7 @@ const STORYLINE_REVIEW_STRONG_REPLACEMENT_SCORE = 0.88;
 const STORYLINE_REVIEW_COLLISION_WINDOW_DAYS = 10;
 
 const AUTO_CORRECTION_PROPOSAL_KINDS = new Set<CorrectionProposal["kind"]>([
+  "clear_orphan_flag",
   "set_topic_categories",
   "merge_redundant_tags",
 ]);
@@ -75,6 +79,10 @@ function splitAutomaticCorrectionProposals(proposals: CorrectionProposal[]): {
   const automatic: CorrectionProposal[] = [];
   const manual: CorrectionProposal[] = [];
   for (const proposal of proposals) {
+    if (proposal.kind === "set_topic_categories" && proposal.proposed.length === 0) {
+      manual.push(proposal);
+      continue;
+    }
     if (AUTO_CORRECTION_PROPOSAL_KINDS.has(proposal.kind)) automatic.push(proposal);
     else manual.push(proposal);
   }
@@ -102,11 +110,43 @@ type StartOpts = {
   dateFrom: string;
   dateTo: string;
   maxDaysToConsider: number;
+  checkScopes?: PipelineCheckScope[];
   requestedBy?: string;
   resumedFromRunId?: string;
   /** Re-run only a suffix of agents for one calendar date (must match `dateFrom`/`dateTo` for that day). */
   partialRun?: { date: string; agents: PipelineAgentName[] };
 };
+
+function normalizeCheckScopes(scopes: PipelineCheckScope[] | undefined): Set<PipelineCheckScope> {
+  const selected = scopes && scopes.length > 0 ? scopes : ALL_PIPELINE_CHECK_SCOPES;
+  return new Set(selected);
+}
+
+function agentMatchesCheckScopes(agent: PipelineAgentName, scopes: Set<PipelineCheckScope>): boolean {
+  if (
+    agent === "MilestoneAgent" ||
+    agent === "SourceFinderAgent" ||
+    agent === "RelevanceCheckerAgent" ||
+    agent === "VerificationAgent"
+  ) {
+    return scopes.has("relevance");
+  }
+  if (agent === "SummaryAgent") return scopes.has("summary");
+  if (agent === "TopicManagerAgent" || agent === "TopicApplierAgent") return scopes.has("topics");
+  if (agent === "TagManagerAgent" || agent === "TagApplierAgent" || agent === "TagConsistencyAgent") {
+    return scopes.has("tags");
+  }
+  if (agent === "DuplicateCheckerAgent") return scopes.has("duplicates");
+  if (agent === "DateConsistencyAgent") return scopes.has("date");
+  if (agent === "FinalEditorAgent") return scopes.size === ALL_PIPELINE_CHECK_SCOPES.length;
+  return false;
+}
+
+function proposalMatchesCheckScopes(proposal: CorrectionProposal, scopes: Set<PipelineCheckScope>): boolean {
+  if (proposal.kind === "set_topic_categories") return true;
+  if (proposal.kind === "edit_summary" || proposal.kind === "redo_summary") return scopes.has("summary");
+  return scopes.has("tags");
+}
 
 function extractRejection(output: unknown): { reason?: string; suggestedAction?: string } | null {
   if (!output || typeof output !== "object") return null;
@@ -871,9 +911,11 @@ async function runV3ExistingDayChecks(opts: {
   triage: TriageItem;
   triageStepId: string;
   startStepIndex: number;
+  checkScopes: Set<PipelineCheckScope>;
 }): Promise<{ nextStepIndex: number; autoApproved: boolean }> {
   const { runId, triage, triageStepId } = opts;
   let stepIndex = opts.startStepIndex;
+  const checkScopes = opts.checkScopes;
 
   const [row] = await db
     .select({
@@ -913,7 +955,7 @@ async function runV3ExistingDayChecks(opts: {
 
   // 1. Canonical date mismatch (highest priority)
   const canonical = summary ? detectCanonicalDateMismatch(summary, triage.date) : null;
-  if (canonical) {
+  if (checkScopes.has("date") && canonical) {
     const [conflict] = triage.analysisId
       ? await db
           .select({ id: historicalNewsAnalyses.id })
@@ -972,7 +1014,7 @@ async function runV3ExistingDayChecks(opts: {
       })
     : null;
   const strongNeighbors = duplicateCtx?.neighbors.filter(isStrongDuplicateNeighbor) ?? [];
-  if (strongNeighbors.length > 0 && duplicateCtx) {
+  if (checkScopes.has("duplicates") && strongNeighbors.length > 0 && duplicateCtx) {
     const dupePkg: DuplicateDecisionPackage = {
       phase: "awaiting_duplicate_decision",
       triage,
@@ -1021,7 +1063,7 @@ async function runV3ExistingDayChecks(opts: {
   // ask the operator to pick a better article from the already fetched pool.
   const storyline = currentStorylineQuality(row);
   const betterStorylineWaived = await hasBetterStorylineWaiver(triage.date);
-  if (betterStorylineWaived) {
+  if (checkScopes.has("relevance") && betterStorylineWaived) {
     await continueExistingDayChecksAfterKeepingStoryline({
       runId,
       stepId: null,
@@ -1048,7 +1090,7 @@ async function runV3ExistingDayChecks(opts: {
     (recommendedStored!.relevanceScore ?? 0) >= STORYLINE_REVIEW_STRONG_REPLACEMENT_SCORE &&
     candidateMatchesCurrentStory(recommendedStored!, row.summary).matches;
 
-  if (hasBetterStoredCandidate && storedCandidates.length > 1) {
+  if (checkScopes.has("relevance") && hasBetterStoredCandidate && storedCandidates.length > 1) {
     const pickPkg: ArticlePickPackage = {
       phase: "awaiting_article_pick",
       scenario: "better_storyline",
@@ -1115,7 +1157,7 @@ async function runV3ExistingDayChecks(opts: {
     articleText,
     canonicalTagIndex,
     suppressedGroundedTags: row.suppressedTagSuggestions,
-  });
+  }).filter((proposal) => proposalMatchesCheckScopes(proposal, checkScopes));
   const { automatic: automaticProposals, manual: manualProposals } = splitAutomaticCorrectionProposals(proposals);
   const autoApplied = await applyAutomaticCorrectionProposals({
     date: triage.date,
@@ -1167,6 +1209,68 @@ async function runV3ExistingDayChecks(opts: {
   }
 
   if (autoApplied.length > 0) {
+    const [freshRow] = await db
+      .select({ topicCategories: historicalNewsAnalyses.topicCategories })
+      .from(historicalNewsAnalyses)
+      .where(eq(historicalNewsAnalyses.date, triage.date))
+      .limit(1);
+    const topicIssuesAfterAuto =
+      checkScopes.has("topics") ?
+        invalidTopicReasons(topicLabelsFromRow(freshRow?.topicCategories))
+      : [];
+
+    if (topicIssuesAfterAuto.length > 0) {
+      const topicProposals = buildCorrectionProposals({
+        date: triage.date,
+        summary: row.summary,
+        topArticleId: row.topArticleId,
+        isOrphan: row.isOrphan,
+        isFlagged: row.isFlagged,
+        tagsVersion2: row.tagsVersion2,
+        topicCategories: freshRow?.topicCategories ?? row.topicCategories,
+        legacyTags: row.tags,
+        articleText,
+        canonicalTagIndex,
+        suppressedGroundedTags: row.suppressedTagSuggestions,
+      }).filter(
+        (proposal) => proposal.kind === "set_topic_categories" && proposalMatchesCheckScopes(proposal, checkScopes),
+      );
+
+      const correctionPkg: CorrectionApprovalPackage = {
+        phase: "awaiting_correction_approval",
+        triage,
+        proposals: topicProposals,
+        note: `Auto-applied ${automaticProposals.length} safe fix(es), but topic hierarchy is still invalid: ${topicIssuesAfterAuto.join("; ")}. Assign exactly one homepage storyline leaf.`,
+      };
+      const stepId = await createStep({
+        runId,
+        stepIndex,
+        agentName: "TopicManagerAgent",
+        status: "rejected",
+        confidence: 0.45,
+        input: { date: triage.date, route: triage.route },
+        output: buildStepOutput({
+          summary: "Topic hierarchy still invalid after auto-corrections",
+          findings: [...autoApplied, ...topicIssuesAfterAuto],
+        }),
+        rejectionReason: topicIssuesAfterAuto.join("; "),
+        suggestedAction: "manual_review",
+      });
+      stepIndex += 1;
+
+      await db.insert(humanReviewQueue).values({
+        runId,
+        stepId,
+        status: "pending",
+        priority: 78,
+        eventDate: triage.date,
+        package: correctionPkg,
+        reviewer: null,
+        reviewedAt: null,
+      });
+      return { nextStepIndex: stepIndex, autoApproved: false };
+    }
+
     await createStep({
       runId,
       stepIndex,
@@ -1186,7 +1290,50 @@ async function runV3ExistingDayChecks(opts: {
     return { nextStepIndex: stepIndex, autoApproved: true };
   }
 
-  // 4. No issue detected — auto-approve. This is the v3 "I looked and the
+  // 5. No issue detected — auto-approve only when topic hierarchy is publishable.
+  if (checkScopes.has("topics")) {
+    const topicIssues = invalidTopicReasons(topicLabelsFromRow(row.topicCategories));
+    if (topicIssues.length > 0) {
+      const topicProposals = proposals.filter(
+        (proposal) => proposal.kind === "set_topic_categories" && proposalMatchesCheckScopes(proposal, checkScopes),
+      );
+      const correctionPkg: CorrectionApprovalPackage = {
+        phase: "awaiting_correction_approval",
+        triage,
+        proposals: topicProposals,
+        note: `Topic hierarchy check failed: ${topicIssues.join("; ")}. Each day must carry exactly one homepage storyline leaf.`,
+      };
+      const stepId = await createStep({
+        runId,
+        stepIndex,
+        agentName: "TopicManagerAgent",
+        status: "rejected",
+        confidence: 0.45,
+        input: { date: triage.date, route: triage.route },
+        output: buildStepOutput({
+          summary: "Topic hierarchy check failed before auto-approve",
+          findings: topicIssues,
+        }),
+        rejectionReason: topicIssues.join("; "),
+        suggestedAction: "manual_review",
+      });
+      stepIndex += 1;
+
+      await db.insert(humanReviewQueue).values({
+        runId,
+        stepId,
+        status: "pending",
+        priority: 76,
+        eventDate: triage.date,
+        package: correctionPkg,
+        reviewer: null,
+        reviewedAt: null,
+      });
+      return { nextStepIndex: stepIndex, autoApproved: false };
+    }
+  }
+
+  // 6. No issue detected — auto-approve. This is the v3 "I looked and the
   // deterministic checks all pass" path; the legacy run still gets an entry so
   // operator can review history later.
   await db.insert(humanReviewQueue).values({
@@ -1203,12 +1350,14 @@ async function runV3ExistingDayChecks(opts: {
 }
 
 async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal): Promise<void> {
+  const checkScopes = normalizeCheckScopes(opts.checkScopes);
   await db
     .update(pipelineRuns)
     .set({
       stats: {
         phase: "triaging",
         heartbeatIso: new Date().toISOString(),
+        checkScopes: Array.from(checkScopes),
       },
     })
     .where(eq(pipelineRuns.id, runId));
@@ -1229,8 +1378,9 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
 
   let stepIndex = 1;
   for (const item of triage) {
-    const agentsForDay =
+    const baseAgentsForDay =
       opts.partialRun && opts.partialRun.date === item.date ? opts.partialRun.agents : item.requiredAgents;
+    const agentsForDay = baseAgentsForDay.filter((agent) => agentMatchesCheckScopes(agent, checkScopes));
 
     // NewsManager triage step
     const triageStepId = await createStep({
@@ -1248,6 +1398,7 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
         triageRuleVersion: "v1",
         requiredAgents: item.requiredAgents,
         executedAgents: agentsForDay,
+        selectedCheckScopes: Array.from(checkScopes),
         partialRun: Boolean(opts.partialRun && opts.partialRun.date === item.date),
       },
     });
@@ -1258,7 +1409,9 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
     // hand off to a human picker. The legacy chain is intentionally skipped —
     // summary/tag/topic generation happens after the operator picks an article.
     const useGatedFetch =
-      EDITORIAL_PIPELINE_V3_GATED_FETCH && (item.route === "empty_day" || item.route === "missing_day");
+      EDITORIAL_PIPELINE_V3_GATED_FETCH &&
+      checkScopes.has("relevance") &&
+      (item.route === "empty_day" || item.route === "missing_day");
 
     if (useGatedFetch) {
       const pool = await fetchCandidatesForDate(item.date, {
@@ -1340,10 +1493,31 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
         triage: item,
         triageStepId,
         startStepIndex: stepIndex,
+        checkScopes,
       });
       stepIndex = handled.nextStepIndex;
       if (handled.autoApproved) autoApprovedCount += 1;
       effectiveTriageForStats.push(item);
+      continue;
+    }
+
+    if (agentsForDay.length === 0 || (!item.analysisId && !checkScopes.has("relevance"))) {
+      effectiveTriageForStats.push(item);
+      autoApprovedCount += 1;
+      await db.insert(humanReviewQueue).values({
+        runId,
+        stepId: triageStepId,
+        status: "approved",
+        priority: 40,
+        eventDate: item.date,
+        package: {
+          triage: item,
+          note: "Selected checks are not applicable to this route; no action needed.",
+          selectedCheckScopes: Array.from(checkScopes),
+        },
+        reviewer: "auto",
+        reviewedAt: new Date(),
+      });
       continue;
     }
 

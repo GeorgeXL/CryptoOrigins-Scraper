@@ -1,4 +1,5 @@
 import type { CategoryData } from "@/components/TagsSidebar";
+import { TOPIC_HIERARCHY } from "@shared/topic-hierarchy";
 
 /** Prefix for topic selections in `selectedEntities` (distinct from `category::tagName`). */
 export const TOPIC_ENTITY_PREFIX = "topic::";
@@ -34,44 +35,8 @@ function analysesInSubtree(
   return acc;
 }
 
-function toCategoryNode(
-  topic: TopicRow,
-  childrenByParent: Map<string | null, TopicRow[]>,
-  directByTopic: Map<string, Set<string>>,
-  subtreeMemo: Map<string, Set<string>>
-): CategoryData {
-  const children = (childrenByParent.get(topic.id) ?? [])
-    .slice()
-    .sort((a, b) => {
-      const ao = a.sort_order ?? 0;
-      const bo = b.sort_order ?? 0;
-      if (ao !== bo) return ao - bo;
-      return a.name.localeCompare(b.name);
-    })
-    .map((c) => toCategoryNode(c, childrenByParent, directByTopic, subtreeMemo));
-
-  const count = analysesInSubtree(topic.id, directByTopic, childrenByParent, subtreeMemo).size;
-
-  if (children.length === 0) {
-    return {
-      id: topic.id,
-      category: "narratives",
-      name: topic.name,
-      count,
-      isParent: false,
-      isTag: true,
-      entityKey: `${TOPIC_ENTITY_PREFIX}${topic.id}`,
-    };
-  }
-
-  return {
-    id: topic.id,
-    category: "narratives",
-    name: topic.name,
-    count,
-    isParent: true,
-    children,
-  };
+function canonicalTopicName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 /**
@@ -105,15 +70,44 @@ export function buildTopicCatalogData(
   }
 
   const subtreeMemo = new Map<string, Set<string>>();
-  const roots = (childrenByParent.get(null) ?? [])
-    .slice()
-    .sort((a, b) => {
-      const ao = a.sort_order ?? 0;
-      const bo = b.sort_order ?? 0;
-      if (ao !== bo) return ao - bo;
-      return a.name.localeCompare(b.name);
-    })
-    .map((t) => toCategoryNode(t, childrenByParent, directByTopic, subtreeMemo));
+  const topicsByName = new Map<string, TopicRow[]>();
+  for (const topic of topics) {
+    const key = canonicalTopicName(topic.name);
+    const bucket = topicsByName.get(key) ?? [];
+    bucket.push(topic);
+    topicsByName.set(key, bucket);
+  }
+
+  const roots = TOPIC_HIERARCHY.map((group, groupIndex): CategoryData => {
+    const children = group.leaves.map((leaf, leafIndex): CategoryData => {
+      const matchingTopics = topicsByName.get(canonicalTopicName(leaf)) ?? [];
+      const analysisIds = new Set<string>();
+      for (const topic of matchingTopics) {
+        for (const id of analysesInSubtree(topic.id, directByTopic, childrenByParent, subtreeMemo)) {
+          analysisIds.add(id);
+        }
+      }
+      const topicIds = matchingTopics.map((topic) => topic.id).filter(Boolean);
+      return {
+        id: topicIds[0] ?? `topic-leaf-${groupIndex}-${leafIndex}`,
+        category: "narratives",
+        name: leaf,
+        count: analysisIds.size,
+        isParent: false,
+        isTag: true,
+        entityKey: topicIds.length ? `${TOPIC_ENTITY_PREFIX}${topicIds.join(",")}` : undefined,
+      };
+    });
+
+    return {
+      id: `topic-group-${groupIndex}`,
+      category: "narratives",
+      name: group.name,
+      count: children.reduce((sum, child) => sum + child.count, 0),
+      isParent: true,
+      children,
+    };
+  });
 
   if (roots.length === 0) return null;
 
@@ -130,7 +124,8 @@ export function buildTopicCatalogData(
 export function parseTopicIdsFromSelection(selectedEntities: Set<string>): string[] {
   return Array.from(selectedEntities)
     .filter((k) => k.startsWith(TOPIC_ENTITY_PREFIX))
-    .map((k) => k.slice(TOPIC_ENTITY_PREFIX.length));
+    .flatMap((k) => k.slice(TOPIC_ENTITY_PREFIX.length).split(","))
+    .filter(Boolean);
 }
 
 export function selectionUsesTopicKeys(selectedEntities: Set<string>): boolean {

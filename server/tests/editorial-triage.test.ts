@@ -36,7 +36,7 @@ test("triageExistingDay flags missing winning article even when summary and taxo
     totalArticlesFetched: 12,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["market"],
+    topicCategories: ["Bitcoin price action"],
     tagLinkCount: 1,
   });
   assert.equal(item.route, "existing_needs_correction");
@@ -54,7 +54,7 @@ test("triageExistingDay marks healthy record as existing_ok", () => {
     totalArticlesFetched: 8,
     confidenceScore: 88,
     tagsVersion2: ["Bitcoin", "ETF"],
-    topicCategories: [{ name: "Adoption" }],
+    topicCategories: [{ name: "Bitcoin adoption" }],
     tagLinkCount: 2,
   });
 
@@ -79,7 +79,7 @@ test("triageExistingDay routes weak summary to existing_needs_correction when ar
     totalArticlesFetched: 4,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: [{ name: "Culture" }],
+    topicCategories: [{ name: "Early Bitcoin history" }],
     tagLinkCount: 1,
   });
   assert.equal(item.route, "existing_needs_correction");
@@ -100,7 +100,7 @@ test("triageExistingDay routes too-long summary to correction when article + tax
     totalArticlesFetched: 4,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: [{ name: "Market" }],
+    topicCategories: [{ name: "Bitcoin price action" }],
     tagLinkCount: 1,
   });
   assert.equal(item.route, "existing_needs_correction");
@@ -121,12 +121,32 @@ test("triageExistingDay accepts known manual event without fetched articles when
     totalArticlesFetched: 0,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin", "Pizza Day"],
-    topicCategories: [{ name: "Culture" }],
+    topicCategories: [{ name: "Bitcoin adoption" }],
     tagLinkCount: 1,
   });
   assert.equal(item.route, "existing_ok");
   assert.equal(item.reasons.some((r) => r.includes("No fetched articles")), false);
   assert.equal(item.reasons.some((r) => r.includes("winning article")), false);
+});
+
+test("triageExistingDay routes old broad topics to correction even when tags exist", () => {
+  const item = triageExistingDay({
+    date: "2010-10-27",
+    analysisId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    summary: "x".repeat(106),
+    topArticleId: "article-1",
+    isFlagged: false,
+    isOrphan: false,
+    totalArticlesFetched: 4,
+    confidenceScore: 90,
+    tagsVersion2: ["Democrats"],
+    topicCategories: ["economic", "institutional"],
+    tagLinkCount: 1,
+  });
+
+  assert.equal(item.route, "existing_needs_correction");
+  assert.ok(item.reasons.some((r) => r.includes("Topic hierarchy issue")));
+  assert.ok(item.requiredAgents.includes("TopicManagerAgent"));
 });
 
 test("triageExistingDay routes known manual event with invalid summary to correction, not article pick", () => {
@@ -141,7 +161,7 @@ test("triageExistingDay routes known manual event with invalid summary to correc
     totalArticlesFetched: 0,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin", "Pizza Day"],
-    topicCategories: [{ name: "Culture" }],
+    topicCategories: [{ name: "Bitcoin adoption" }],
     tagLinkCount: 1,
   });
   assert.equal(item.route, "existing_needs_correction");
@@ -166,7 +186,7 @@ test("triageExistingDay routes to existing_needs_correction when summary ok but 
   });
 
   assert.equal(item.route, "existing_needs_correction");
-  assert.ok(item.reasons.some((r) => r.includes("topic tags")));
+  assert.ok(item.reasons.some((r) => r.includes("tags or topic categories")));
   assert.ok(item.requiredAgents.includes("TopicManagerAgent"));
   assert.ok(item.requiredAgents.includes("TagManagerAgent"));
   const sumIdx = item.requiredAgents.indexOf("SummaryAgent");

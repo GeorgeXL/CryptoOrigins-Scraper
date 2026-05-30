@@ -16,6 +16,7 @@ import {
 } from "./tools";
 import { detectMilestoneGapsInWindow } from "./milestones";
 import { evaluateSummaryQuality, isEditorialSummaryWeak, isValidPipelineTopArticleId } from "./editorial-quality";
+import { invalidTopicReasons } from "./topic-validation";
 
 export type ExecutorContext = {
   runId: string;
@@ -302,8 +303,8 @@ const summaryAgent: AgentExecutor = async (ctx) => {
 };
 
 const topicManagerAgent: AgentExecutor = async (ctx) => {
-  const cov = await getTagCoverageForDate(ctx.triageItem.date);
-  if (!cov) {
+  const row = await getDayTaxonomy(ctx.triageItem.date);
+  if (!row) {
     return {
       status: "skipped",
       confidence: 0.5,
@@ -313,20 +314,43 @@ const topicManagerAgent: AgentExecutor = async (ctx) => {
       }),
     };
   }
-  const gaps: string[] = [];
-  if (cov.topicCategoriesCount === 0) gaps.push("topic_categories is empty");
-  if (cov.tagsVersion2Count === 0 && cov.legacyTagsCount === 0) gaps.push("No topic labels on the analysis row");
+
+  const topics = topicLabelsFromRow(row.topicCategories);
+  const rawTopicCount = Array.isArray(row.topicCategories) ? row.topicCategories.length : 0;
+  const issues = invalidTopicReasons(topics);
+  const gaps = [...issues];
+  if (rawTopicCount > 0 && topics.length === 0) {
+    gaps.push("topic_categories has entries but no readable storyline label (expected name, label, or slug)");
+  }
+
+  if (issues.length === 0) {
+    return {
+      status: "completed",
+      confidence: 0.88,
+      output: buildStepOutput({
+        summary: "Topic hierarchy check passed — exactly one homepage storyline leaf",
+        findings: [`Assigned storyline: ${topics[0]}`],
+      }),
+      evidence: { topics, rawTopicCount },
+    };
+  }
+
   return {
-    status: "completed",
-    confidence: gaps.length ? 0.45 : 0.85,
+    status: "rejected",
+    confidence: 0.42,
     output: buildStepOutput({
-      summary:
-        gaps.length ?
-          "Topic metadata missing — add categories in your admin / analysis flow"
-        : "Topic categories present on row",
-      findings: gaps.length ? gaps : [`topic_categories entries: ${cov.topicCategoriesCount}`],
+      summary: "Topic hierarchy failed — each day must have exactly one new-system storyline leaf",
+      findings: gaps,
+      rejection: {
+        status: "rejected",
+        agent: "TopicManagerAgent",
+        reason: gaps.join("; "),
+        confidence: 0.42,
+        suggestedAction: "manual_review",
+        returnTo: "NewsManager",
+      },
     }),
-    evidence: { ...cov },
+    evidence: { topics, rawTopicCount, issues },
   };
 };
 
@@ -457,8 +481,8 @@ const tagManagerAgent: AgentExecutor = async (ctx) => {
 };
 
 const topicApplierAgent: AgentExecutor = async (ctx) => {
-  const cov = await getTagCoverageForDate(ctx.triageItem.date);
-  if (!cov) {
+  const row = await getDayTaxonomy(ctx.triageItem.date);
+  if (!row) {
     return {
       status: "skipped",
       confidence: 0.5,
@@ -469,23 +493,25 @@ const topicApplierAgent: AgentExecutor = async (ctx) => {
     };
   }
 
-  if (cov.topicCategoriesCount === 0) {
+  const topics = topicLabelsFromRow(row.topicCategories);
+  const issues = invalidTopicReasons(topics);
+  if (issues.length > 0) {
     return {
       status: "rejected",
       confidence: 0.6,
       output: buildStepOutput({
-        summary: "Topic application is incomplete",
-        findings: ["topic_categories is empty"],
+        summary: "Topic application is incomplete or invalid",
+        findings: issues,
         rejection: {
           status: "rejected",
           agent: "TopicApplierAgent",
-          reason: "No topic category has been applied to this day",
+          reason: issues.join("; "),
           confidence: 0.6,
           suggestedAction: "manual_review",
           returnTo: "NewsManager",
         },
       }),
-      evidence: { ...cov },
+      evidence: { topics, issues },
     };
   }
 
@@ -494,9 +520,9 @@ const topicApplierAgent: AgentExecutor = async (ctx) => {
     confidence: 0.86,
     output: buildStepOutput({
       summary: "Topic application confirmed",
-      findings: [`topic_categories entries: ${cov.topicCategoriesCount}`],
+      findings: [`Assigned storyline: ${topics[0]}`],
     }),
-    evidence: { ...cov },
+    evidence: { topics },
   };
 };
 
@@ -583,6 +609,30 @@ const finalEditorAgent: AgentExecutor = async (ctx) => {
       }),
     };
   }
+
+  const taxonomy = await getDayTaxonomy(ctx.triageItem.date);
+  const topics = taxonomy ? topicLabelsFromRow(taxonomy.topicCategories) : [];
+  const topicIssues = invalidTopicReasons(topics);
+  if (topicIssues.length > 0) {
+    return {
+      status: "rejected",
+      confidence: 0.64,
+      output: buildStepOutput({
+        summary: "Final gate blocked — topic hierarchy is not publishable",
+        findings: topicIssues,
+        rejection: {
+          status: "rejected",
+          agent: "FinalEditorAgent",
+          reason: `Each day must have exactly one homepage storyline leaf: ${topicIssues.join("; ")}`,
+          confidence: 0.64,
+          suggestedAction: "manual_review",
+          returnTo: "NewsManager",
+        },
+      }),
+      evidence: { topics, topicIssues },
+    };
+  }
+
   return {
     status: "completed",
     confidence: 0.88,

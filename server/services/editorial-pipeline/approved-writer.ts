@@ -40,8 +40,9 @@ import { entityExtractor } from "../entity-extractor";
 import { evaluateSummaryQuality } from "./editorial-quality";
 import {
   ensureTopicCategoryAndStorylineLinks,
-  inferStorylineLabels,
+  inferTopicProposal,
 } from "./storyline-taxonomy";
+import { invalidTopicReasons } from "./topic-validation";
 
 type ApprovedAction =
   | { kind: "reanalyze_date"; date: string }
@@ -104,7 +105,7 @@ function candidateToArticleData(c: ArticleCandidate): ArticleData {
   } as ArticleData;
 }
 
-const DEFAULT_TOPIC_SUGGESTION = ["Bitcoin culture"] as const;
+const DEFAULT_TOPIC_SUGGESTION: string[] = [];
 
 function tieredArticlesFromCandidates(candidates: ArticleCandidate[]) {
   const out: { bitcoin: ArticleData[]; crypto: ArticleData[]; macro: ArticleData[] } = {
@@ -282,17 +283,12 @@ export async function applyArticlePickApproval(opts: {
     console.warn(`[article-pick] entity extraction failed for ${opts.date}:`, err);
   }
 
-  const proposedTopicsRaw = Array.isArray(summaryResult.topicCategories)
-    ? (summaryResult.topicCategories as unknown[]).filter((x): x is string => typeof x === "string")
-    : [];
-  const proposedTopics = inferStorylineLabels({
+  const proposedTopics = inferTopicProposal({
     title: candidate.title,
     summary: summaryResult.summary,
-    articleText,
     tags: proposedTags,
-    modelTopics: proposedTopicsRaw,
   });
-  const safeTopics = proposedTopics.length ? proposedTopics : [...DEFAULT_TOPIC_SUGGESTION];
+  const safeTopics = proposedTopics.length ? proposedTopics.slice(0, 1) : [...DEFAULT_TOPIC_SUGGESTION];
 
   await storage.updateAnalysis(opts.date, {
     summary: summaryResult.summary,
@@ -360,6 +356,7 @@ export async function applyCorrectionProposals(opts: {
   proposals: CorrectionProposal[];
   acceptedIds: string[];
   proposalTagSelections?: Record<string, string[]>;
+  proposalTopicSelections?: Record<string, string[]>;
   editedSummary?: string;
   reviewer?: string | null;
 }): Promise<{ ok: boolean; applied: string[]; message: string }> {
@@ -378,7 +375,22 @@ export async function applyCorrectionProposals(opts: {
         break;
       }
       case "set_topic_categories": {
-        const linkedTopics = await ensureTopicCategoryAndStorylineLinks(opts.date, proposal.proposed);
+        const selectedForProposal = opts.proposalTopicSelections?.[proposal.id];
+        const chosenTopics = Array.isArray(selectedForProposal) && selectedForProposal.length > 0
+          ? selectedForProposal
+          : proposal.proposed;
+        if (chosenTopics.length === 0) {
+          return { ok: false, applied, message: "Pick exactly one homepage storyline leaf before applying the topic fix." };
+        }
+        const topicIssues = invalidTopicReasons(chosenTopics);
+        if (topicIssues.length > 0) {
+          return {
+            ok: false,
+            applied,
+            message: `Topic hierarchy rejected: ${topicIssues.join("; ")}`,
+          };
+        }
+        const linkedTopics = await ensureTopicCategoryAndStorylineLinks(opts.date, chosenTopics);
         update.topicCategories = linkedTopics;
         applied.push(`set storyline topics to ${linkedTopics.join(", ")}`);
         break;
@@ -592,13 +604,12 @@ async function applySummaryApproval(opts: {
   const finalTags = normalizeUserTagList(opts.edits?.editedTags ?? opts.pkg.proposedTags);
   const proposedTopics =
     opts.edits?.editedTopics ??
-    inferStorylineLabels({
+    inferTopicProposal({
       title: opts.pkg.winningArticle.title,
       summary: finalSummary,
       tags: finalTags,
-      modelTopics: opts.pkg.proposedTopics,
     });
-  const normalizedTopics = normalizeUserTopicList(proposedTopics);
+  const normalizedTopics = normalizeUserTopicList(proposedTopics).slice(0, 1);
   const finalTopics = normalizedTopics.length ? normalizedTopics : [...DEFAULT_TOPIC_SUGGESTION];
 
   if (!finalSummary) {
@@ -846,6 +857,7 @@ export type ApprovalOptions = {
   selectedArticleId?: string;
   acceptedProposalIds?: string[];
   proposalTagSelections?: Record<string, string[]>;
+  proposalTopicSelections?: Record<string, string[]>;
   calendarDecision?: CalendarDecisionInput;
   duplicateDecision?: DuplicateDecisionInput;
   duplicateNeighborDate?: string;
@@ -901,6 +913,7 @@ export async function executeApprovedReviewItem(
       proposals: item.package.proposals,
       acceptedIds: opts?.acceptedProposalIds ?? [],
       proposalTagSelections: opts?.proposalTagSelections,
+      proposalTopicSelections: opts?.proposalTopicSelections,
       editedSummary: opts?.editedSummary,
       reviewer: opts?.reviewer ?? null,
     });
