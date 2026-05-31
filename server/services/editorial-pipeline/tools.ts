@@ -209,6 +209,58 @@ export function summaryTokenJaccardForDuplicateCheck(a: string, b: string): numb
   return union ? inter / union : 0;
 }
 
+const QUANTITY_SCALE_MULTIPLIERS: Record<string, number> = {
+  thousand: 1e3,
+  million: 1e6,
+  billion: 1e9,
+  trillion: 1e12,
+  quadrillion: 1e15,
+  quintillion: 1e18,
+};
+
+function milestoneThemes(text: string): Set<string> {
+  const lower = text.toLowerCase();
+  const themes = new Set<string>();
+  if (/\bhash\s*rate\b/.test(lower)) themes.add("hashrate");
+  if (/\b(price|trading at|valued at|market cap)\b/.test(lower)) themes.add("price");
+  if (/\ball-time high\b|\bath\b/.test(lower)) themes.add("ath");
+  return themes;
+}
+
+function extractScaledQuantities(text: string): number[] {
+  const out: number[] = [];
+  const lower = text.toLowerCase();
+  for (const m of lower.matchAll(
+    /\b(\d+(?:\.\d+)?)\s*(thousand|million|billion|trillion|quadrillion|quintillion)\b/g,
+  )) {
+    const base = Number.parseFloat(m[1] ?? "");
+    const scale = QUANTITY_SCALE_MULTIPLIERS[m[2] ?? ""] ?? 1;
+    if (Number.isFinite(base)) out.push(base * scale);
+  }
+  return out;
+}
+
+/** True when two summaries share a metric theme but cite different milestone numbers (e.g. 80 vs 100 quintillion hash rate). */
+export function summariesHaveDistinctMilestoneNumbers(summaryA: string, summaryB: string): boolean {
+  const a = summaryA.trim();
+  const b = summaryB.trim();
+  if (!a || !b) return false;
+
+  const sharedThemes = [...milestoneThemes(a)].filter((theme) => milestoneThemes(b).has(theme));
+  if (sharedThemes.length === 0) return false;
+
+  const qtyA = extractScaledQuantities(a);
+  const qtyB = extractScaledQuantities(b);
+  if (qtyA.length === 0 || qtyB.length === 0) return false;
+
+  const maxA = Math.max(...qtyA);
+  const maxB = Math.max(...qtyB);
+  if (!Number.isFinite(maxA) || !Number.isFinite(maxB) || maxA === maxB) return false;
+
+  const relativeDiff = Math.abs(maxA - maxB) / Math.max(maxA, maxB);
+  return relativeDiff > 0.03;
+}
+
 export type TaxonomyDuplicateNeighbor = {
   date: string;
   summaryPreview: string;

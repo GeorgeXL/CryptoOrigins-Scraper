@@ -20,6 +20,7 @@ import {
   startEditorialPipelineResumeSlice,
   startEditorialPipelineRun,
   stopEditorialPipelineRun,
+  buildStoredArticleCandidates,
 } from "../services/editorial-pipeline/run";
 import {
   executeApprovedReviewItem,
@@ -40,6 +41,18 @@ import {
 } from "../services/editorial-pipeline/review-package";
 import { computeOperatorActionPlan } from "../services/editorial-pipeline/operator-action";
 import type { TriageRoute } from "../services/editorial-pipeline/contracts";
+import {
+  computeCorpusMetricsForDates,
+  computeCorpusOverviewMetrics,
+  sampleDatesInRange,
+} from "../services/editorial-pipeline/corpus-metrics";
+import { verifyEditorialDay } from "../services/editorial-pipeline/day-verification";
+import { resolveKnownEventContext } from "../services/editorial-pipeline/known-event-context";
+import {
+  buildCalendarReciprocalPair,
+  inferCalendarChronologyHint,
+  isReciprocalCalendarConflict,
+} from "../services/editorial-pipeline/calendar-conflict";
 
 const CALENDAR_DECISIONS: CalendarDecisionInput[] = ["move_to_canonical", "keep_as_is", "delete"];
 const DUPLICATE_DECISIONS: DuplicateDecisionInput[] = [
@@ -133,6 +146,80 @@ function refreshArticlePickCandidatesForResponse(candidates: ArticleCandidate[],
   return refreshed;
 }
 
+function attachCalendarReciprocalPairs<T extends Record<string, unknown>>(items: T[]): T[] {
+  type CalendarDecisionPayload = {
+    currentDate: string;
+    expectedDate: string;
+    expectedDateSummary?: string | null;
+  };
+
+  const calendarItems = items.filter((item) => {
+    const cd = item.calendarDecision as CalendarDecisionPayload | null | undefined;
+    return cd && typeof cd.currentDate === "string" && typeof cd.expectedDate === "string";
+  });
+
+  const pairById = new Map<string, NonNullable<ReturnType<typeof buildCalendarReciprocalPair>>>();
+
+  for (let i = 0; i < calendarItems.length; i += 1) {
+    for (let j = i + 1; j < calendarItems.length; j += 1) {
+      const left = calendarItems[i]!;
+      const right = calendarItems[j]!;
+      const ca = left.calendarDecision as CalendarDecisionPayload;
+      const cb = right.calendarDecision as CalendarDecisionPayload;
+      if (!isReciprocalCalendarConflict(ca, cb)) continue;
+
+      const pair = buildCalendarReciprocalPair({
+        itemA: {
+          id: String(left.id),
+          currentDate: ca.currentDate,
+          expectedDate: ca.expectedDate,
+          summary: String(left.daySummary ?? "").trim(),
+          tags: Array.isArray(left.dayTags) ? (left.dayTags as string[]) : [],
+          topics: Array.isArray(left.dayTopicCategories) ? (left.dayTopicCategories as string[]) : [],
+        },
+        itemB: {
+          id: String(right.id),
+          currentDate: cb.currentDate,
+          expectedDate: cb.expectedDate,
+          summary: String(right.daySummary ?? "").trim(),
+          tags: Array.isArray(right.dayTags) ? (right.dayTags as string[]) : [],
+          topics: Array.isArray(right.dayTopicCategories) ? (right.dayTopicCategories as string[]) : [],
+        },
+      });
+      if (!pair) continue;
+      pairById.set(String(left.id), pair);
+      pairById.set(String(right.id), pair);
+    }
+  }
+
+  return items.map((item) => {
+    const cd = item.calendarDecision as CalendarDecisionPayload | null | undefined;
+    const pair = pairById.get(String(item.id)) ?? null;
+    if (!cd) {
+      return { ...item, calendarReciprocalPair: null } as T;
+    }
+
+    const chronology =
+      pair?.chronology ??
+      inferCalendarChronologyHint({
+        dateA: cd.currentDate,
+        summaryA: String(item.daySummary ?? "").trim(),
+        dateB: cd.expectedDate,
+        summaryB: String(cd.expectedDateSummary ?? "").trim(),
+        reciprocalConflict: Boolean(pair),
+      });
+
+    return {
+      ...item,
+      calendarReciprocalPair: pair,
+      calendarDecision: {
+        ...(item.calendarDecision as Record<string, unknown>),
+        chronologyHint: chronology,
+      },
+    } as T;
+  });
+}
+
 const router = Router();
 
 type Articleish = { id?: string; title?: string; url?: string };
@@ -217,6 +304,7 @@ function topicCategoryLabels(raw: unknown): string[] {
 
 type DayAnalysisPreview = {
   summary: string;
+  topArticleId: string | null;
   topArticle: { title: string; url: string } | null;
   tags: string[];
   topicCategories: string[];
@@ -225,7 +313,67 @@ type DayAnalysisPreview = {
   winningTier: string | null;
   sourceArticles: { title: string; url: string }[];
   redoSummaryAvailable: boolean;
+  tieredArticles: unknown;
+  analyzedArticles: unknown;
 };
+
+function buildCorrectionSummarySource(opts: {
+  date: string;
+  topArticleId: string | null;
+  tieredArticles: unknown;
+  analyzedArticles: unknown;
+  proposals: import("../services/editorial-pipeline/review-package").CorrectionProposal[];
+}) {
+  const hasRedoSummary = opts.proposals.some((p) => p.kind === "redo_summary");
+  const hasEditSummary = opts.proposals.some((p) => p.kind === "edit_summary");
+  if (!isValidPipelineTopArticleId(opts.topArticleId)) return null;
+
+  const candidates = refreshArticlePickCandidatesForResponse(
+    buildStoredArticleCandidates({
+      topArticleId: opts.topArticleId,
+      tieredArticles: opts.tieredArticles,
+      analyzedArticles: opts.analyzedArticles,
+      targetDate: opts.date,
+    }),
+    opts.date,
+  );
+  const alternateCandidates = candidates.filter((c) => c.id !== opts.topArticleId).slice(0, 12);
+  if (!hasRedoSummary && !hasEditSummary) return null;
+  const current =
+    candidates.find((c) => c.id === opts.topArticleId) ??
+    (opts.topArticleId
+      ? {
+          id: opts.topArticleId,
+          title: "Current winning article",
+          url: opts.topArticleId.startsWith("http") ? opts.topArticleId : "",
+          summary: "",
+          tier: "bitcoin" as const,
+          rank: 0,
+          publishedDate: null,
+          publishedDateOffsetDays: null,
+          calendarSanityOk: true,
+          calendarSanityNotes: [],
+          relevanceScore: 0,
+          relevanceNotes: [],
+          recommended: false,
+        }
+      : null);
+
+  return {
+    current: current
+      ? {
+          id: current.id,
+          title: current.title,
+          url: current.url,
+          preview: (current.summary ?? "").slice(0, 220),
+          tier: current.tier,
+        }
+      : null,
+    alternateCandidates,
+    hasRedoSummary,
+    hasEditSummary,
+  };
+}
 
 function buildDayAnalysisPreview(row: {
   summary: string | null;
@@ -242,6 +390,7 @@ function buildDayAnalysisPreview(row: {
   const analyzed = row.analyzedArticles;
   return {
     summary: row.summary ?? "",
+    topArticleId: row.topArticleId ?? null,
     topArticle: resolveDayTopArticle({
       topArticleId: row.topArticleId,
       tieredArticles: tiered,
@@ -256,6 +405,8 @@ function buildDayAnalysisPreview(row: {
     winningTier: row.winningTier?.trim() || null,
     sourceArticles: collectDaySourceArticles({ tieredArticles: tiered, analyzedArticles: analyzed }),
     redoSummaryAvailable: isValidPipelineTopArticleId(row.topArticleId),
+    tieredArticles: tiered,
+    analyzedArticles: analyzed,
   };
 }
 
@@ -471,15 +622,29 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
       .select()
       .from(humanReviewQueue)
       .where(eq(humanReviewQueue.status, status))
-      .orderBy(desc(humanReviewQueue.priority), asc(humanReviewQueue.createdAt))
+      .orderBy(
+        status === "approved" || status === "rejected"
+          ? desc(humanReviewQueue.reviewedAt)
+          : desc(humanReviewQueue.priority),
+        asc(humanReviewQueue.createdAt),
+      )
       .limit(limit);
 
     const dates = [
       ...new Set(rows.map((r) => normalizeEventDate(r.eventDate)).filter((x): x is string => Boolean(x))),
     ];
+    const calendarExpectedDates = [
+      ...new Set(
+        rows
+          .map((r) => (isCalendarDecisionPackage(r.package) ? r.package.expectedDate : null))
+          .filter((x): x is string => Boolean(x)),
+      ),
+    ];
+    const analysisLookupDates = [...new Set([...dates, ...calendarExpectedDates])];
 
     const analysisByDate = new Map<string, DayAnalysisPreview>();
-    if (dates.length) {
+    const knownEventByDate = new Map<string, Awaited<ReturnType<typeof resolveKnownEventContext>>>();
+    if (analysisLookupDates.length) {
       const analyses = await db
         .select({
           date: historicalNewsAnalyses.date,
@@ -494,13 +659,19 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
           winningTier: historicalNewsAnalyses.winningTier,
         })
         .from(historicalNewsAnalyses)
-        .where(inArray(historicalNewsAnalyses.date, dates));
+        .where(inArray(historicalNewsAnalyses.date, analysisLookupDates));
 
       for (const a of analyses) {
         const ymd = normalizeEventDate(a.date);
         if (!ymd) continue;
         analysisByDate.set(ymd, buildDayAnalysisPreview(a));
       }
+
+      await Promise.all(
+        dates.map(async (ymd) => {
+          knownEventByDate.set(ymd, await resolveKnownEventContext(ymd));
+        }),
+      );
     }
 
     const mappedItems = rows.map((r) => {
@@ -558,13 +729,19 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
           : null,
         // Calendar mismatch decision.
         calendarDecision: calendarPkg
-          ? {
-              currentDate: calendarPkg.currentDate,
-              expectedDate: calendarPkg.expectedDate,
-              ruleId: calendarPkg.ruleId,
-              reason: calendarPkg.reason,
-              canonicalDateOccupied: calendarPkg.canonicalDateOccupied,
-            }
+          ? (() => {
+              const expectedPreview = analysisByDate.get(calendarPkg.expectedDate);
+              return {
+                currentDate: calendarPkg.currentDate,
+                expectedDate: calendarPkg.expectedDate,
+                ruleId: calendarPkg.ruleId,
+                reason: calendarPkg.reason,
+                canonicalDateOccupied: calendarPkg.canonicalDateOccupied,
+                expectedDateSummary: expectedPreview?.summary?.trim() || null,
+                expectedDateTags: expectedPreview?.tags ?? null,
+                expectedDateTopics: expectedPreview?.topicCategories ?? null,
+              };
+            })()
           : null,
         // Duplicate decision.
         duplicateDecision: duplicatePkg
@@ -575,10 +752,23 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
           : null,
         /** Derived operator-facing plan: what Approve will do, what still needs hand-fixing. */
         actionPlan,
+        knownEventContext: ymd ? (knownEventByDate.get(ymd) ?? null) : null,
+        correctionSummarySource:
+          correctionPkg && extra && ymd
+            ? buildCorrectionSummarySource({
+                date: ymd,
+                topArticleId: extra.topArticleId,
+                tieredArticles: extra.tieredArticles,
+                analyzedArticles: extra.analyzedArticles,
+                proposals: correctionPkg.proposals,
+              })
+            : null,
       };
     });
 
-    return mappedItems;
+    const withCalendarPairs = attachCalendarReciprocalPairs(mappedItems);
+
+    return withCalendarPairs;
     });
 
     res.json({ items });
@@ -642,6 +832,10 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
     const editedTopics = Array.isArray(req.body?.editedTopics)
       ? (req.body.editedTopics as unknown[]).filter((x): x is string => typeof x === "string")
       : undefined;
+    const replaceArticleId =
+      typeof req.body?.replaceArticleId === "string" && req.body.replaceArticleId.trim()
+        ? (req.body.replaceArticleId as string).trim()
+        : undefined;
 
     // Pre-flight: phase-specific required args.
     const [existing] = await db
@@ -650,6 +844,40 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
       .where(and(eq(humanReviewQueue.id, id), eq(humanReviewQueue.status, "pending")))
       .limit(1);
     if (!existing) return res.status(404).json({ error: "Pending review item not found" });
+
+    if (isCorrectionApprovalPackage(existing.package) && replaceArticleId) {
+      const date = normalizeEventDate(existing.eventDate) ?? existing.package.triage.date;
+      const [analysis] = await db
+        .select({
+          topArticleId: historicalNewsAnalyses.topArticleId,
+          tieredArticles: historicalNewsAnalyses.tieredArticles,
+          analyzedArticles: historicalNewsAnalyses.analyzedArticles,
+        })
+        .from(historicalNewsAnalyses)
+        .where(eq(historicalNewsAnalyses.date, date))
+        .limit(1);
+      if (!analysis) {
+        return res.status(404).json({ error: `No analysis row for ${date}` });
+      }
+      const candidates = buildStoredArticleCandidates({
+        topArticleId: analysis.topArticleId,
+        tieredArticles: analysis.tieredArticles,
+        analyzedArticles: analysis.analyzedArticles,
+        targetDate: date,
+      });
+      const selected = candidates.find((c) => c.id === replaceArticleId);
+      if (!selected) {
+        return res.status(400).json({
+          error: "replaceArticleId is not among stored candidates for this day",
+        });
+      }
+      if (selected.calendarSanityOk === false) {
+        return res.status(400).json({
+          error: "Selected replacement article failed date/story sanity checks",
+          notes: selected.calendarSanityNotes ?? [],
+        });
+      }
+    }
 
     const keepCurrentBetterStoryline =
       isArticlePickPackage(existing.package) &&
@@ -773,6 +1001,7 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
     }
     const execution = await executeApprovedReviewItem(updated[0].id, {
       selectedArticleId,
+      replaceArticleId,
       acceptedProposalIds,
       proposalTagSelections,
       proposalTopicSelections,
@@ -892,6 +1121,50 @@ router.post("/api/agent/pipeline/review/:id/rerun-date", async (req, res) => {
     res.json({ success: true, date, runId: out.runId, message: out.message });
   } catch (e: any) {
     res.status(e.status || 500).json({ error: e.message || "Rerun date failed" });
+  }
+});
+
+router.get("/api/agent/pipeline/metrics/overview", async (_req, res) => {
+  try {
+    requireAgentSecret(_req);
+    const overview = await computeCorpusOverviewMetrics();
+    res.json(overview);
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to load corpus overview metrics" });
+  }
+});
+
+router.post("/api/agent/pipeline/metrics/sample", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const { dateFrom, dateTo, count, seed } = req.body || {};
+    if (!dateFrom || !dateTo || typeof dateFrom !== "string" || typeof dateTo !== "string") {
+      return res.status(400).json({ error: "dateFrom and dateTo are required (YYYY-MM-DD)" });
+    }
+    if (!isIsoDate(dateFrom) || !isIsoDate(dateTo)) {
+      return res.status(400).json({ error: "Invalid date format" });
+    }
+    const sampleCount = Math.min(Math.max(Number(count) || 14, 1), 40);
+    const dates = await sampleDatesInRange(dateFrom, dateTo, sampleCount, String(seed ?? "metrics-ui"));
+    const report = await computeCorpusMetricsForDates(dates);
+    res.json({ ...report, dateFrom, dateTo, seed: String(seed ?? "metrics-ui") });
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Failed to compute sample metrics" });
+  }
+});
+
+router.post("/api/agent/pipeline/verify-day", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const date = typeof req.body?.date === "string" ? req.body.date.trim() : "";
+    if (!isIsoDate(date)) {
+      return res.status(400).json({ error: "date is required (YYYY-MM-DD)" });
+    }
+    const mode = req.body?.mode === "full" ? "full" : "quick";
+    const result = await verifyEditorialDay({ date, mode });
+    res.json(result);
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Day verification failed" });
   }
 });
 

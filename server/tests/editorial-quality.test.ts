@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isEditorialSummaryWeak, isValidPipelineTopArticleId } from "../services/editorial-pipeline/editorial-quality";
+import {
+  evaluateSummaryQuality,
+  isEditorialSummaryWeak,
+  isValidPipelineTopArticleId,
+  summaryOmitsNamedOrganization,
+  summaryNeedsBetterArticleSource,
+  isGenericMarketingSummary,
+  isBlogPaginationWinner,
+  isRoundupMultiStorySummary,
+  summaryDisallowedSymbol,
+  normalizeEditorialSummaryText,
+  summaryHasTrailingPunctuation,
+  findImproperProperNouns,
+} from "../services/editorial-pipeline/editorial-quality";
+import { evaluateRelevanceWithAgent, relevanceRequiresArticlePick } from "../services/editorial-pipeline/relevance-agent";
 
 test("isEditorialSummaryWeak treats short and failure placeholders as weak", () => {
   assert.equal(isEditorialSummaryWeak(null), true);
@@ -16,5 +30,79 @@ test("isValidPipelineTopArticleId rejects empty, none, and no-news placeholders"
   assert.equal(isValidPipelineTopArticleId(null), false);
   assert.equal(isValidPipelineTopArticleId("none"), false);
   assert.equal(isValidPipelineTopArticleId("no-news-123"), false);
-  assert.equal(isValidPipelineTopArticleId(" real-id "), true);
+  assert.equal(isValidPipelineTopArticleId("https://example.com/article"), true);
+});
+
+test("summaryOmitsNamedOrganization flags vague firm summaries when article names the company", () => {
+  const summary =
+    "U.K. firm trademarks bitcoin for clothing and drinks, sparking confusion but leaving the currency alone";
+  const snippet =
+    "A.B.C. IP Holdings Ltd trademarks the word bitcoin for clothing and drinks in the UK, leaving the currency itself untouched";
+  assert.equal(summaryOmitsNamedOrganization(summary, snippet), true);
+  assert.equal(summaryOmitsNamedOrganization(summary, summary), false);
+});
+
+test("2018-05-18 CEX.IO blog page is flagged as junk winner", () => {
+  const summary =
+    "CEX.IO's blog offers updates on crypto news, user verification, app features, and simplified purchases";
+  const topArticleId = "https://blog.cex.io/page/55";
+  assert.equal(isGenericMarketingSummary(summary), true);
+  assert.equal(isBlogPaginationWinner(topArticleId), true);
+  assert.equal(summaryNeedsBetterArticleSource(summary, topArticleId), true);
+});
+
+test("relevance rules path triggers article pick for 2018-05-18 junk winner", async () => {
+  const summary =
+    "CEX.IO's blog offers updates on crypto news, user verification, app features, and simplified purchases";
+  const out = await evaluateRelevanceWithAgent({
+    date: "2018-05-18",
+    summary,
+    topArticleId: "https://blog.cex.io/page/55",
+  });
+  assert.equal(out.source, "rules");
+  assert.equal(out.classification, "insufficient");
+  assert.equal(relevanceRequiresArticlePick(out), true);
+});
+
+test("2019-08-18 roundup summary is weak and needs article re-pick", () => {
+  const summary =
+    "NZ legalizes crypto salaries; China builds two-layer digital currency; AWS expands blockchain tools, fast";
+  assert.equal(summaryDisallowedSymbol(summary), "semicolon");
+  assert.equal(isRoundupMultiStorySummary(summary), true);
+  assert.equal(isEditorialSummaryWeak(summary), true);
+  const issue = evaluateSummaryQuality(summary);
+  assert.equal(issue?.code, "disallowed_symbols");
+  assert.equal(summaryNeedsBetterArticleSource(summary, "https://example.com/roundup"), true);
+});
+
+test("relevance rules path triggers article pick for 2019-08-18 roundup summary", async () => {
+  const summary =
+    "NZ legalizes crypto salaries; China builds two-layer digital currency; AWS expands blockchain tools, fast";
+  const out = await evaluateRelevanceWithAgent({
+    date: "2019-08-18",
+    summary,
+    topArticleId: "https://example.com/crypto-daily",
+  });
+  assert.equal(out.source, "rules");
+  assert.equal(out.classification, "insufficient");
+  assert.equal(relevanceRequiresArticlePick(out), true);
+});
+
+test("normalizeEditorialSummaryText strips trailing period and capitalizes Bitcoin", () => {
+  const raw =
+    "bitcoin reaches new highs as markets rally with strong momentum from traders worldwide pushing prices higher today.";
+  const out = normalizeEditorialSummaryText(raw);
+  assert.equal(summaryHasTrailingPunctuation(out), false);
+  assert.match(out, /\bBitcoin\b/);
+  assert.equal(findImproperProperNouns(out).length, 0);
+});
+
+test("evaluateSummaryQuality rejects trailing full stop and lowercase bitcoin", () => {
+  const withPeriod =
+    "Bitcoin reaches new highs as markets rally with strong momentum from traders worldwide pushing prices higher.";
+  assert.equal(evaluateSummaryQuality(withPeriod)?.code, "trailing_punctuation");
+
+  const lowercase =
+    "bitcoin reaches new highs as markets rally with strong momentum from traders worldwide pushing prices higher";
+  assert.equal(evaluateSummaryQuality(lowercase)?.code, "improper_capitalization");
 });

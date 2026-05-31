@@ -37,12 +37,13 @@ import {
   loadCanonicalTagIndex,
 } from "./tag-grounding";
 import { entityExtractor } from "../entity-extractor";
-import { evaluateSummaryQuality } from "./editorial-quality";
+import { evaluateSummaryQuality, normalizeEditorialSummaryText } from "./editorial-quality";
 import {
   ensureTopicCategoryAndStorylineLinks,
-  inferTopicProposal,
 } from "./storyline-taxonomy";
+import { suggestTopicsWithAgent } from "./topic-agent";
 import { invalidTopicReasons } from "./topic-validation";
+import { formatTopicLeafWithGroup } from "@shared/topic-hierarchy";
 
 type ApprovedAction =
   | { kind: "reanalyze_date"; date: string }
@@ -283,12 +284,22 @@ export async function applyArticlePickApproval(opts: {
     console.warn(`[article-pick] entity extraction failed for ${opts.date}:`, err);
   }
 
-  const proposedTopics = inferTopicProposal({
-    title: candidate.title,
+  const topicAgent = await suggestTopicsWithAgent({
+    date: opts.date,
     summary: summaryResult.summary,
     tags: proposedTags,
+    currentTopics: [],
+    sourceSnippet: `${candidate.title}\n${articleText.slice(0, 500)}`,
   });
-  const safeTopics = proposedTopics.length ? proposedTopics.slice(0, 1) : [...DEFAULT_TOPIC_SUGGESTION];
+  const safeTopics = topicAgent.recommended
+    ? [topicAgent.recommended]
+    : topicAgent.proposed.length
+      ? [topicAgent.proposed[0]]
+      : [...DEFAULT_TOPIC_SUGGESTION];
+  const topicNote =
+    safeTopics.length > 0
+      ? ` Topic: ${formatTopicLeafWithGroup(safeTopics[0])}.`
+      : " No topic auto-assigned — pick one before approving.";
 
   await storage.updateAnalysis(opts.date, {
     summary: summaryResult.summary,
@@ -325,8 +336,8 @@ export async function applyArticlePickApproval(opts: {
     },
     generatedSummary: summaryResult.summary,
     proposedTags,
-    proposedTopics: safeTopics,
-    note: `Article picked and summary generated. Edit the summary, tags, or topics before approving.${mergedNote}${droppedNote}`,
+    proposedTopics: topicAgent.proposed.length ? topicAgent.proposed : safeTopics,
+    note: `Article picked and summary generated. Edit the summary, tags, or topics before approving.${mergedNote}${droppedNote}${topicNote}`,
   };
   await db.insert(humanReviewQueue).values({
     runId: opts.runId,
@@ -530,15 +541,25 @@ export async function applyCorrectionProposals(opts: {
   }
 
   if (redoSummaryRequested) {
-    const out = await regenerateSummaryFromTopArticle(opts.date);
+    const { regenerateSummaryWithAgent } = await import("./summary-agent");
+    const out = await regenerateSummaryWithAgent(opts.date);
     if (out.ok) {
       applied.push(`regenerated summary (${out.summaryLength} chars)`);
     } else {
-      return {
-        ok: false,
-        applied,
-        message: `Partial apply: ${applied.join("; ") || "no changes"}. Redo-summary failed: ${out.message}`,
-      };
+      const isAutoReviewer = Boolean(opts.reviewer?.endsWith(":auto"));
+      const missingArticlePayload = Boolean(
+        out.message?.includes("missing from stored payloads") ||
+          out.message?.includes("Top article not present"),
+      );
+      if (isAutoReviewer && missingArticlePayload) {
+        applied.push(`skipped summary regen (${out.message})`);
+      } else {
+        return {
+          ok: false,
+          applied,
+          message: `Partial apply: ${applied.join("; ") || "no changes"}. Redo-summary failed: ${out.message}`,
+        };
+      }
     }
   }
 
@@ -550,37 +571,6 @@ export async function applyCorrectionProposals(opts: {
         ? `Approved ${opts.date}: ${applied.join("; ")}.`
         : `Approved ${opts.date}: no proposals were selected.`,
   };
-}
-
-async function regenerateSummaryFromTopArticle(date: string): Promise<{
-  ok: boolean;
-  summaryLength?: number;
-  message?: string;
-}> {
-  const analysis = await storage.getAnalysisByDate(date);
-  if (!analysis) return { ok: false, message: `No analysis row for ${date}` };
-  if (!analysis.topArticleId) return { ok: false, message: "Top article id missing" };
-
-  const tiered = (analysis.tieredArticles ?? {}) as { bitcoin?: ArticleData[]; crypto?: ArticleData[]; macro?: ArticleData[] };
-  const tiers = ["bitcoin", "crypto", "macro"] as const;
-  let selected: ArticleData | null = null;
-  let tier: typeof tiers[number] = "bitcoin";
-  for (const t of tiers) {
-    const arr = tiered[t] ?? [];
-    const found = arr.find((a) => a.id === analysis.topArticleId);
-    if (found) {
-      selected = found;
-      tier = t;
-      break;
-    }
-  }
-  if (!selected) return { ok: false, message: "Top article not present in tiered arrays" };
-
-  const { generateSummaryWithOpenAI } = await import("../analysis-modes");
-  const requestId = `redo-summary-corrections-${date}-${Date.now()}`;
-  const out = await generateSummaryWithOpenAI(selected.id, [selected], date, tier, requestId);
-  await storage.updateAnalysis(date, { summary: out.summary });
-  return { ok: true, summaryLength: out.summary.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -600,15 +590,23 @@ async function applySummaryApproval(opts: {
   // Operator edits take precedence over package proposals; fall back to whatever
   // the v3 article-pick path produced. We DO commit empty arrays — that means
   // "operator deliberately removed everything" and should be honoured.
-  const finalSummary = (opts.edits?.editedSummary ?? opts.pkg.generatedSummary).trim();
+  const finalSummary = normalizeEditorialSummaryText(
+    (opts.edits?.editedSummary ?? opts.pkg.generatedSummary).trim(),
+  );
   const finalTags = normalizeUserTagList(opts.edits?.editedTags ?? opts.pkg.proposedTags);
   const proposedTopics =
     opts.edits?.editedTopics ??
-    inferTopicProposal({
-      title: opts.pkg.winningArticle.title,
-      summary: finalSummary,
-      tags: finalTags,
-    });
+    (opts.pkg.proposedTopics.length
+      ? opts.pkg.proposedTopics
+      : (
+          await suggestTopicsWithAgent({
+            date: opts.date,
+            summary: finalSummary,
+            tags: finalTags,
+            currentTopics: [],
+            sourceSnippet: opts.pkg.winningArticle.title,
+          })
+        ).proposed);
   const normalizedTopics = normalizeUserTopicList(proposedTopics).slice(0, 1);
   const finalTopics = normalizedTopics.length ? normalizedTopics : [...DEFAULT_TOPIC_SUGGESTION];
 
@@ -860,7 +858,7 @@ export type ApprovalOptions = {
   proposalTopicSelections?: Record<string, string[]>;
   calendarDecision?: CalendarDecisionInput;
   duplicateDecision?: DuplicateDecisionInput;
-  duplicateNeighborDate?: string;
+  replaceArticleId?: string;
   /** Operator-edited summary text (overrides package proposedSummary on summary-approval). */
   editedSummary?: string;
   /** Operator-edited tag list (overrides package proposedTags on summary-approval). */
@@ -907,6 +905,26 @@ export async function executeApprovedReviewItem(
   if (decision.action.kind === "apply_correction_proposals") {
     if (!isCorrectionApprovalPackage(item.package)) {
       return { ok: false, message: "Correction package shape is invalid" };
+    }
+    if (opts?.replaceArticleId?.trim()) {
+      const analysis = await storage.getAnalysisByDate(decision.action.date);
+      if (!analysis) return { ok: false, message: `No analysis row for ${decision.action.date}` };
+      const { buildStoredArticleCandidates } = await import("./run");
+      const candidates = buildStoredArticleCandidates({
+        topArticleId: analysis.topArticleId,
+        tieredArticles: analysis.tieredArticles,
+        analyzedArticles: analysis.analyzedArticles,
+        targetDate: decision.action.date,
+      });
+      return applyArticlePickApproval({
+        date: decision.action.date,
+        selectedArticleId: opts.replaceArticleId.trim(),
+        candidates,
+        reviewer: opts.reviewer ?? null,
+        runId: item.runId,
+        stepId: item.stepId,
+        triage: item.package.triage,
+      });
     }
     const out = await applyCorrectionProposals({
       date: decision.action.date,

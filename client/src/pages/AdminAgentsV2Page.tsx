@@ -11,11 +11,13 @@ import {
 } from "@/components/ui/sheet";
 import AgentsV2AgentPanel from "@/pages/AgentsV2AgentPanel";
 import AgentsV2HomePanel from "@/pages/AgentsV2HomePanel";
+import AgentsV2MetricsPanel from "@/pages/AgentsV2MetricsPanel";
 import AgentsV2SystemPanel from "@/pages/AgentsV2SystemPanel";
 
 const BASE = "/admin/agents";
 const LEGACY_BASE = "/admin/agents-v2";
 const AGENT = `${BASE}/agent`;
+const METRICS = `${BASE}/metrics`;
 const SYSTEM = `${BASE}/system`;
 
 function AgentsV2Home() {
@@ -24,6 +26,10 @@ function AgentsV2Home() {
 
 function AgentsV2Agent() {
   return <AgentsV2AgentPanel />;
+}
+
+function AgentsV2Metrics() {
+  return <AgentsV2MetricsPanel />;
 }
 
 function AgentsV2System() {
@@ -38,11 +44,13 @@ export default function AdminAgentsV2Page() {
     ? rawPath.replace(LEGACY_BASE, BASE)
     : rawPath;
   const isAgent = path === AGENT || path.startsWith(`${AGENT}/`);
+  const isMetrics = path === METRICS || path.startsWith(`${METRICS}/`);
   const isSystem = path === SYSTEM || path.startsWith(`${SYSTEM}/`);
 
   const items: { href: string; label: string; match: boolean }[] = [
-    { href: BASE, label: "Homepage", match: (path === BASE || path === `${BASE}/`) && !isAgent && !isSystem },
+    { href: BASE, label: "Homepage", match: (path === BASE || path === `${BASE}/`) && !isAgent && !isMetrics && !isSystem },
     { href: AGENT, label: "Agent", match: isAgent },
+    { href: METRICS, label: "Metrics", match: isMetrics },
     { href: SYSTEM, label: "System", match: isSystem },
   ];
 
@@ -114,7 +122,7 @@ export default function AdminAgentsV2Page() {
       </aside>
 
       <main className="min-w-0 flex-1 overflow-x-hidden bg-card/20">
-        {isAgent ? <AgentsV2Agent /> : isSystem ? <AgentsV2System /> : <AgentsV2Home />}
+        {isAgent ? <AgentsV2Agent /> : isMetrics ? <AgentsV2Metrics /> : isSystem ? <AgentsV2System /> : <AgentsV2Home />}
       </main>
     </div>
   );

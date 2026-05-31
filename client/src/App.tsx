@@ -36,10 +36,12 @@ function Router() {
         <Route path="/violation/:date" component={ConflictCockpit} />
         <Route path="/fact-check/:date" component={ConflictCockpit} />
         <Route path="/admin/agents/agent" component={AdminAgentsV2Page} />
+        <Route path="/admin/agents/metrics" component={AdminAgentsV2Page} />
         <Route path="/admin/agents/system" component={AdminAgentsV2Page} />
         <Route path="/admin/agents/review-lab" component={AdminAgentsV2Page} />
         <Route path="/admin/agents" component={AdminAgentsV2Page} />
         <Route path="/admin/agents-v2/agent" component={AdminAgentsV2Page} />
+        <Route path="/admin/agents-v2/metrics" component={AdminAgentsV2Page} />
         <Route path="/admin/agents-v2/system" component={AdminAgentsV2Page} />
         <Route path="/admin/agents-v2/review-lab" component={AdminAgentsV2Page} />
         <Route path="/admin/agents-v2" component={AdminAgentsV2Page} />

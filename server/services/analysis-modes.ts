@@ -1,3 +1,4 @@
+import { normalizeEditorialSummaryText } from './editorial-pipeline/editorial-quality';
 import { hierarchicalSearch } from './hierarchical-search';
 import { aiService } from './ai';
 import { apiMonitor } from './api-monitor';
@@ -520,8 +521,9 @@ CRITICAL REQUIREMENTS:
 3. Use active voice and present tense: "Bitcoin reaches $1000" not "Bitcoin reached $1000"
 4. Focus on what actually HAPPENED, not what articles discussed
 5. NO ending punctuation (no periods/full stops, colons, semicolons, dashes). We are NOT interested in full stops at the end - do not include them.
-6. Be conversational yet professional
-7. Emphasize the actual event/outcome over the reporting
+6. Capitalize proper names: Bitcoin, Ethereum, Coinbase, PayPal, Lightning Network, etc. Never write "bitcoin" when you mean the asset or network.
+7. Be conversational yet professional
+8. Emphasize the actual event/outcome over the reporting
 
 IMPORTANT: After writing your summary, count the characters. If it's not between 100-110 characters, rewrite it until it is. Return ONLY the summary text, nothing else.`;
     
@@ -534,7 +536,7 @@ IMPORTANT: After writing your summary, count the characters. If it's not between
       purpose: `Generate summary for ${tier} tier article`
     });
     
-    let finalSummary = summaryResult.text.trim();
+    let finalSummary = normalizeEditorialSummaryText(summaryResult.text);
     let length = finalSummary.length;
     let adjustmentRound = 0;
     const maxAdjustmentRounds = 3;
@@ -561,7 +563,7 @@ Return ONLY the expanded summary text (100-110 chars), nothing else.`;
           purpose: `Adjust summary length (round ${adjustmentRound})`
         });
         
-        finalSummary = adjusted.text.trim();
+        finalSummary = normalizeEditorialSummaryText(adjusted.text);
         length = finalSummary.length;
         console.log(`   📝 After adjustment round ${adjustmentRound} (${length} chars): "${finalSummary.substring(0, 60)}${finalSummary.length > 60 ? '...' : ''}"`);
       } else if (length > 110) {
@@ -580,7 +582,7 @@ Return ONLY the shortened summary text (100-110 chars), nothing else.`;
           purpose: `Adjust summary length (round ${adjustmentRound})`
         });
         
-        finalSummary = adjusted.text.trim();
+        finalSummary = normalizeEditorialSummaryText(adjusted.text);
         length = finalSummary.length;
         console.log(`   📝 After adjustment round ${adjustmentRound} (${length} chars): "${finalSummary.substring(0, 60)}${finalSummary.length > 60 ? '...' : ''}"`);
       }

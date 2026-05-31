@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
 import { historicalNewsAnalyses, pageTopics, topics } from "@shared/schema";
-import { TOPIC_HIERARCHY_LEAVES, TOPIC_HIERARCHY_ROOTS } from "@shared/topic-hierarchy";
+import { TOPIC_HIERARCHY_LEAVES, TOPIC_HIERARCHY_ROOTS, topicGroupForLeaf } from "@shared/topic-hierarchy";
 
 type StorylineInput = {
   title?: string | null;
@@ -142,7 +142,36 @@ function pickBestStorylineLeaf(corpus: string): string | null {
   return best && best.score >= 2 ? best.leaf : null;
 }
 
-function inferStorylineLabelsFromCorpus(corpus: string, modelTopics?: string[]): string[] {
+function rankKeywordTopicScores(corpus: string, minScore = 2): Array<{ leaf: string; score: number }> {
+  const text = corpus.toLowerCase();
+  const tokens = new Set(text.split(/[^a-z0-9]+/g).filter((word) => word.length > 2));
+  const out: Array<{ leaf: string; score: number }> = [];
+
+  for (const leaf of TOPIC_HIERARCHY_LEAVES) {
+    const triggers = STORYLINE_LEAF_TRIGGERS[leaf as keyof typeof STORYLINE_LEAF_TRIGGERS]
+      ?? leaf.toLowerCase().split(/[^a-z0-9]+/g).filter((word) => word.length > 2);
+    let score = 0;
+    for (const trigger of triggers) {
+      const normalized = trigger.toLowerCase();
+      if (tokens.has(normalized) || text.includes(normalized)) score += 1;
+    }
+    if (score >= minScore) out.push({ leaf, score });
+  }
+
+  return out.sort((a, b) => b.score - a.score);
+}
+
+const PATTERN_MATCH_WEIGHT = 10;
+
+export type TopicCandidateRank = { leaf: string; score: number };
+
+export type TopicRankingResult = {
+  confidence: "high" | "low";
+  primary: string | null;
+  candidates: TopicCandidateRank[];
+};
+
+function matchStorylinePatterns(corpus: string): string[] {
   const out: string[] = [];
 
   if (/\b(presidential elections?|presidential race|white house race)\b/.test(corpus)) {
@@ -172,6 +201,12 @@ function inferStorylineLabelsFromCorpus(corpus: string, modelTopics?: string[]):
   }
   if (/\b(genesis block|first bitcoin block|first block mined|early bitcoin|bitcoin launched|satoshi warns|wikileaks)\b/.test(corpus)) {
     addUnique(out, "Early Bitcoin history");
+  }
+  if (
+    /\b(doublespend|double-spend|double spend|cryptographic proof|byzantine generals)\b/.test(corpus) &&
+    /\b(bitcoin|btc|satoshi|blockchain)\b/.test(corpus)
+  ) {
+    addUnique(out, "Protocol development");
   }
   if (/\b(canaan|bitmain|marathon|riot|mining company|mining companies)\b/.test(corpus)) {
     addUnique(out, "Mining companies");
@@ -312,6 +347,19 @@ function inferStorylineLabelsFromCorpus(corpus: string, modelTopics?: string[]):
   if (/\b(debt crisis|sovereign debt|eurozone debt|greek debt)\b/.test(corpus)) {
     addUnique(out, "Debt crises");
   }
+  if (
+    /\b(g20|g-20)\b/.test(corpus) &&
+    /\b(crisis|trillion|bailout|stimulus|economic|recession|deal)\b/.test(corpus)
+  ) {
+    addUnique(out, "Bailouts and stimulus");
+    addUnique(out, "Global growth and recession");
+  }
+  if (
+    /\b(economic crisis|financial crisis|market optimism|global market)\b/.test(corpus) &&
+    /\b(crisis|recession|trillion|bailout|stimulus|deal|optimism)\b/.test(corpus)
+  ) {
+    addUnique(out, "Global growth and recession");
+  }
   if (/\b(developer group|developers?|development|research|square crypto|optech)\b/.test(corpus)) {
     addUnique(out, "Developer ecosystem");
   }
@@ -324,6 +372,12 @@ function inferStorylineLabelsFromCorpus(corpus: string, modelTopics?: string[]):
   if (/\b(transaction features?|utxo|utxo set|time lock|timelock)\b/.test(corpus)) {
     addUnique(out, "Transaction features");
   }
+
+  return out;
+}
+
+function inferStorylineLabelsFromCorpus(corpus: string, modelTopics?: string[]): string[] {
+  const out = matchStorylinePatterns(corpus);
 
   const modelLabels = modelTopics ?? [];
   for (const label of modelLabels) {
@@ -341,23 +395,60 @@ function inferStorylineLabelsFromCorpus(corpus: string, modelTopics?: string[]):
   return out.slice(0, 1);
 }
 
-export function inferStorylineLabels(input: StorylineInput): string[] {
-  const summaryCorpus = summaryCorpusFrom(input);
-  if (summaryCorpus.trim()) {
-    const fromSummary = inferStorylineLabelsFromCorpus(summaryCorpus, input.modelTopics);
-    if (fromSummary.length > 0) return fromSummary;
-  }
-  return inferStorylineLabelsFromCorpus(corpusFrom(input), input.modelTopics);
+export function rankTopicCandidatesFromSummary(input: StorylineInput, maxOptions = 3): TopicRankingResult {
+  const corpus = summaryCorpusFrom(input);
+  if (!corpus.trim()) return { confidence: "low", primary: null, candidates: [] };
+
+  const scoreMap = new Map<string, number>();
+  const bump = (leaf: string, points: number) => {
+    const key = canonicalLabel(leaf);
+    if (!KNOWN_LEAF_STORYLINE_LABELS.has(key) && !KNOWN_NEW_STORYLINES[key]) return;
+    scoreMap.set(leaf, (scoreMap.get(leaf) ?? 0) + points);
+  };
+
+  const patternHits = matchStorylinePatterns(corpus);
+  for (const leaf of patternHits) bump(leaf, PATTERN_MATCH_WEIGHT);
+  for (const hit of rankKeywordTopicScores(corpus)) bump(hit.leaf, hit.score);
+
+  const ranked: TopicCandidateRank[] = [...scoreMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, maxOptions)
+    .map(([leaf, score]) => ({ leaf, score }));
+
+  if (!ranked.length) return { confidence: "low", primary: null, candidates: [] };
+
+  const top = ranked[0];
+  const second = ranked[1];
+  const topFromPattern = patternHits.some((leaf) => canonicalLabel(leaf) === canonicalLabel(top.leaf));
+  const high =
+    ranked.length === 1 ||
+    (topFromPattern && patternHits.length === 1) ||
+    (top.score >= PATTERN_MATCH_WEIGHT + 2) && (top.score - (second?.score ?? 0) >= 3);
+
+  return {
+    confidence: high ? "high" : "low",
+    primary: top.leaf,
+    candidates: ranked,
+  };
 }
 
 /** Summary-only topic for correction flows — never overridden by article-bundle noise. */
 export function inferTopicProposal(input: StorylineInput): string[] {
-  const summaryCorpus = summaryCorpusFrom(input);
-  if (!summaryCorpus.trim()) return [];
-  const fromSummary = inferStorylineLabelsFromCorpus(summaryCorpus);
-  if (fromSummary.length > 0) return fromSummary;
-  const fallback = pickBestStorylineLeaf(summaryCorpus);
-  return fallback ? [fallback] : [];
+  const ranking = rankTopicCandidatesFromSummary(input, 3);
+  if (ranking.confidence === "high" && ranking.primary) return [ranking.primary];
+  return [];
+}
+
+export function storedTopicConflictsWithSummary(storedTopics: string[], summary: string): boolean {
+  const leaf = storedTopics[0];
+  if (!leaf?.trim()) return false;
+  const corpus = summary.trim().toLowerCase();
+  if (!corpus) return false;
+  const group = topicGroupForLeaf(leaf);
+  if (group === "Bitcoin" && !/\b(bitcoin|btc|satoshi|blockchain|bitcoind|bitcoin-qt)\b/.test(corpus)) {
+    return true;
+  }
+  return false;
 }
 
 export function storedTopicMisaligned(storedTopics: string[], inferredTopics: string[]): boolean {
@@ -365,6 +456,15 @@ export function storedTopicMisaligned(storedTopics: string[], inferredTopics: st
   const stored = canonicalLabel(storedTopics[0]);
   const inferred = canonicalLabel(inferredTopics[0]);
   return stored !== inferred;
+}
+
+export function inferStorylineLabels(input: StorylineInput): string[] {
+  const summaryCorpus = summaryCorpusFrom(input);
+  if (summaryCorpus.trim()) {
+    const fromSummary = inferStorylineLabelsFromCorpus(summaryCorpus, input.modelTopics);
+    if (fromSummary.length > 0) return fromSummary;
+  }
+  return inferStorylineLabelsFromCorpus(corpusFrom(input), input.modelTopics);
 }
 
 async function ensureStorylineTopic(label: string, existing: TopicRow[]): Promise<TopicRow | null> {

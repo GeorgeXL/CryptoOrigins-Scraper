@@ -47,6 +47,17 @@ test("blocks broad annual roundup candidates", () => {
   assert.ok(result.notes.some((n) => /roundup|listicle/i.test(n)));
 });
 
+test("blocks semicolon-separated multi-headline roundups", () => {
+  const result = evaluateCandidateStorySanity({
+    targetDate: "2019-08-18",
+    title: "NZ legalizes crypto salaries; China builds digital currency; AWS expands blockchain tools",
+    summary: "Three crypto headlines from around the world on one page.",
+    text: "New Zealand legalizes crypto salaries. China builds a two-layer digital currency. AWS expands blockchain tools.",
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.notes.some((n) => /semicolon|multiple stories/i.test(n)));
+});
+
 test("blocks speculative analyst calls as replacements when no event happened", () => {
   const result = evaluateCandidateStorySanity({
     targetDate: "2019-02-26",

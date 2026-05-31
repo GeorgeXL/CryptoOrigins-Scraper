@@ -9,8 +9,21 @@
  */
 
 import { normalizeTagList, normalizeTagValue } from "./tools";
+import { formatTagAddRationale, formatTagDropRationale } from "./agent-reason";
 import type { CorrectionProposal } from "./review-package";
-import { isEditorialSummaryWeak, isValidPipelineTopArticleId } from "./editorial-quality";
+import {
+  isEditorialSummaryWeak,
+  isRoundupArticleContent,
+  isRoundupMultiStorySummary,
+  isValidPipelineTopArticleId,
+} from "./editorial-quality";
+import {
+  editorialTagKey,
+  filterEditorialTagAdds,
+  isEditorialEntityTagCandidate,
+  isEditoriallyInvalidCurrentTag,
+  preferredEditorialTagDisplay,
+} from "./editorial-tag-rules";
 import {
   findGroundedTaxonomyTagsMissingFromRow,
   findRedundantTagPairs,
@@ -18,14 +31,15 @@ import {
   isTagGroundedInTexts,
   type CanonicalTagIndex,
 } from "./tag-grounding";
-import { inferStorylineLabels, inferTopicProposal, storedTopicMisaligned } from "./storyline-taxonomy";
+import {
+  rankTopicCandidatesFromSummary,
+  storedTopicConflictsWithSummary,
+  storedTopicMisaligned,
+  type TopicRankingResult,
+} from "./storyline-taxonomy";
 import { invalidTopicReasons } from "./topic-validation";
 import { formatTopicLeafWithGroup } from "@shared/topic-hierarchy";
-import {
-  editorialTagKey,
-  isEditorialEntityTagCandidate,
-  isEditoriallyInvalidCurrentTag,
-} from "./editorial-tag-rules";
+import type { KnownEventContext } from "./known-event-context";
 
 export type LegacyTag = { name?: unknown; category?: unknown } | string;
 
@@ -44,6 +58,23 @@ export type DayProposalInputs = {
   canonicalTagIndex?: CanonicalTagIndex | null;
   /** Tags the operator explicitly declined to add for this date on prior runs. */
   suppressedGroundedTags?: string[] | null;
+  /** When set (e.g. from Topic Agent), overrides rule-based topic ranking. */
+  topicRankingOverride?: TopicRankingResult;
+  /** Plain-language topic rationale from Topic Agent. */
+  topicAgentReason?: string;
+  topicAgentSource?: "llm" | "rules" | "skipped";
+  topicAgentConfidence?: "high" | "medium" | "low";
+  tagAgentAdd?: string[];
+  tagAgentDrop?: string[];
+  tagAgentReason?: string;
+  tagAgentSource?: "llm" | "skipped";
+  tagAgentConfidence?: "high" | "medium" | "low";
+  summaryAgentReason?: string;
+  summaryAgentSource?: "llm" | "rules" | "skipped";
+  summaryAgentConfidence?: "high" | "medium" | "low";
+  summaryAgentNeedsRegen?: boolean;
+  summaryAgentSuggested?: string | null;
+  knownEvent?: KnownEventContext | null;
 };
 
 function legacyTagNames(raw: unknown): string[] {
@@ -81,6 +112,15 @@ function buildId(date: string, kind: string): string {
   return `${date}:${kind}`;
 }
 
+function summaryFromWeeklyRoundup(input: DayProposalInputs): boolean {
+  const summary = String(input.summary ?? "").trim();
+  if (isRoundupMultiStorySummary(summary)) return true;
+  return isRoundupArticleContent({
+    summary,
+    text: input.articleText,
+  });
+}
+
 /**
  * Decide what set of v2 tags we want when the legacy `tags` column has
  * entries the v2 list is missing. We dedupe + normalize, preserve the
@@ -115,7 +155,52 @@ function mergeV2WithLegacyTags(currentV2: string[], legacy: string[], groundingT
   };
 }
 
-const DEFAULT_TOPIC_SUGGESTION: string[] = [];
+
+export function formatTopicPickRationale(proposed: string[]): string {
+  if (proposed.length === 1) {
+    return `Pick: ${formatTopicLeafWithGroup(proposed[0])}`;
+  }
+  if (proposed.length > 1) {
+    return `Pick one: ${proposed.map(formatTopicLeafWithGroup).join(" · ")}`;
+  }
+  return "Pick a storyline leaf";
+}
+
+function buildTopicCategoryProposal(opts: {
+  date: string;
+  summary: string;
+  topics: string[];
+  topicIssues: string[];
+  ranking: TopicRankingResult;
+  agentReason?: string;
+  topicAgentSource?: "llm" | "rules" | "skipped";
+  topicAgentConfidence?: "high" | "medium" | "low";
+}): CorrectionProposal | null {
+  const { date, summary, topics, topicIssues, ranking, topicAgentSource, topicAgentConfidence } = opts;
+  const topicConflict = storedTopicConflictsWithSummary(topics, summary);
+  const topicMisaligned = storedTopicMisaligned(topics, ranking.primary ? [ranking.primary] : []);
+  const needsFix = topicIssues.length > 0 || topicConflict || topicMisaligned;
+  if (!needsFix) return null;
+
+  const proposed =
+    topicAgentConfidence === "high" && ranking.primary
+      ? [ranking.primary]
+      : ranking.confidence === "high" && ranking.primary
+        ? [ranking.primary]
+        : ranking.candidates.map((c) => c.leaf);
+
+  const rationale = formatTopicPickRationale(proposed);
+
+  return {
+    id: buildId(date, "set_topic_categories"),
+    kind: "set_topic_categories",
+    current: topics,
+    proposed,
+    rationale,
+    ...(topicAgentSource ? { topicAgentSource } : {}),
+    ...(topicAgentConfidence ? { topicAgentConfidence } : {}),
+  };
+}
 
 /** Tags that appear only as critics/opponents in the summary, not as the story subject. */
 function findTangentialCriticTags(summary: string, tags: string[]): string[] {
@@ -173,11 +258,12 @@ function inferredMissingTagsFromSummary(
   const current = new Set(currentTags.map((t) => editorialTagKey(t)).filter(Boolean));
   const out: string[] = [];
   const add = (tag: string) => {
-    if (!isEditorialEntityTagCandidate(tag)) return;
-    const key = editorialTagKey(tag);
+    const display = preferredEditorialTagDisplay(tag);
+    if (!isEditorialEntityTagCandidate(display)) return;
+    const key = editorialTagKey(display);
     if (!key || current.has(key)) return;
     if (out.some((x) => editorialTagKey(x) === key)) return;
-    out.push(tag);
+    out.push(display);
   };
 
   if (/\b(bitcoin|btc)\b/i.test(summary)) add("Bitcoin");
@@ -251,61 +337,35 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
   }
 
   // 3. Topic categories — enforce exactly one new-system hierarchy leaf.
-  const inferredStorylinesFromSummary = inferStorylineLabels({
-    summary,
-    tags: currentV2,
-  });
-  const inferredStorylinesFromArticle = inferredStorylinesFromSummary.length > 0
-    ? []
-    : inferStorylineLabels({
-        summary,
-        articleText: input.articleText,
-        tags: currentV2,
-      });
-  const inferredTopicProposal = inferTopicProposal({
-    summary,
-    articleText: input.articleText,
-    tags: currentV2,
-  });
+  const ranking =
+    input.topicRankingOverride ?? rankTopicCandidatesFromSummary({ summary, tags: currentV2 });
   const topicIssues = invalidTopicReasons(topics);
-  const resolvedTopicProposal =
-    inferredTopicProposal.length > 0
-      ? inferredTopicProposal
-      : inferredStorylinesFromSummary.length > 0
-        ? inferredStorylinesFromSummary
-        : inferredStorylinesFromArticle;
-  if (topicIssues.length > 0) {
-    const proposed = resolvedTopicProposal.length > 0 ? resolvedTopicProposal : DEFAULT_TOPIC_SUGGESTION;
-    out.push({
-      id: buildId(input.date, "set_topic_categories"),
-      kind: "set_topic_categories",
-      current: topics,
-      proposed,
-      rationale:
-        proposed.length > 0
-          ? `${topicIssues.join("; ")}. Auto-assigned ${formatTopicLeafWithGroup(proposed[0])}.`
-          : `${topicIssues.join("; ")}. Could not infer a storyline leaf from the summary.`,
-    });
-  } else if (storedTopicMisaligned(topics, inferredTopicProposal)) {
-    out.push({
-      id: buildId(input.date, "set_topic_categories"),
-      kind: "set_topic_categories",
-      current: topics,
-      proposed: inferredTopicProposal,
-      rationale: `Stored topic "${topics[0]}" doesn't match the summary (inferred ${formatTopicLeafWithGroup(inferredTopicProposal[0])}).`,
-    });
-  }
+  const topicProposal = buildTopicCategoryProposal({
+    date: input.date,
+    summary,
+    topics,
+    topicIssues,
+    ranking,
+    agentReason: input.topicAgentReason,
+    topicAgentSource: input.topicAgentSource,
+    topicAgentConfidence: input.topicAgentConfidence,
+  });
+  if (topicProposal) out.push(topicProposal);
+
+  const roundupSource = summaryFromWeeklyRoundup(input);
 
   // 4. Fix summary when it is outside the hard 100-110 character target.
   //    Article-backed days can regenerate from the winner. Known/manual days
   //    without a winner stay in human review with an inline summary edit.
-  if (isEditorialSummaryWeak(summary)) {
+  if (isEditorialSummaryWeak(summary) || input.summaryAgentNeedsRegen || roundupSource) {
     if (isValidPipelineTopArticleId(input.topArticleId)) {
       out.push({
         id: buildId(input.date, "redo_summary"),
         kind: "redo_summary",
         currentSummary: summary,
-        rationale: "Summary is outside the 100-110 character target. The winning article is set, so regen can run.",
+        rationale: roundupSource
+          ? "Weekly roundup article/summary — pick one dated article and regenerate (100–110 chars)."
+          : "Regenerate summary (100–110 chars).",
       });
     } else if (summary.length > 0) {
       out.push({
@@ -314,10 +374,27 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
         currentSummary: summary,
         targetMin: 100,
         targetMax: 110,
-        rationale:
-          "Summary is outside the 100-110 character target, but this looks like a manual/known event without a winning article. Edit the summary inline instead of fetching news.",
+        rationale: roundupSource
+          ? "Weekly roundup summary — rewrite to one dated event (100–110 chars)."
+          : input.knownEvent?.isKnownEvent
+            ? "Edit summary to match the canonical reference (100–110 chars)."
+            : "Edit summary (100–110 chars).",
       });
     }
+  } else if (
+    input.summaryAgentSuggested &&
+    input.summaryAgentSuggested.length >= 100 &&
+    input.summaryAgentSuggested.length <= 110 &&
+    !input.summaryAgentNeedsRegen
+  ) {
+    out.push({
+      id: buildId(input.date, "edit_summary"),
+      kind: "edit_summary",
+      currentSummary: summary,
+      targetMin: 100,
+      targetMax: 110,
+      rationale: `Suggested: "${input.summaryAgentSuggested}"`,
+    });
   }
 
   // 5. Orphan flag
@@ -341,7 +418,9 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
   // 7. Ungrounded tags — summary is the editorial source of truth for what
   //    belongs on the row. Tags absent from the summary (even if they appear
   //    in an older article body) should be dropped.
-  if (summary.length > 0) {
+  //    Skip tag inference when the summary/article is a weekly roundup — tags
+  //    would be noise until a single dated article is picked.
+  if (summary.length > 0 && !roundupSource) {
     const aliasDuplicateFrom = new Set(aliasDuplicateTagPairs(currentV2).map((pair) => pair.from.toLowerCase()));
     const invalidCurrentTags = currentV2.filter(isEditoriallyInvalidCurrentTag);
     const notInSummary = findUngroundedTags(currentV2, [summary]).filter(
@@ -352,13 +431,20 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
       ...invalidCurrentTags,
       ...notInSummary,
       ...tangentialCritics,
+      ...(input.tagAgentDrop ?? []),
     ]));
     const suppressedGrounded = new Set(
       (input.suppressedGroundedTags ?? []).map((tag) => editorialTagKey(tag)).filter(Boolean),
     );
-    const inferredMissingTags = inferredMissingTagsFromSummary(summary, currentV2, input.canonicalTagIndex).filter(
-      (tag) => !suppressedGrounded.has(editorialTagKey(tag)),
-    );
+    const inferredMissingTags = filterEditorialTagAdds(
+      Array.from(
+        new Set([
+          ...inferredMissingTagsFromSummary(summary, currentV2, input.canonicalTagIndex),
+          ...(input.tagAgentConfidence === "high" ? (input.tagAgentAdd ?? []) : []),
+        ]),
+      ).filter((tag) => isTagGroundedInTexts(tag, [summary])),
+      currentV2,
+    ).filter((tag) => !suppressedGrounded.has(editorialTagKey(tag)));
     if (ungrounded.length > 0) {
       const texts = [summary];
       let suggestedFocusTags: string[] | undefined;
@@ -376,7 +462,7 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
         kind: "drop_ungrounded_tags",
         proposedDrop: ungrounded,
         ...(suggestedFocusTags && suggestedFocusTags.length > 0 ? { suggestedFocusTags } : {}),
-        rationale: `Tag(s) "${ungrounded.slice(0, 4).join(", ")}${ungrounded.length > 4 ? "…" : ""}" don't belong on this summary. Approve to drop.`,
+        rationale: formatTagDropRationale(ungrounded),
       });
     }
     if (inferredMissingTags.length > 0) {
@@ -389,7 +475,7 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
               suppressed: (input.suppressedGroundedTags ?? []).filter(Boolean).slice(0, 12),
             }
           : {}),
-        rationale: `Named entities grounded in the summary but missing from tags: ${inferredMissingTags.slice(0, 4).join(", ")}${inferredMissingTags.length > 4 ? "…" : ""}. (Policy themes and process nouns are not tagged.)`,
+        rationale: formatTagAddRationale(inferredMissingTags),
       });
     }
   }
@@ -411,4 +497,84 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
   }
 
   return out;
+}
+
+function sourceSnippetFromArticleText(articleText: string | null | undefined, maxLen = 600): string | null {
+  const text = String(articleText ?? "").trim();
+  if (!text) return null;
+  return text.slice(0, maxLen);
+}
+
+/**
+ * Like buildCorrectionProposals but runs the LLM Topic Agent when the day needs a topic fix.
+ */
+export async function buildCorrectionProposalsAsync(
+  input: DayProposalInputs,
+  opts?: { neighborHints?: import("./topic-agent").TopicAgentInput["neighborHints"] },
+): Promise<CorrectionProposal[]> {
+  const summary = String(input.summary ?? "").trim();
+  const currentV2 = Array.isArray(input.tagsVersion2)
+    ? input.tagsVersion2.filter((t): t is string => typeof t === "string" && t.trim() !== "")
+    : [];
+  const topics = topicCategoryNames(input.topicCategories);
+
+  const { resolveTopicRankingForCorrection } = await import("./topic-agent");
+  const { suggestTagsWithAgent } = await import("./tag-agent");
+  const { evaluateSummaryWithAgent } = await import("./summary-agent");
+  const { resolveKnownEventContext } = await import("./known-event-context");
+
+  const articleSnippet = sourceSnippetFromArticleText(input.articleText);
+  const knownEvent = input.knownEvent ?? (await resolveKnownEventContext(input.date));
+  const roundupSource = summaryFromWeeklyRoundup(input);
+
+  const [resolved, tagAgent, summaryAgent] = await Promise.all([
+    resolveTopicRankingForCorrection({
+      date: input.date,
+      summary,
+      tags: currentV2,
+      currentTopics: topics,
+      sourceSnippet: articleSnippet,
+      neighborHints: opts?.neighborHints,
+    }),
+    suggestTagsWithAgent({
+      date: input.date,
+      summary,
+      tags: currentV2,
+      allowedAddCandidates:
+        roundupSource || !input.canonicalTagIndex
+          ? []
+          : findGroundedTaxonomyTagsMissingFromRow({
+              texts: [summary],
+              currentTags: currentV2,
+              index: input.canonicalTagIndex,
+              limit: 12,
+            }).filter(isEditorialEntityTagCandidate),
+    }),
+    evaluateSummaryWithAgent({
+      date: input.date,
+      summary,
+      articleSnippet,
+      topArticleId: input.topArticleId,
+      knownEvent,
+    }),
+  ]);
+
+  return buildCorrectionProposals({
+    ...input,
+    knownEvent,
+    topicRankingOverride: resolved.ranking,
+    topicAgentReason: resolved.agentReason,
+    topicAgentSource: resolved.source,
+    topicAgentConfidence: resolved.confidence,
+    tagAgentAdd: tagAgent.addTags,
+    tagAgentDrop: tagAgent.dropTags,
+    tagAgentReason: tagAgent.source === "llm" ? tagAgent.reason : undefined,
+    tagAgentSource: tagAgent.source,
+    tagAgentConfidence: tagAgent.confidence,
+    summaryAgentReason: summaryAgent.reason,
+    summaryAgentSource: summaryAgent.source,
+    summaryAgentConfidence: summaryAgent.confidence,
+    summaryAgentNeedsRegen: summaryAgent.needsRegeneration && !summaryAgent.publishable,
+    summaryAgentSuggested: summaryAgent.suggestedSummary,
+  });
 }

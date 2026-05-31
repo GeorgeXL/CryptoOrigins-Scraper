@@ -88,6 +88,8 @@ export const correctionProposalSchema = z.discriminatedUnion("kind", [
     current: z.array(z.string()),
     proposed: z.array(z.string()),
     rationale: z.string(),
+    topicAgentSource: z.enum(["llm", "rules", "skipped"]).optional(),
+    topicAgentConfidence: z.enum(["high", "medium", "low"]).optional(),
   }),
   z.object({
     id: z.string().min(1),

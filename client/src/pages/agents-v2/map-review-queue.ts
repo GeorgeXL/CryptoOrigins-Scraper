@@ -71,6 +71,9 @@ function phaseTitle(phase: AgentsV2PipelinePhase, item: EditorialReviewItem): st
     case "awaiting_correction_approval":
       return "Review suggested fixes";
     case "awaiting_calendar_decision":
+      if (item.calendarReciprocalPair) {
+        return `Calendar pair — ${item.calendarReciprocalPair.sideA.date} vs ${item.calendarReciprocalPair.sideB.date}`;
+      }
       return "Calendar mismatch — choose action";
     case "awaiting_duplicate_decision":
       return "Possible duplicate — choose action";
@@ -98,9 +101,20 @@ function phaseSubtitle(phase: AgentsV2PipelinePhase, item: EditorialReviewItem):
           `${item.proposals.length} proposal(s) ready`
         : "No automatic proposals";
     case "awaiting_calendar_decision":
-      return item.calendarDecision ?
-          `Story may belong on ${item.calendarDecision.expectedDate}`
-        : undefined;
+      if (item.calendarReciprocalPair?.chronology) {
+        return item.calendarReciprocalPair.chronology.rationale.length > 110
+          ? `${item.calendarReciprocalPair.chronology.rationale.slice(0, 107).trim()}…`
+          : item.calendarReciprocalPair.chronology.rationale;
+      }
+      if (item.calendarDecision) {
+        const reason = item.calendarDecision.reason?.trim();
+        const clipped =
+          reason && reason.length > 100 ? `${reason.slice(0, 97).trim()}…` : reason;
+        return clipped
+          ? `${item.calendarDecision.expectedDate} — ${clipped}`
+          : `Story may belong on ${item.calendarDecision.expectedDate}`;
+      }
+      return undefined;
     case "awaiting_duplicate_decision":
       return item.duplicateDecision ?
           `${item.duplicateDecision.neighbors.length} neighbor(s) flagged`
@@ -199,11 +213,17 @@ export function expectedFirstOperatorExperienceV3(row: AgentsV2QueueRow): Expect
 
   if (phase === "awaiting_calendar_decision") {
     return {
-      headline: "Calendar mismatch decision",
-      bullets: [
-        "Optional matrix: summary text triggers canonical date mismatch (detectCanonicalDateMismatch + data rules).",
-        "Choose move, keep as-is, or delete — the writer applies the outcome.",
-      ],
+      headline: item.calendarReciprocalPair ? "Unified calendar pair conflict" : "Calendar mismatch decision",
+      bullets: item.calendarReciprocalPair
+        ? [
+            "Both dates flagged each other — resolve them in one view instead of two separate queue items.",
+            "When the agent detects the same legislative passage, it prefers the earlier vote date.",
+            "Apply recommendation keeps the bill on the earlier date and deletes duplicate coverage on the later date.",
+          ]
+        : [
+            "Optional matrix: summary text triggers canonical date mismatch (detectCanonicalDateMismatch + data rules).",
+            "Choose move, keep as-is, or delete — the writer applies the outcome.",
+          ],
     };
   }
 

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Link } from "wouter";
 
+import { CalendarMismatchReview } from "@/pages/agents-v2/CalendarMismatchReview";
+import { CalendarConflictPairReview } from "@/pages/agents-v2/CalendarConflictPairReview";
 import { AgentsV2ResumeSlicePanel } from "@/pages/agents-v2/AgentsV2ResumeSlicePanel";
 import { AgentsV2ReviewPhasePanel } from "@/pages/agents-v2/AgentsV2ReviewPhasePanels";
 import { formatCorrectionChangeLines, summarizeCorrectionProposals } from "@/lib/correction-proposal-view";
@@ -18,7 +20,9 @@ import {
   fetchReviewQueue,
   rejectReviewItem,
   rememberLastPipelineRunId,
+  verifyEditorialDay,
   type ApproveReviewOpts,
+  type DayVerificationResult,
 } from "@/lib/editorial-pipeline";
 import {
   AlertDialog,
@@ -33,10 +37,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useToast } from "@/hooks/use-toast";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { Check, ChevronDown, Info, Link2, Loader2, RefreshCw, Trash2, X, XCircle } from "lucide-react";
+import { Check, ChevronDown, Copy, Info, Link2, Loader2, RefreshCw, ShieldCheck, Trash2, X, XCircle } from "lucide-react";
 
 type QueueStatus = "pending" | "approved" | "rejected";
 type FilterTab = QueueStatus | "all";
@@ -304,6 +308,8 @@ function recommendedActionForRow(row: QueueRow): string {
       return "Approve the summary only after the text, tags, and topics are correct.";
     case "awaiting_correction_approval":
       return "Apply the selected fixes, or reject if the event needs a different source.";
+    case "awaiting_calendar_decision":
+      return "Compare both summaries, then choose Keep, Move, or Delete & rerun.";
     case "awaiting_duplicate_decision":
       return "Find another event if this repeats an existing storyline.";
     default:
@@ -354,6 +360,44 @@ function ReviewerBriefCard({ row }: { row: QueueRow }) {
   );
 }
 
+function CopyDateButton({ date }: { date: string }) {
+  const copyDate = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(date);
+      toast({ title: "Date copied", description: date });
+    } catch {
+      toast({ title: "Copy failed", variant: "destructive" });
+    }
+  }, [date]);
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        void copyDate();
+      }}
+      className="inline-flex shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+      aria-label={`Copy date ${date}`}
+      title="Copy date"
+    >
+      <Copy className="size-3.5" strokeWidth={2} aria-hidden />
+    </button>
+  );
+}
+
+function ReviewCardDateField({ date }: { date: string }) {
+  return (
+    <div>
+      <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Date</p>
+      <div className="mt-1 flex items-center gap-1.5">
+        <p className="text-sm font-medium">{date}</p>
+        <CopyDateButton date={date} />
+      </div>
+    </div>
+  );
+}
+
 function TailoredLiveReviewCard({
   row,
   busy,
@@ -365,7 +409,6 @@ function TailoredLiveReviewCard({
   onApprove: (id: string, opts?: ApproveReviewOpts) => void;
   onReject: (id: string) => void;
 }) {
-  const [calendarPick, setCalendarPick] = useState<"keep" | "move" | null>(null);
   const [duplicatePick, setDuplicatePick] = useState<"keep" | "replace" | "delete_focal" | null>(null);
   const [articlePickId, setArticlePickId] = useState<string | null>(null);
   const phase = row.pipelinePhase;
@@ -542,53 +585,32 @@ function TailoredLiveReviewCard({
     );
   }
 
-  if (phase === "awaiting_calendar_decision" && item.calendarDecision) {
-    const p = item.calendarDecision;
+  if (phase === "awaiting_calendar_decision" && item.calendarReciprocalPair) {
+    const pair = item.calendarReciprocalPair;
     return (
-      <div className="space-y-3">
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-md border border-red-500/35 bg-red-500/[0.05] p-3">
-            <p className="text-[11px] uppercase tracking-[0.14em] text-red-300">Current date</p>
-            <p className="mt-1 text-sm font-medium">{p.currentDate}</p>
-          </div>
-          <div className="rounded-md border border-border p-3">
-            <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Canonical date</p>
-            <p className="mt-1 text-sm">{p.expectedDate}</p>
-          </div>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-          <Button
-            size="sm"
-            className="w-full sm:w-auto"
-            disabled={busy}
-            onClick={() => {
-              setCalendarPick("keep");
-              onApprove(item.id, { calendarDecision: "keep_as_is" });
-            }}
-          >
-            Keep on this date
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="w-full sm:w-auto"
-            disabled={busy || p.canonicalDateOccupied}
-            onClick={() => {
-              setCalendarPick("move");
-              onApprove(item.id, { calendarDecision: "move_to_canonical" });
-            }}
-          >
-            Move to canonical date
-          </Button>
-        </div>
-        {calendarPick ? (
-          <div className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
-            {calendarPick === "keep"
-              ? "Keeps this date and marks calendar decision resolved for current day."
-              : "Moves handling to canonical date and continues downstream checks there."}
-          </div>
-        ) : null}
-      </div>
+      <CalendarConflictPairReview
+        pair={pair}
+        busy={busy}
+        onAcceptChronology={() => onApprove(item.id, { calendarPairResolution: "accept_chronology" })}
+        onKeepBoth={() => onApprove(item.id, { calendarPairResolution: "keep_both" })}
+        onKeepSide={(queueItemId) => onApprove(queueItemId, { calendarDecision: "keep_as_is" })}
+        onDeleteSide={(queueItemId) => onApprove(queueItemId, { calendarDecision: "delete" })}
+      />
+    );
+  }
+
+  if (phase === "awaiting_calendar_decision" && item.calendarDecision) {
+    return (
+      <CalendarMismatchReview
+        decision={item.calendarDecision}
+        currentSummary={item.daySummary}
+        currentTags={dayTags}
+        currentTopics={dayTopics}
+        busy={busy}
+        onKeep={() => onApprove(item.id, { calendarDecision: "keep_as_is" })}
+        onMove={() => onApprove(item.id, { calendarDecision: "move_to_canonical" })}
+        onDelete={() => onApprove(item.id, { calendarDecision: "delete" })}
+      />
     );
   }
 
@@ -691,11 +713,8 @@ function TailoredLiveReviewCard({
     return (
       <div className="space-y-3">
         <div className="rounded-lg border border-border bg-background p-4">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[120px_minmax(0,1fr)_minmax(0,12rem)]">
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Date</p>
-              <p className="mt-1 text-sm font-medium">{row.date}</p>
-            </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-[120px_minmax(0,1fr)_minmax(0,12rem)]">
+            <ReviewCardDateField date={row.date} />
             <div>
               <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Summary</p>
               <p className="mt-1 text-sm">{displayedSummary}</p>
@@ -734,11 +753,8 @@ function TailoredLiveReviewCard({
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-border bg-background p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[120px_minmax(0,1fr)_minmax(0,12rem)]">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Date</p>
-            <p className="mt-1 text-sm font-medium">{row.date}</p>
-          </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-[120px_minmax(0,1fr)_minmax(0,12rem)]">
+          <ReviewCardDateField date={row.date} />
           <div>
             <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Summary</p>
             <p className="mt-1 text-sm">{item.summaryApproval?.generatedSummary ?? row.title}</p>
@@ -795,10 +811,40 @@ type QueueListProps = {
   rows: QueueRow[];
   busyId: string | null;
   advanceSignal: { id: string; nonce: number } | null;
+  expandedId: string | null;
+  onExpandedIdChange: (id: string | null) => void;
   onApprove: (id: string, opts?: ApproveReviewOpts) => Promise<void>;
   onReject: (id: string) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
 };
+
+function calendarPairKey(row: QueueRow): string | null {
+  const pair = row.item.calendarReciprocalPair;
+  return pair?.pairKey ?? null;
+}
+
+function consolidateCalendarRows(rows: QueueRow[]): QueueRow[] {
+  const seen = new Set<string>();
+  const out: QueueRow[] = [];
+  for (const row of rows) {
+    const key = calendarPairKey(row);
+    if (!key) {
+      out.push(row);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const pair = row.item.calendarReciprocalPair!;
+    const primary =
+      rows.find(
+        (candidate) =>
+          candidate.item.calendarReciprocalPair?.pairKey === key &&
+          candidate.date === pair.chronology.keepDate,
+      ) ?? row;
+    out.push(primary);
+  }
+  return out;
+}
 
 function duplicatePairKey(row: QueueRow): string | null {
   if (row.pipelinePhase !== "awaiting_duplicate_decision") return null;
@@ -826,33 +872,51 @@ function consolidateDuplicateRows(rows: QueueRow[]): QueueRow[] {
   return out;
 }
 
-function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove }: QueueListProps) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+function consolidateQueueRows(rows: QueueRow[]): QueueRow[] {
+  return consolidateDuplicateRows(consolidateCalendarRows(rows));
+}
+
+function QueueList({
+  rows,
+  busyId,
+  advanceSignal,
+  expandedId,
+  onExpandedIdChange,
+  onApprove,
+  onReject,
+  onRemove,
+}: QueueListProps) {
   const previousRowsRef = useRef<QueueRow[]>(rows);
+  const lastAdvanceNonceRef = useRef<number | null>(null);
+  const [verifyBusyId, setVerifyBusyId] = useState<string | null>(null);
+  const [verifyResults, setVerifyResults] = useState<Record<string, DayVerificationResult>>({});
   const reduceMotion = useReducedMotion();
   const panelTransition = reduceMotion
     ? { duration: 0.15 }
     : { duration: 0.3, ease: PANEL_EASE };
 
   useEffect(() => {
-    if (expandedId && !rows.some((r) => r.id === expandedId)) setExpandedId(null);
-  }, [rows, expandedId]);
+    if (expandedId && !rows.some((r) => r.id === expandedId)) onExpandedIdChange(null);
+  }, [rows, expandedId, onExpandedIdChange]);
 
   useEffect(() => {
     if (!advanceSignal) return;
+    if (lastAdvanceNonceRef.current === advanceSignal.nonce) return;
+    lastAdvanceNonceRef.current = advanceSignal.nonce;
+
     const previous = previousRowsRef.current;
     const prevIndex = previous.findIndex((r) => r.id === advanceSignal.id);
     if (rows.length === 0) {
-      setExpandedId(null);
+      onExpandedIdChange(null);
       return;
     }
     if (prevIndex === -1) {
-      setExpandedId(rows[0].id);
+      onExpandedIdChange(rows[0].id);
       return;
     }
     const next = rows[prevIndex] ?? rows[Math.max(0, prevIndex - 1)] ?? rows[0];
-    setExpandedId(next.id);
-  }, [advanceSignal, rows]);
+    onExpandedIdChange(next.id);
+  }, [advanceSignal, rows, onExpandedIdChange]);
 
   useEffect(() => {
     previousRowsRef.current = rows;
@@ -876,7 +940,7 @@ function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove 
                   "flex w-full items-start gap-2 px-3 py-3.5 text-left transition-colors hover:bg-muted/30 sm:gap-3 sm:px-4",
                   open && "bg-muted/20",
                 )}
-                onClick={() => setExpandedId((id) => (id === row.id ? null : row.id))}
+                onClick={() => onExpandedIdChange(expandedId === row.id ? null : row.id)}
               >
                 <motion.span
                   className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/20 text-muted-foreground"
@@ -888,7 +952,11 @@ function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove 
                 </motion.span>
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <p className="font-mono text-xs text-muted-foreground">{row.date}</p>
+                    <p className="font-mono text-xs text-muted-foreground">
+                      {row.item.calendarReciprocalPair
+                        ? `${row.item.calendarReciprocalPair.sideA.date} ↔ ${row.item.calendarReciprocalPair.sideB.date}`
+                        : row.date}
+                    </p>
                     <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal text-muted-foreground">
                       {phaseChipLabel(row.pipelinePhase)}
                     </Badge>
@@ -973,11 +1041,67 @@ function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove 
                               <span className="hidden sm:inline">Remove from queue</span>
                             </Button>
                             {/^\d{4}-\d{2}-\d{2}$/.test(row.date) ? (
-                              <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" asChild>
-                                <Link href={`/day/${row.date}`}>Open day</Link>
-                              </Button>
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="w-full sm:w-auto"
+                                  disabled={busyId === row.id || verifyBusyId === row.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setVerifyBusyId(row.id);
+                                    void verifyEditorialDay(row.date, "quick")
+                                      .then((result) => {
+                                        setVerifyResults((prev) => ({ ...prev, [row.id]: result }));
+                                      })
+                                      .catch(() => {
+                                        toast({
+                                          title: "Verify failed",
+                                          description: "Could not verify this day.",
+                                          variant: "destructive",
+                                        });
+                                      })
+                                      .finally(() => setVerifyBusyId(null));
+                                  }}
+                                >
+                                  {verifyBusyId === row.id ? (
+                                    <Loader2 className="mr-2 size-4 animate-spin" />
+                                  ) : (
+                                    <ShieldCheck className="mr-2 size-4 shrink-0" aria-hidden />
+                                  )}
+                                  Verify
+                                </Button>
+                                <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" asChild>
+                                  <Link href={`/day/${row.date}`}>Open day</Link>
+                                </Button>
+                              </>
                             ) : null}
                           </div>
+                          {verifyResults[row.id] ? (
+                            <div
+                              className={cn(
+                                "mt-3 rounded-lg border px-3 py-2 text-xs leading-relaxed",
+                                verifyResults[row.id].passed
+                                  ? "border-emerald-500/30 bg-emerald-500/[0.06] text-muted-foreground"
+                                  : "border-amber-500/35 bg-amber-500/[0.06] text-muted-foreground",
+                              )}
+                            >
+                              <p className="font-medium text-foreground">
+                                {verifyResults[row.id].passed ? "Quick verify passed" : "Quick verify found issues"}
+                              </p>
+                              <ul className="mt-2 space-y-1">
+                                {verifyResults[row.id].checks
+                                  .filter((c) => c.status !== "pass")
+                                  .slice(0, 4)
+                                  .map((c) => (
+                                    <li key={c.id}>
+                                      {c.label}: {c.message}
+                                    </li>
+                                  ))}
+                              </ul>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -993,17 +1117,17 @@ function QueueList({ rows, busyId, advanceSignal, onApprove, onReject, onRemove 
 }
 
 export default function AgentsV2HomePanel() {
-  const { toast } = useToast();
   const [filter, setFilter] = useState<FilterTab>("pending");
   const [scenarioFilter, setScenarioFilter] = useState<ScenarioFilter>("all");
   const [rows, setRows] = useState<QueueRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [clearing, setClearing] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [advanceSignal, setAdvanceSignal] = useState<{ id: string; nonce: number } | null>(null);
 
-  const loadQueue = useCallback(async () => {
-    setLoading(true);
+  const loadQueue = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       if (filter === "all") {
         const [pending, approved, rejected] = await Promise.all([
@@ -1025,9 +1149,9 @@ export default function AgentsV2HomePanel() {
         variant: "destructive",
       });
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
-  }, [filter, toast]);
+  }, [filter]);
 
   useEffect(() => {
     void loadQueue();
@@ -1036,7 +1160,35 @@ export default function AgentsV2HomePanel() {
   const handleApprove = async (id: string, opts?: ApproveReviewOpts) => {
     setBusyId(id);
     try {
-      await approveReviewItem(id, opts);
+      const source = rows.find((r) => r.id === id);
+      const pair = source?.item.calendarReciprocalPair;
+
+      if (opts?.calendarPairResolution === "accept_chronology" && pair) {
+        const keepRow = rows.find(
+          (r) =>
+            r.status === "pending" &&
+            r.item.calendarReciprocalPair?.pairKey === pair.pairKey &&
+            r.date === pair.chronology.keepDate,
+        );
+        const removeRow = rows.find(
+          (r) =>
+            r.status === "pending" &&
+            r.item.calendarReciprocalPair?.pairKey === pair.pairKey &&
+            r.date === pair.chronology.removeDate,
+        );
+        if (keepRow) await approveReviewItem(keepRow.id, { calendarDecision: "keep_as_is" });
+        if (removeRow) await approveReviewItem(removeRow.id, { calendarDecision: "delete" });
+      } else if (opts?.calendarPairResolution === "keep_both" && pair) {
+        const pairRows = rows.filter(
+          (r) => r.status === "pending" && r.item.calendarReciprocalPair?.pairKey === pair.pairKey,
+        );
+        for (const row of pairRows) {
+          await approveReviewItem(row.id, { calendarDecision: "keep_as_is" });
+        }
+      } else {
+        await approveReviewItem(id, opts);
+      }
+
       if (opts?.duplicateDecision && opts.duplicateDecision !== "delete_focal") {
         const source = rows.find((r) => r.id === id);
         const pairKey = source ? duplicatePairKey(source) : null;
@@ -1050,7 +1202,7 @@ export default function AgentsV2HomePanel() {
         }
       }
       toast({ title: "Approved", description: "Changes applied for this review item." });
-      await loadQueue();
+      await loadQueue({ silent: true });
       setAdvanceSignal({ id, nonce: Date.now() });
     } catch (e) {
       toast({
@@ -1068,7 +1220,7 @@ export default function AgentsV2HomePanel() {
     try {
       await rejectReviewItem(id);
       toast({ title: "Rejected" });
-      await loadQueue();
+      await loadQueue({ silent: true });
       setAdvanceSignal({ id, nonce: Date.now() });
     } catch (e) {
       toast({
@@ -1089,7 +1241,7 @@ export default function AgentsV2HomePanel() {
         title: "Removed",
         description: "This review queue row was deleted.",
       });
-      await loadQueue();
+      await loadQueue({ silent: true });
     } catch (e) {
       toast({
         title: "Remove failed",
@@ -1122,16 +1274,20 @@ export default function AgentsV2HomePanel() {
   };
 
   const statusFiltered = filter === "all" ? rows : rows.filter((r) => r.status === filter);
-  const filtered =
-    scenarioFilter === "all"
-      ? statusFiltered
-      : statusFiltered.filter((r) => r.pipelinePhase === scenarioFilter);
+  const scenarioFiltered =
+    filter === "pending" && scenarioFilter !== "all"
+      ? statusFiltered.filter((r) => r.pipelinePhase === scenarioFilter)
+      : statusFiltered;
   const scenarioFilteredRows =
-    scenarioFilter === "awaiting_duplicate_decision" ? consolidateDuplicateRows(filtered) : filtered;
+    filter === "pending" && scenarioFilter === "awaiting_duplicate_decision"
+      ? consolidateQueueRows(scenarioFiltered)
+      : scenarioFiltered;
   const listProps = {
     rows: scenarioFilteredRows,
     busyId,
     advanceSignal,
+    expandedId,
+    onExpandedIdChange: setExpandedId,
     onApprove: handleApprove,
     onReject: handleReject,
     onRemove: handleRemove,
@@ -1187,7 +1343,13 @@ export default function AgentsV2HomePanel() {
       <Tabs
         value={filter}
         onValueChange={(v) => {
-          if (v === "pending" || v === "approved" || v === "rejected" || v === "all") setFilter(v);
+          if (v === "pending" || v === "approved" || v === "rejected" || v === "all") {
+            setFilter(v);
+            setExpandedId(null);
+            if (v !== "pending" && scenarioFilter !== "all") {
+              setScenarioFilter("all");
+            }
+          }
         }}
         className="w-full"
       >
@@ -1203,8 +1365,9 @@ export default function AgentsV2HomePanel() {
             Scenario
             <select
               value={scenarioFilter}
+              disabled={filter !== "pending"}
               onChange={(e) => setScenarioFilter(e.target.value as ScenarioFilter)}
-              className="h-9 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none sm:h-8 sm:w-auto sm:min-w-[11rem]"
+              className="h-9 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-auto sm:min-w-[11rem]"
             >
               <option value="all">All scenarios</option>
               <option value="awaiting_article_pick">Article pick</option>
@@ -1217,17 +1380,15 @@ export default function AgentsV2HomePanel() {
           </label>
         </div>
 
-        {(["pending", "approved", "rejected", "all"] as const).map((tab) => (
-          <TabsContent key={tab} value={tab} className="mt-4 outline-none focus-visible:outline-none focus-visible:ring-0">
-            {loading ? (
-              <p className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" /> Loading…
-              </p>
-            ) : (
-              <QueueList {...listProps} />
-            )}
-          </TabsContent>
-        ))}
+        <div className="mt-4">
+          {loading ? (
+            <p className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Loading…
+            </p>
+          ) : (
+            <QueueList {...listProps} />
+          )}
+        </div>
       </Tabs>
     </div>
   );

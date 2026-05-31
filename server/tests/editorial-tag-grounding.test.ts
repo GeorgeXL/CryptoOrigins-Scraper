@@ -10,6 +10,33 @@ import {
   groundAndCanonicaliseTags,
   isTagGroundedInTexts,
 } from "../services/editorial-pipeline/tag-grounding";
+import {
+  isDateEmbeddedEditorialTag,
+  isHeadlineFragmentEditorialTag,
+} from "../services/editorial-pipeline/editorial-tag-rules";
+
+test("findGroundedTaxonomyTagsMissingFromRow: rejects date-prefixed legacy headline tags", () => {
+  const summary = "Bitcoin developers discuss wallet fixes and Android app updates ahead of a network upgrade";
+  const idx = buildCanonicalTagIndex([
+    "Bitcoin",
+    "2015-12-31 wallet fixes",
+    "android",
+    "inflation",
+    "2015-08-10 OCC and thomas curry",
+    "SegWit",
+  ]);
+  const hints = findGroundedTaxonomyTagsMissingFromRow({
+    texts: [summary],
+    currentTags: ["Bitcoin"],
+    index: idx,
+    limit: 12,
+  });
+  assert.ok(!hints.some((tag) => isDateEmbeddedEditorialTag(tag)));
+  assert.ok(!hints.some((tag) => isHeadlineFragmentEditorialTag(tag)));
+  assert.ok(!hints.includes("android"));
+  assert.ok(!hints.includes("inflation"));
+  assert.ok(!hints.includes("2015-12-31 wallet fixes"));
+});
 
 test("isTagGroundedInTexts: exact whole-word match grounds the tag", () => {
   const text = "Russia joins the WTO after negotiations, lowering tariffs and opening new investment opportunities.";
@@ -20,6 +47,40 @@ test("isTagGroundedInTexts: exact whole-word match grounds the tag", () => {
 test("isTagGroundedInTexts: unrelated tag is NOT grounded (Belgium on Russia/WTO)", () => {
   const text = "Russia joins the WTO after negotiations, lowering tariffs and opening new investment opportunities.";
   assert.equal(isTagGroundedInTexts("Belgium", [text]), false);
+});
+
+test("isTagGroundedInTexts: CITES acronym does not ground on verb cites (2018-03-03 class)", () => {
+  const summary =
+    "Crypto community cites batching, SegWit and spam as Bitcoin transactions fall, offsetting volume concerns";
+  assert.equal(isTagGroundedInTexts("CITES", [summary]), false);
+  assert.equal(isTagGroundedInTexts("SegWit", [summary]), true);
+});
+
+test("isTagGroundedInTexts: CITES grounds when uppercase acronym appears in text", () => {
+  const text = "Trade officials cite CITES rules while discussing wildlife enforcement.";
+  assert.equal(isTagGroundedInTexts("CITES", [text]), true);
+});
+
+test("isTagGroundedInTexts: singular Bitcoin ATM grounds on plural ATMs in summary", () => {
+  const summary =
+    "Bitcoin ATMs spread across Europe as operators expand cash-to-crypto access for retail users";
+  assert.equal(isTagGroundedInTexts("Bitcoin ATM", [summary]), true);
+});
+
+test("findGroundedTaxonomyTagsMissingFromRow: 2018-03-03 does not propose CITES on verb cites", () => {
+  const summary =
+    "Crypto community cites batching, SegWit and spam as Bitcoin transactions fall, offsetting volume concerns";
+  const idx = buildCanonicalTagIndex(["Bitcoin", "CITES", "SegWit", "Cities", "community"]);
+  const hints = findGroundedTaxonomyTagsMissingFromRow({
+    texts: [summary],
+    currentTags: ["Bitcoin"],
+    index: idx,
+    limit: 12,
+  });
+  assert.ok(hints.includes("SegWit"));
+  assert.ok(!hints.includes("CITES"));
+  assert.ok(!hints.includes("Cities"));
+  assert.ok(!hints.includes("community"));
 });
 
 test("isTagGroundedInTexts: ungrounded entity rejected (Mitch McConnell on TARP)", () => {
@@ -137,4 +198,18 @@ test("findRedundantTagPairs: no false positives on truly distinct tags", () => {
 test("findRedundantTagPairs: does not collapse suffix fragments from organization names", () => {
   const pairs = findRedundantTagPairs(["Royal Bank of Scotland", "Scotland", "Bank of America", "America"]);
   assert.deepEqual(pairs, []);
+});
+
+test("findGroundedTaxonomyTagsMissingFromRow: proposes singular Bitcoin ATM when taxonomy has Bitcoin ATMs", () => {
+  const summary =
+    "Bitcoin ATMs spread across Europe as operators expand cash-to-crypto access for retail users";
+  const idx = buildCanonicalTagIndex(["Bitcoin", "Bitcoin ATMs", "Europe"]);
+  const hints = findGroundedTaxonomyTagsMissingFromRow({
+    texts: [summary],
+    currentTags: ["Bitcoin"],
+    index: idx,
+    limit: 12,
+  });
+  assert.ok(hints.includes("Bitcoin ATM"));
+  assert.ok(!hints.includes("Bitcoin ATMs"));
 });

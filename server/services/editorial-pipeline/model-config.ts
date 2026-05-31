@@ -16,6 +16,7 @@ export const agentModelOverrides: Partial<Record<PipelineAgentName, string>> = {
   SourceFinderAgent: process.env.SOURCE_FINDER_AGENT_MODEL?.trim(),
   RelevanceCheckerAgent: process.env.RELEVANCE_CHECKER_AGENT_MODEL?.trim(),
   VerificationAgent: process.env.VERIFICATION_AGENT_MODEL?.trim(),
+  TopicValidatorAgent: process.env.TOPIC_VALIDATOR_AGENT_MODEL?.trim() ?? process.env.TOPIC_MANAGER_AGENT_MODEL?.trim(),
   TopicManagerAgent: process.env.TOPIC_MANAGER_AGENT_MODEL?.trim(),
   TagManagerAgent: process.env.TAG_MANAGER_AGENT_MODEL?.trim(),
   TopicApplierAgent: process.env.TOPIC_APPLIER_AGENT_MODEL?.trim(),

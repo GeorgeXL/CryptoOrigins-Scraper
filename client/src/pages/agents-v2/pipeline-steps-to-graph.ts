@@ -16,6 +16,7 @@ function agentFocus(agentName: string): NodeId {
     case "RelevanceCheckerAgent":
     case "VerificationAgent":
       return "news";
+    case "TopicValidatorAgent":
     case "TopicManagerAgent":
     case "TagManagerAgent":
     case "TopicApplierAgent":
@@ -38,7 +39,7 @@ function agentEdge(agentName: string): EdgeId {
 
 function statusTone(status: string): LineTone {
   if (status === "rejected" || status === "error") return "fail";
-  if (status === "completed" || status === "skipped") return "ok";
+  if (status === "completed" || status === "skipped" || status === "approved") return "ok";
   return "dispatch";
 }
 
@@ -113,7 +114,7 @@ export function pipelineStepsToGraphSteps(
   }
 
   const last = steps[steps.length - 1];
-  if (last && (last.status === "completed" || last.status === "skipped")) {
+  if (last && (last.status === "completed" || last.status === "skipped" || last.status === "approved")) {
     out.push({
       edge: null,
       caption: "Run slice complete",

@@ -19,6 +19,7 @@ export const pipelineAgentSchema = z.enum([
   "SourceFinderAgent",
   "RelevanceCheckerAgent",
   "VerificationAgent",
+  "TopicValidatorAgent",
   "TopicManagerAgent",
   "TagManagerAgent",
   "TopicApplierAgent",

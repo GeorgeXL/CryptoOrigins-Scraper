@@ -87,6 +87,19 @@ export function evaluateCandidateStorySanity(input: {
   if (/\b(and more news|more news|top stories|hodlers? digest|weekly roundup|daily roundup|market wrap)\b/.test(corpus)) {
     notes.push("Multi-story roundup headline is weaker than a single dated event");
   }
+  if (/[;|]/.test(input.title)) {
+    const headlineParts = input.title.split(/[;|]/).map((part) => part.trim()).filter((part) => part.length > 10);
+    if (headlineParts.length >= 2) {
+      notes.push("Semicolon/pipe-separated headline lists multiple stories");
+    }
+  }
+  const semiSummaryParts = `${input.summary}\n${input.text.slice(0, 900)}`
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 16);
+  if (semiSummaryParts.length >= 2) {
+    notes.push("Semicolon-separated body/summary lists multiple stories");
+  }
   if (/\b\d+\s+years?\s+ago\b/.test(title) && /\b(tweet|shares?|coinbase|tradingview|market|price|analysts?)\b/.test(title)) {
     notes.push("Anniversary headline is mixed with a second story/noise");
   }

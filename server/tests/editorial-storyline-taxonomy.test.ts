@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { inferStorylineLabels, inferTopicProposal } from "../services/editorial-pipeline/storyline-taxonomy";
+import { inferStorylineLabels, inferTopicProposal, rankTopicCandidatesFromSummary, storedTopicConflictsWithSummary } from "../services/editorial-pipeline/storyline-taxonomy";
 
 test("maps halving stories to the granular Bitcoin halving storyline", () => {
   const labels = inferStorylineLabels({
@@ -142,6 +142,15 @@ test("maps Bitcoin-Qt client releases to protocol development under Bitcoin", ()
   assert.deepEqual(labels, ["Protocol development"]);
 });
 
+test("maps Satoshi doublespend explanation to protocol development", () => {
+  const labels = inferTopicProposal({
+    summary:
+      "Satoshi explains Bitcoin relies on cryptographic proof, addressing the doublespend issue effectively",
+    tags: ["Bitcoin", "Satoshi"],
+  });
+  assert.deepEqual(labels, ["Protocol development"]);
+});
+
 test("maps exchange expansion stories to trading activity from summary only", () => {
   const summary =
     "Ruxum announces expansion into Europe allowing Bitcoin trading in Euros Pounds and Swiss Francs starting soon";
@@ -160,4 +169,21 @@ test("maps exchange expansion stories to trading activity from summary only", ()
     inferStorylineLabels({ summary, articleText: noisyArticle, tags: ["Bitcoin", "Ruxum"] }),
     ["Trading activity"],
   );
+});
+
+test("G20 bailout summary ranks macro topics with low confidence", () => {
+  const summary =
+    "G20 leaders agree on a $1.1 trillion deal to combat the global economic crisis, boosting market optimism";
+  const ranking = rankTopicCandidatesFromSummary({ summary, tags: ["G20"] });
+  assert.equal(ranking.confidence, "low");
+  assert.equal(ranking.primary, "Bailouts and stimulus");
+  assert.ok(ranking.candidates.some((c) => c.leaf === "Global growth and recession"));
+  assert.equal(inferTopicProposal({ summary, tags: ["G20"] }).length, 0);
+});
+
+test("flags bitcoin-group topics when summary has no bitcoin signals", () => {
+  const summary =
+    "G20 leaders agree on a $1.1 trillion deal to combat the global economic crisis, boosting market optimism";
+  assert.equal(storedTopicConflictsWithSummary(["Early Bitcoin history"], summary), true);
+  assert.equal(storedTopicConflictsWithSummary(["Global growth and recession"], summary), false);
 });

@@ -5,17 +5,27 @@ export type CorrectionChangeSummary = {
   tagsToAdd: string[];
   tagsToRemove: string[];
   topicsToRemove: string[];
+  /** Single high-confidence replacement (formatted for display). */
   topicToAdd: string | null;
+  /** Ranked replacement leaves when confidence is low (2–3 options). */
+  topicOptions: string[];
   topicProposalId: string | null;
   topicProposalDefault: string | null;
+  /** Short topic pick hint (e.g. "Pick: …" / "Pick one: …"). */
+  topicAgentNote: string | null;
+  topicAgentSource: "llm" | "rules" | "skipped" | null;
   summaryEdit: {
     id: string;
     currentSummary: string;
     targetMin: number;
     targetMax: number;
   } | null;
+  /** redo_summary proposal id when the pipeline wants a fresh line from the same article. */
+  redoSummaryProposalId: string | null;
   misc: Array<{ id: string; label: string }>;
 };
+
+export type CorrectionSummaryAction = "patch" | "regenerate" | "replace";
 
 function tagKey(tag: string): string {
   return tag.trim().toLowerCase();
@@ -32,8 +42,12 @@ export function summarizeCorrectionProposals(proposals: CorrectionProposal[]): C
   const removeMap = new Map<string, string>();
   let topicsToRemove: string[] = [];
   let topicToAdd: string | null = null;
+  let topicOptions: string[] = [];
   let topicProposalId: string | null = null;
   let topicProposalDefault: string | null = null;
+  let topicAgentNote: string | null = null;
+  let topicAgentSource: CorrectionChangeSummary["topicAgentSource"] = null;
+  let redoSummaryProposalId: string | null = null;
   let summaryEdit: CorrectionChangeSummary["summaryEdit"] = null;
   const misc: CorrectionChangeSummary["misc"] = [];
 
@@ -68,8 +82,26 @@ export function summarizeCorrectionProposals(proposals: CorrectionProposal[]): C
       case "set_topic_categories":
         topicsToRemove = [...p.current];
         topicProposalId = p.id;
-        topicProposalDefault = p.proposed[0] ?? null;
-        topicToAdd = p.proposed[0] ? formatTopicLeafWithGroup(p.proposed[0]) : null;
+        topicAgentNote =
+          p.proposed.length === 1
+            ? `Pick: ${formatTopicLeafWithGroup(p.proposed[0])}`
+            : p.proposed.length > 1
+              ? `Pick one: ${p.proposed.map(formatTopicLeafWithGroup).join(" · ")}`
+              : null;
+        topicAgentSource = p.topicAgentSource ?? null;
+        if (p.proposed.length === 1) {
+          topicProposalDefault = p.proposed[0];
+          topicToAdd = formatTopicLeafWithGroup(p.proposed[0]);
+          topicOptions = [];
+        } else if (p.proposed.length > 1) {
+          topicOptions = [...p.proposed];
+          topicProposalDefault = p.proposed[0];
+          topicToAdd = null;
+        } else {
+          topicProposalDefault = null;
+          topicToAdd = null;
+          topicOptions = [];
+        }
         break;
       case "edit_summary":
         summaryEdit = {
@@ -80,7 +112,8 @@ export function summarizeCorrectionProposals(proposals: CorrectionProposal[]): C
         };
         break;
       case "redo_summary":
-        misc.push({ id: p.id, label: "Regenerate summary from article" });
+        redoSummaryProposalId = p.id;
+        misc.push({ id: p.id, label: "Regenerate summary (same article)" });
         break;
       case "clear_orphan_flag":
         misc.push({ id: p.id, label: "Clear orphan marker" });
@@ -98,8 +131,12 @@ export function summarizeCorrectionProposals(proposals: CorrectionProposal[]): C
     tagsToRemove: [...removeMap.values()].sort((a, b) => a.localeCompare(b)),
     topicsToRemove,
     topicToAdd,
+    topicOptions,
     topicProposalId,
     topicProposalDefault,
+    topicAgentNote,
+    topicAgentSource,
+    redoSummaryProposalId,
     summaryEdit,
     misc,
   };
@@ -115,6 +152,7 @@ export function buildCorrectionApprovePayload(opts: {
   selectedMisc: Set<string>;
   includeSummaryEdit: boolean;
   editedSummary?: string;
+  summaryAction?: CorrectionSummaryAction;
 }): ApproveReviewOpts {
   const addKeys = new Set([...opts.selectedAdds].map(tagKey));
   const removeKeys = new Set([...opts.selectedRemoves].map(tagKey));
@@ -163,10 +201,20 @@ export function buildCorrectionApprovePayload(opts: {
       case "edit_summary":
         if (opts.includeSummaryEdit) acceptedProposalIds.push(p.id);
         break;
+      case "redo_summary":
+        break;
       default:
         if (opts.selectedMisc.has(p.id)) acceptedProposalIds.push(p.id);
         break;
     }
+  }
+
+  if (
+    opts.summaryAction === "regenerate" &&
+    opts.summary.redoSummaryProposalId &&
+    !acceptedProposalIds.includes(opts.summary.redoSummaryProposalId)
+  ) {
+    acceptedProposalIds.push(opts.summary.redoSummaryProposalId);
   }
 
   return {
@@ -181,12 +229,20 @@ export function formatCorrectionChangeLines(summary: CorrectionChangeSummary): s
   const lines: string[] = [];
   if (summary.tagsToAdd.length) lines.push(`Add: ${summary.tagsToAdd.join(", ")}`);
   if (summary.tagsToRemove.length) lines.push(`Remove: ${summary.tagsToRemove.join(", ")}`);
-  if (summary.topicsToRemove.length && summary.topicToAdd) {
+  if (summary.topicsToRemove.length && summary.topicOptions.length > 1) {
+    lines.push(
+      `Topic: ${summary.topicsToRemove.join(", ")} → pick one of ${summary.topicOptions.map(formatTopicLeafWithGroup).join(", ")}`,
+    );
+  } else if (summary.topicsToRemove.length && summary.topicToAdd) {
     lines.push(`Topic: ${summary.topicsToRemove.join(", ")} → ${summary.topicToAdd}`);
   } else if (summary.topicToAdd) {
     lines.push(`Add topic: ${summary.topicToAdd}`);
   } else if (summary.topicsToRemove.length) {
-    lines.push(`Remove topic: ${summary.topicsToRemove.join(", ")}`);
+    lines.push(
+      summary.topicProposalId
+        ? `Topic: ${summary.topicsToRemove.join(", ")} → choose replacement`
+        : `Remove topic: ${summary.topicsToRemove.join(", ")}`,
+    );
   }
   if (summary.summaryEdit) lines.push("Edit summary");
   for (const item of summary.misc) lines.push(item.label);

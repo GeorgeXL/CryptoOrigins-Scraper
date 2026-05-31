@@ -1,6 +1,6 @@
 import { and, asc, count, eq, gte, inArray, lte } from "drizzle-orm";
 import { db } from "../../db";
-import { historicalNewsAnalyses, manualNewsEntries, pagesAndTags } from "@shared/schema";
+import { historicalNewsAnalyses, manualNewsEntries, pagesAndTags, canonicalMilestones } from "@shared/schema";
 import type { TriageItem } from "./contracts";
 import { triageItemSchema } from "./contracts";
 import { evaluateSummaryQuality, isValidPipelineTopArticleId } from "./editorial-quality";
@@ -92,6 +92,7 @@ export function triageExistingDay(input: {
   tags?: unknown;
   tagLinkCount?: number | null;
   manualEntryCount?: number | null;
+  milestoneLabel?: string | null;
 }): TriageItem {
   const reasons: string[] = [];
   const totalArticlesFetched = Number(input.totalArticlesFetched ?? 0);
@@ -100,6 +101,7 @@ export function triageExistingDay(input: {
   const hasManualEventSignal =
     Boolean(input.isManualOverride) ||
     Number(input.manualEntryCount ?? 0) > 0 ||
+    Boolean(input.milestoneLabel?.trim()) ||
     String(input.topArticleId ?? "").trim().startsWith("manual-") ||
     String(input.topArticleId ?? "").trim().startsWith("known-");
   const hasValidArticleWinner = totalArticlesFetched > 0 && isValidPipelineTopArticleId(input.topArticleId);
@@ -175,7 +177,7 @@ export function triageExistingDay(input: {
         ]
       : [
           "VerificationAgent",
-          "TopicManagerAgent",
+          "TopicValidatorAgent",
           "TagManagerAgent",
           "SummaryAgent",
           "DuplicateCheckerAgent",
@@ -225,6 +227,11 @@ export async function retriageSingleExistingDate(date: string): Promise<TriageIt
     .select({ n: count() })
     .from(manualNewsEntries)
     .where(eq(manualNewsEntries.date, date));
+  const [milestoneRow] = await db
+    .select({ label: canonicalMilestones.label })
+    .from(canonicalMilestones)
+    .where(eq(canonicalMilestones.expectedDate, date))
+    .limit(1);
 
   return triageExistingDay({
     date,
@@ -241,6 +248,7 @@ export async function retriageSingleExistingDate(date: string): Promise<TriageIt
     tags: existing.tags,
     tagLinkCount: Number(cntRow?.n ?? 0),
     manualEntryCount: Number(manualRow?.n ?? 0),
+    milestoneLabel: milestoneRow?.label ?? null,
   });
 }
 
@@ -284,6 +292,7 @@ export async function triageRange(opts: {
     }
   }
   const manualCountByDate = new Map<string, number>();
+  const milestoneLabelByDate = new Map<string, string>();
   if (rows.length) {
     const dates = rows.map((r) => r.date);
     const manualAgg = await db
@@ -296,6 +305,21 @@ export async function triageRange(opts: {
       .groupBy(manualNewsEntries.date);
     for (const row of manualAgg) {
       manualCountByDate.set(row.date, Number(row.n));
+    }
+    const milestones = await db
+      .select({
+        expectedDate: canonicalMilestones.expectedDate,
+        label: canonicalMilestones.label,
+      })
+      .from(canonicalMilestones)
+      .where(
+        and(
+          gte(canonicalMilestones.expectedDate, opts.dateFrom),
+          lte(canonicalMilestones.expectedDate, opts.dateTo),
+        ),
+      );
+    for (const ms of milestones) {
+      milestoneLabelByDate.set(ms.expectedDate, ms.label);
     }
   }
 
@@ -348,6 +372,7 @@ export async function triageRange(opts: {
         tags: existing.tags,
         tagLinkCount: linkCountByAnalysis.get(existing.id) ?? 0,
         manualEntryCount: manualCountByDate.get(existing.date) ?? 0,
+        milestoneLabel: milestoneLabelByDate.get(existing.date) ?? null,
       })
     );
   }

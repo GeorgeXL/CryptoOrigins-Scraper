@@ -518,6 +518,7 @@ function summarizeHandoffPayload(payload: unknown): { line: string; route?: stri
 function statusBadgeClass(status: string): string {
   switch (status) {
     case "completed":
+    case "approved":
       return "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
     case "running":
       return "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300";
@@ -1782,7 +1783,7 @@ type PipelineChecklistViewProps = {
 };
 
 function ChecklistStatusIcon({ status }: { status: string }) {
-  if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden />;
+  if (status === "completed" || status === "approved") return <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden />;
   if (status === "rejected" || status === "error") return <XCircle className="h-4 w-4 text-destructive" aria-hidden />;
   if (status === "skipped") return <MinusCircle className="h-4 w-4 text-muted-foreground" aria-hidden />;
   return <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />;

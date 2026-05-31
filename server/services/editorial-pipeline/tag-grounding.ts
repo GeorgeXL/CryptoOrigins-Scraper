@@ -19,7 +19,7 @@
 import { db } from "../../db";
 import { tags } from "@shared/schema";
 import { normalizeTagValue } from "./tools";
-import { isEditorialEntityTagCandidate } from "./editorial-tag-rules";
+import { filterEditorialTagAdds, isEditorialEntityTagCandidate, preferredEditorialTagDisplay } from "./editorial-tag-rules";
 
 const TAG_GROUNDING_ALIASES: Record<string, string> = {
   eth: "ethereum",
@@ -28,6 +28,7 @@ const TAG_GROUNDING_ALIASES: Record<string, string> = {
   "c-lightning": "lightning",
   "coin terra": "cointerra",
   cointerra: "cointerra",
+  "bitcoin atms": "bitcoin atm",
   "united states": "us",
   usa: "us",
   "u.s": "us",
@@ -141,6 +142,11 @@ export function canonicaliseAgainstIndex(
  * "Grounded" = the tag's normalised form appears as a contiguous-word substring
  * of at least one text, or a known demonym/adjective form matches (Italy ↔ Italian).
  */
+/** Singular entity tags that may appear plural in summary prose. */
+const ENTITY_TAG_GROUNDING_VARIANTS: Record<string, string[]> = {
+  "bitcoin atm": ["bitcoin atm", "bitcoin atms"],
+};
+
 const TAG_DEMONYM_GROUNDING: Record<string, string[]> = {
   italy: ["italian", "italy"],
   uk: ["british", "uk", "u k", "united kingdom"],
@@ -155,7 +161,29 @@ const TAG_DEMONYM_GROUNDING: Record<string, string[]> = {
   nigeria: ["nigerian", "nigeria"],
 };
 
+/** Normalized labels where a taxonomy acronym matches a common English word (CITES vs cites). */
+const ACRONYM_HOMOGRAPH_NORMALIZED = new Set(["cites"]);
+
+function escapeRegExp(raw: string): string {
+  return raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function requiresStrictAcronymGrounding(tagName: string): boolean {
+  const trimmed = tagName.trim();
+  if (!/^[A-Z0-9]{2,6}$/.test(trimmed)) return false;
+  return ACRONYM_HOMOGRAPH_NORMALIZED.has(normalizeForMatch(trimmed));
+}
+
+function isStrictAcronymGroundedInTexts(tagName: string, texts: string[]): boolean {
+  const trimmed = tagName.trim();
+  const re = new RegExp(`\\b${escapeRegExp(trimmed)}\\b`);
+  return texts.some((raw) => raw && re.test(raw));
+}
+
 export function isTagGroundedInTexts(tagName: string, texts: string[]): boolean {
+  if (requiresStrictAcronymGrounding(tagName)) {
+    return isStrictAcronymGroundedInTexts(tagName, texts);
+  }
   const tagTokens = tokensOf(tagName);
   if (tagTokens.length === 0) return false;
   const joinedNormalizedTag = tagTokens.join(" ");
@@ -168,6 +196,10 @@ export function isTagGroundedInTexts(tagName: string, texts: string[]): boolean 
     if (haystackPadded.includes(needle)) return true;
     const demonyms = TAG_DEMONYM_GROUNDING[joinedNormalizedTag.replace(/\./g, "")];
     if (demonyms?.some((form) => haystackPadded.includes(` ${form} `) || haystack.includes(form))) {
+      return true;
+    }
+    const entityVariants = ENTITY_TAG_GROUNDING_VARIANTS[joinedNormalizedTag.replace(/\./g, "")];
+    if (entityVariants?.some((form) => haystackPadded.includes(` ${form} `) || haystack.includes(form))) {
       return true;
     }
   }
@@ -245,7 +277,7 @@ export function groundAndCanonicaliseTags(opts: {
       continue;
     }
     seenCanonicals.add(key);
-    kept.push(finalName);
+    kept.push(preferredEditorialTagDisplay(finalName));
   }
 
   return { kept, dropped, merged };
@@ -339,10 +371,10 @@ export function findGroundedTaxonomyTagsMissingFromRow(opts: {
     const norm = normalizeForMatch(trimmed);
     if (!norm || seenNorm.has(norm)) continue;
     seenNorm.add(norm);
-    out.push(trimmed);
+    out.push(preferredEditorialTagDisplay(trimmed));
   }
 
-  return out;
+  return filterEditorialTagAdds(out, currentTags);
 }
 
 /**

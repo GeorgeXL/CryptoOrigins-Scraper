@@ -3,6 +3,7 @@ import type { PipelineAgentName } from "./contracts";
 /** Agents that are valid “slice start” points when re-running a suffix of the triage chain. */
 const RESUME_ANCHORS: ReadonlySet<PipelineAgentName> = new Set([
   "VerificationAgent",
+  "TopicValidatorAgent",
   "TopicManagerAgent",
   "TagManagerAgent",
   "SummaryAgent",

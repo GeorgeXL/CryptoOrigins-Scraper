@@ -146,7 +146,7 @@ test("triageExistingDay routes old broad topics to correction even when tags exi
 
   assert.equal(item.route, "existing_needs_correction");
   assert.ok(item.reasons.some((r) => r.includes("Topic hierarchy issue")));
-  assert.ok(item.requiredAgents.includes("TopicManagerAgent"));
+  assert.ok(item.requiredAgents.includes("TopicValidatorAgent"));
 });
 
 test("triageExistingDay routes known manual event with invalid summary to correction, not article pick", () => {
@@ -187,7 +187,7 @@ test("triageExistingDay routes to existing_needs_correction when summary ok but 
 
   assert.equal(item.route, "existing_needs_correction");
   assert.ok(item.reasons.some((r) => r.includes("tags or topic categories")));
-  assert.ok(item.requiredAgents.includes("TopicManagerAgent"));
+  assert.ok(item.requiredAgents.includes("TopicValidatorAgent"));
   assert.ok(item.requiredAgents.includes("TagManagerAgent"));
   const sumIdx = item.requiredAgents.indexOf("SummaryAgent");
   const dupIdx = item.requiredAgents.indexOf("DuplicateCheckerAgent");

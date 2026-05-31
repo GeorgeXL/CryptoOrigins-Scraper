@@ -1,9 +1,6 @@
-import OpenAI from "openai";
-import { z } from "zod";
 import { buildStepOutput, type PipelineAgentName, type TriageItem } from "./contracts";
-import { getModelForAgent } from "./model-config";
+import { evaluateDateConsistencyForDay } from "./date-consistency-llm";
 import {
-  detectCanonicalDateMismatch,
   evaluateTagConsistency,
   getEditorialDuplicateNeighborContext,
   getExistingDay,
@@ -11,12 +8,16 @@ import {
   getDayTaxonomy,
   getTagCoverageForDate,
   topicLabelsFromRow,
+  normalizedTagsFromRow,
   runExistingSearchAndSummaryForDate,
   type TaxonomyDuplicateNeighbor,
 } from "./tools";
 import { detectMilestoneGapsInWindow } from "./milestones";
 import { evaluateSummaryQuality, isEditorialSummaryWeak, isValidPipelineTopArticleId } from "./editorial-quality";
+import { evaluateRelevanceWithAgent, relevanceOperatorNote, relevanceRequiresArticlePick } from "./relevance-agent";
+import { evaluateSummaryWithAgent } from "./summary-agent";
 import { invalidTopicReasons } from "./topic-validation";
+import { suggestTopicsWithAgent } from "./topic-agent";
 
 export type ExecutorContext = {
   runId: string;
@@ -31,29 +32,6 @@ export type ExecutorResult = {
 };
 
 type AgentExecutor = (ctx: ExecutorContext) => Promise<ExecutorResult>;
-
-const dateConsistencyVerdictSchema = z.object({
-  plausible: z.boolean(),
-  confidence: z.number().min(0).max(1),
-  issues: z.array(z.string()).max(12).default([]),
-  /** If set to another YYYY-MM-DD, focal copy likely belongs on that neighbor day (taxonomy overlap). */
-  duplicateOfDate: z
-    .union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.null()])
-    .optional(),
-});
-
-function parseDateConsistencyVerdict(raw: string): z.infer<typeof dateConsistencyVerdictSchema> | null {
-  let text = raw.trim();
-  const fence = text.match(/^```(?:json)?\s*([\s\S]*?)```$/im);
-  if (fence) text = fence[1].trim();
-  try {
-    const parsed: unknown = JSON.parse(text);
-    const r = dateConsistencyVerdictSchema.safeParse(parsed);
-    return r.success ? r.data : null;
-  } catch {
-    return null;
-  }
-}
 
 const newsManagerAgent: AgentExecutor = async (ctx) => ({
   status: "completed",
@@ -114,6 +92,35 @@ const relevanceCheckerAgent: AgentExecutor = async (ctx) => {
           returnTo: "NewsManager",
         },
       }),
+    };
+  }
+
+  const tax = await getDayTaxonomy(ctx.triageItem.date);
+  const relevance = await evaluateRelevanceWithAgent({
+    date: ctx.triageItem.date,
+    summary: String(existing.summary ?? "").trim(),
+    tags: normalizedTagsFromRow(tax?.tagsVersion2),
+    topics: topicLabelsFromRow(tax?.topicCategories),
+    topArticleId: existing.topArticleId,
+  });
+
+  if (relevanceRequiresArticlePick(relevance)) {
+    return {
+      status: "rejected",
+      confidence: relevance.confidence === "high" ? 0.82 : 0.68,
+      output: buildStepOutput({
+        summary: "Relevance Agent flagged weak or off-topic story",
+        findings: [`classification=${relevance.classification}`],
+        rejection: {
+          status: "rejected",
+          agent: "RelevanceCheckerAgent",
+          reason: relevanceOperatorNote(relevance.classification),
+          confidence: relevance.confidence === "high" ? 0.82 : 0.68,
+          suggestedAction: "retry_with_new_source",
+          returnTo: "NewsManager",
+        },
+      }),
+      evidence: { relevance },
     };
   }
 
@@ -258,47 +265,70 @@ const summaryAgent: AgentExecutor = async (ctx) => {
       }),
     };
   }
-  if (isEditorialSummaryWeak(existing.summary)) {
+
+  const evaluation = await evaluateSummaryWithAgent({
+    date: ctx.triageItem.date,
+    summary: String(existing.summary ?? "").trim(),
+    topArticleId: existing.topArticleId,
+    knownEvent: await (async () => {
+      const { resolveKnownEventContext } = await import("./known-event-context");
+      return resolveKnownEventContext(ctx.triageItem.date);
+    })(),
+  });
+
+  if (!evaluation.publishable || evaluation.needsRegeneration) {
+    const canRegen = isValidPipelineTopArticleId(existing.topArticleId);
     return {
       status: "rejected",
-      confidence: 0.62,
+      confidence: evaluation.confidence === "high" ? 0.8 : 0.62,
       output: buildStepOutput({
+        summary: "Summary needs regen or edit before publish",
+        findings: [
+          ...evaluation.issues.slice(0, 3),
+          ...(evaluation.suggestedSummary ? [`Suggested: ${evaluation.suggestedSummary}`] : []),
+          canRegen ? "Regenerate from winning article." : "Edit summary inline.",
+        ],
         rejection: {
           status: "rejected",
           agent: "SummaryAgent",
-          reason: "Persisted summary is still too short or a failure placeholder",
-          confidence: 0.62,
-          suggestedAction: "manual_review",
+          reason: evaluation.issues[0] ?? "Summary outside 100–110 chars.",
+          confidence: evaluation.confidence === "high" ? 0.8 : 0.62,
+          suggestedAction: canRegen ? "manual_review" : "manual_review",
           returnTo: "NewsManager",
         },
       }),
+      evidence: { summaryAgent: evaluation },
     };
   }
+
   if (!isValidPipelineTopArticleId(existing.topArticleId)) {
-    return {
-      status: "rejected",
-      confidence: 0.62,
-      output: buildStepOutput({
-        rejection: {
-          status: "rejected",
-          agent: "SummaryAgent",
-          reason: "No valid winning article (top_article_id) on this day",
-          confidence: 0.62,
-          suggestedAction: "manual_review",
-          returnTo: "NewsManager",
-        },
-      }),
-    };
+    const { resolveKnownEventContext } = await import("./known-event-context");
+    const knownEvent = await resolveKnownEventContext(ctx.triageItem.date);
+    if (!knownEvent.isKnownEvent) {
+      return {
+        status: "rejected",
+        confidence: 0.62,
+        output: buildStepOutput({
+          rejection: {
+            status: "rejected",
+            agent: "SummaryAgent",
+            reason: "No valid winning article (top_article_id) on this day",
+            confidence: 0.62,
+            suggestedAction: "manual_review",
+            returnTo: "NewsManager",
+          },
+        }),
+      };
+    }
   }
   return {
     status: "completed",
     confidence: 0.82,
     output: buildStepOutput({
-      summary: "Summary agent validated existing summary flow",
-      findings: [
-        `Existing summary length=${existing.summary.length}`,
-      ],
+      summary: "Summary Agent validated editorial summary",
+      findings: [evaluation.reason, `Existing summary length=${existing.summary.length}`],
     }),
+    evidence: { summaryAgent: evaluation },
   };
 };
 
@@ -335,22 +365,50 @@ const topicManagerAgent: AgentExecutor = async (ctx) => {
     };
   }
 
+  const summary = String((await getExistingDay(ctx.triageItem.date))?.summary ?? "").trim();
+  const tags = normalizedTagsFromRow(row.tagsVersion2);
+  let agentFindings: string[] = [];
+  let agentEvidence: Record<string, unknown> = {};
+
+  if (summary) {
+    const agent = await suggestTopicsWithAgent({
+      date: ctx.triageItem.date,
+      summary,
+      tags,
+      currentTopics: topics,
+    });
+    agentFindings = agent.proposed.length
+      ? [
+          agent.proposed.length === 1
+            ? `Pick: ${agent.proposed[0]}`
+            : `Pick one: ${agent.proposed.join(" · ")}`,
+        ]
+      : ["Pick a storyline leaf"];
+    agentEvidence = {
+      topicAgentSource: agent.source,
+      topicAgentConfidence: agent.confidence,
+      topicAgentProposed: agent.proposed,
+      topicAgentReason: agent.reason.trim() || undefined,
+      duplicateRisk: agent.duplicateRisk,
+    };
+  }
+
   return {
     status: "rejected",
     confidence: 0.42,
     output: buildStepOutput({
-      summary: "Topic hierarchy failed — each day must have exactly one new-system storyline leaf",
-      findings: gaps,
+      summary: "Topic hierarchy failed — Topic Agent suggestions attached for human review",
+      findings: [...gaps, ...agentFindings],
       rejection: {
         status: "rejected",
-        agent: "TopicManagerAgent",
+        agent: "TopicValidatorAgent",
         reason: gaps.join("; "),
         confidence: 0.42,
         suggestedAction: "manual_review",
         returnTo: "NewsManager",
       },
     }),
-    evidence: { topics, rawTopicCount, issues },
+    evidence: { topics, rawTopicCount, issues, ...agentEvidence },
   };
 };
 
@@ -687,140 +745,64 @@ const dateConsistencyAgent: AgentExecutor = async (ctx) => {
     };
   }
 
-  const canonicalMismatch = detectCanonicalDateMismatch(summary, ctx.triageItem.date);
-  if (canonicalMismatch) {
+  const dateCheck = await evaluateDateConsistencyForDay({
+    date: ctx.triageItem.date,
+    analysisId: ctx.triageItem.analysisId,
+    summary,
+  });
+
+  if (dateCheck.status === "canonical") {
     return {
       status: "rejected",
       confidence: 0.9,
       output: buildStepOutput({
         summary: "Summary matches a known canonical date, not this day",
-        findings: [canonicalMismatch.reason],
+        findings: [dateCheck.reason],
         rejection: {
           status: "rejected",
           agent: "DateConsistencyAgent",
-          reason: canonicalMismatch.reason,
+          reason: dateCheck.reason,
           confidence: 0.9,
           suggestedAction: "merge_existing",
           returnTo: "NewsManager",
         },
       }),
       evidence: {
-        canonicalDate: canonicalMismatch.expectedDate,
-        suggestedDate: canonicalMismatch.expectedDate,
-        canonicalRule: canonicalMismatch.ruleId,
+        canonicalDate: dateCheck.expectedDate,
+        suggestedDate: dateCheck.expectedDate,
+        canonicalRule: dateCheck.ruleId,
       },
     };
   }
 
-  if (!process.env.OPENAI_API_KEY?.trim()) {
-    return {
-      status: "skipped",
-      confidence: 1,
-      output: buildStepOutput({
-        summary: "Date consistency check skipped (OPENAI_API_KEY not set)",
-        findings: ["Set OPENAI_API_KEY to enable calendar-vs-summary verification without reading sources"],
-      }),
-    };
-  }
-
-  const dupContext =
-    (await getEditorialDuplicateNeighborContext({
-      date: ctx.triageItem.date,
-      analysisId: ctx.triageItem.analysisId,
-    })) ?? { focalTags: [], focalTopics: [], focalSummaryPreview: "", neighbors: [] as TaxonomyDuplicateNeighbor[] };
-
-  const system = `You verify whether a short "day in history" summary plausibly belongs on a given calendar date.
-You do NOT have access to source articles — use only public knowledge, the focal summary, focal tags/topics, and the taxonomy_neighbors list (other days' summaries are short previews only; same DB metadata editors see).
-1) Calendar fit: set plausible=false when the narrative clearly anchors a different famous calendar date (wrong year/month/day) than calendar_date.
-2) Wrong-slot / duplicate: when taxonomy_neighbors shows another date that shares tags/topics with the focal row and the neighbor_summary_preview reads like the SAME story that is historically tied to that neighbor date (not the focal date), set plausible=false and duplicateOfDate to that neighbor's date (YYYY-MM-DD). If overlap is coincidental (e.g. generic "Bitcoin rally" on many days), keep plausible=true and duplicateOfDate=null.
-3) Otherwise plausible=true.
-Return JSON only: {"plausible":boolean,"confidence":number between 0 and 1,"issues":string[],"duplicateOfDate":string YYYY-MM-DD or null}. Omit duplicateOfDate or use null when not a duplicate.`;
-
-  const userPayload = JSON.stringify({
-    calendar_date: ctx.triageItem.date,
-    summary,
-    focal_tags: dupContext.focalTags,
-    focal_topics: dupContext.focalTopics,
-    taxonomy_neighbors: dupContext.neighbors.map((n) => ({
-      date: n.date,
-      shared_tags: n.sharedTags,
-      shared_topics: n.sharedTopics,
-      token_jaccard: n.tokenJaccard,
-      neighbor_summary_preview: n.summaryPreview,
-    })),
-  });
-
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-  let verdict: z.infer<typeof dateConsistencyVerdictSchema> | null = null;
-  try {
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const completion = await openai.chat.completions.create({
-        model: getModelForAgent("DateConsistencyAgent"),
-        temperature: 0.05,
-        max_completion_tokens: 720,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: system },
-          {
-            role: "user",
-            content:
-              userPayload +
-              (attempt === 2 ?
-                "\n\nYour previous reply was not valid JSON with plausible, confidence, issues, and duplicateOfDate (YYYY-MM-DD or null). Reply with ONLY valid JSON."
-              : ""),
-          },
-        ],
-      });
-      const content = completion.choices[0]?.message?.content ?? "";
-      verdict = parseDateConsistencyVerdict(content);
-      if (verdict) break;
+  if (dateCheck.status === "skipped") {
+    if (dateCheck.reason.includes("OPENAI_API_KEY")) {
+      return {
+        status: "skipped",
+        confidence: 1,
+        output: buildStepOutput({
+          summary: "Date consistency check skipped (OPENAI_API_KEY not set)",
+          findings: ["Set OPENAI_API_KEY to enable calendar-vs-summary verification without reading sources"],
+        }),
+      };
     }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
     return {
-      status: "error",
-      confidence: 0.5,
+      status: "completed",
+      confidence: 0.55,
       output: buildStepOutput({
-        summary: "Date consistency OpenAI request failed",
-        findings: [msg.slice(0, 240)],
+        summary: "Date consistency check skipped",
+        findings: [dateCheck.reason],
       }),
     };
   }
 
-  if (!verdict) {
+  if (dateCheck.status === "mismatch") {
+    const dupDate = dateCheck.duplicateOfDate;
+    const duplicateMismatch = Boolean(dupDate);
+    const mergedIssues = dateCheck.issues;
     return {
       status: "rejected",
-      confidence: 0.72,
-      output: buildStepOutput({
-        summary: "Could not parse date-consistency verdict from model output",
-        findings: ["parse_failed"],
-        rejection: {
-          status: "rejected",
-          agent: "DateConsistencyAgent",
-          reason: "Model returned unusable JSON for calendar-vs-summary check",
-          confidence: 0.72,
-          suggestedAction: "manual_review",
-          returnTo: "NewsManager",
-        },
-      }),
-    };
-  }
-
-  const dupDate = verdict.duplicateOfDate;
-  const duplicateMismatch =
-    typeof dupDate === "string" && dupDate.length === 10 && dupDate !== ctx.triageItem.date;
-  const effectivePlausible = verdict.plausible && !duplicateMismatch;
-  const mergedIssues = [...verdict.issues];
-  if (duplicateMismatch) {
-    const hint = `Taxonomy neighbor ${dupDate} may be the canonical home for this story`;
-    if (!mergedIssues.some((x) => x.includes(dupDate))) mergedIssues.push(hint);
-  }
-
-  if (!effectivePlausible) {
-    return {
-      status: "rejected",
-      confidence: verdict.confidence,
+      confidence: dateCheck.verdict.confidence,
       output: buildStepOutput({
         summary: duplicateMismatch
           ? "Summary likely misplaced or duplicate of another tagged day"
@@ -830,28 +812,30 @@ Return JSON only: {"plausible":boolean,"confidence":number between 0 and 1,"issu
           status: "rejected",
           agent: "DateConsistencyAgent",
           reason: mergedIssues[0] || "Summary appears anchored to a different date than the page",
-          confidence: verdict.confidence,
+          confidence: dateCheck.verdict.confidence,
           suggestedAction: duplicateMismatch ? "merge_existing" : "manual_review",
           returnTo: "NewsManager",
         },
       }),
       evidence: {
         calendar_date: ctx.triageItem.date,
-        verdict,
-        duplicateOfDate: dupDate ?? null,
-        suggestedDate: duplicateMismatch ? dupDate : null,
+        verdict: dateCheck.verdict,
+        duplicateOfDate: dupDate,
+        suggestedDate: dupDate,
       },
     };
   }
 
   return {
     status: "completed",
-    confidence: verdict.confidence,
+    confidence: dateCheck.verdict.confidence,
     output: buildStepOutput({
       summary: "Calendar date, taxonomy neighbors, and summary appear consistent (no-source check)",
-      findings: mergedIssues.length ? mergedIssues : ["No strong calendar or duplicate mismatch detected"],
+      findings: dateCheck.verdict.issues.length
+        ? dateCheck.verdict.issues
+        : ["No strong calendar or duplicate mismatch detected"],
     }),
-    evidence: { calendar_date: ctx.triageItem.date, verdict },
+    evidence: { calendar_date: ctx.triageItem.date, verdict: dateCheck.verdict },
   };
 };
 
@@ -931,6 +915,7 @@ export const executorRegistry: Record<PipelineAgentName, AgentExecutor> = {
   SourceFinderAgent: sourceFinderAgent,
   RelevanceCheckerAgent: relevanceCheckerAgent,
   VerificationAgent: verificationAgent,
+  TopicValidatorAgent: topicManagerAgent,
   TopicManagerAgent: topicManagerAgent,
   TagManagerAgent: tagManagerAgent,
   TopicApplierAgent: topicApplierAgent,

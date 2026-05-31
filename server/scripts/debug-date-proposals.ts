@@ -2,7 +2,7 @@ import "dotenv/config";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { historicalNewsAnalyses } from "@shared/schema";
-import { buildCorrectionProposals } from "../services/editorial-pipeline/proposals";
+import { buildCorrectionProposalsAsync } from "../services/editorial-pipeline/proposals";
 import { inferStorylineLabels } from "../services/editorial-pipeline/storyline-taxonomy";
 import { invalidTopicReasons } from "../services/editorial-pipeline/topic-validation";
 import { topicLabelsFromRow } from "../services/editorial-pipeline/tools";
@@ -85,7 +85,7 @@ async function debugDate(date: string) {
   console.log("ungrounded (summary+article):", ungroundedFull);
   console.log("summary weak:", isEditorialSummaryWeak(summary));
 
-  const proposals = buildCorrectionProposals({
+  const proposals = await buildCorrectionProposalsAsync({
     date,
     summary: row.summary,
     topArticleId: row.topArticleId,

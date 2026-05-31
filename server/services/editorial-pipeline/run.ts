@@ -41,7 +41,32 @@ import {
   summaryTokenJaccardForDuplicateCheck,
   topicLabelsFromRow,
 } from "./tools";
-import { buildCorrectionProposals } from "./proposals";
+import { buildCorrectionProposals, buildCorrectionProposalsAsync } from "./proposals";
+import { evaluateDateConsistencyForDay, formatCalendarDecisionExplanation } from "./date-consistency-llm";
+import { formatDuplicateQueueNote } from "./agent-reason";
+import {
+  isStrongDuplicateNeighbor,
+  splitCorrectionProposalsForAutoApply,
+} from "./corpus-clean";
+import {
+  evaluateSemanticDuplicateForDay,
+  isBorderlineDuplicateNeighbor,
+} from "./duplicate-agent-llm";
+import {
+  evaluateRelevanceWithAgent,
+  relevanceOperatorNote,
+  relevanceRequiresArticlePick,
+} from "./relevance-agent";
+import {
+  badWinnerOperatorNote,
+  isRoundupArticleContent,
+  isRoundupMultiStorySummary,
+  summaryNeedsBetterArticleSource,
+} from "./editorial-quality";
+import {
+  shouldUseGatedArticlePick,
+  shouldUseUnifiedExistingDayClean,
+} from "./unified-pipeline";
 import { loadCanonicalTagIndex } from "./tag-grounding";
 import { applyCorrectionProposals } from "./approved-writer";
 import { invalidTopicReasons } from "./topic-validation";
@@ -66,27 +91,11 @@ const STORYLINE_REVIEW_GOOD_CURRENT_SCORE = 0.44;
 const STORYLINE_REVIEW_STRONG_REPLACEMENT_SCORE = 0.88;
 const STORYLINE_REVIEW_COLLISION_WINDOW_DAYS = 10;
 
-const AUTO_CORRECTION_PROPOSAL_KINDS = new Set<CorrectionProposal["kind"]>([
-  "clear_orphan_flag",
-  "set_topic_categories",
-  "merge_redundant_tags",
-]);
-
 function splitAutomaticCorrectionProposals(proposals: CorrectionProposal[]): {
   automatic: CorrectionProposal[];
   manual: CorrectionProposal[];
 } {
-  const automatic: CorrectionProposal[] = [];
-  const manual: CorrectionProposal[] = [];
-  for (const proposal of proposals) {
-    if (proposal.kind === "set_topic_categories" && proposal.proposed.length === 0) {
-      manual.push(proposal);
-      continue;
-    }
-    if (AUTO_CORRECTION_PROPOSAL_KINDS.has(proposal.kind)) automatic.push(proposal);
-    else manual.push(proposal);
-  }
-  return { automatic, manual };
+  return splitCorrectionProposalsForAutoApply(proposals);
 }
 
 async function applyAutomaticCorrectionProposals(opts: {
@@ -132,7 +141,9 @@ function agentMatchesCheckScopes(agent: PipelineAgentName, scopes: Set<PipelineC
     return scopes.has("relevance");
   }
   if (agent === "SummaryAgent") return scopes.has("summary");
-  if (agent === "TopicManagerAgent" || agent === "TopicApplierAgent") return scopes.has("topics");
+  if (agent === "TopicValidatorAgent" || agent === "TopicManagerAgent" || agent === "TopicApplierAgent") {
+    return scopes.has("topics");
+  }
   if (agent === "TagManagerAgent" || agent === "TagApplierAgent" || agent === "TagConsistencyAgent") {
     return scopes.has("tags");
   }
@@ -344,6 +355,28 @@ async function generateManagerNarrative(triage: TriageItem[], signal?: AbortSign
  * sensible memory; the proposal layer only does substring matches so we don't
  * need full fidelity.
  */
+function neighborHintsFromDuplicateContext(
+  ctx: Awaited<ReturnType<typeof getEditorialDuplicateNeighborContext>> | null | undefined,
+) {
+  if (!ctx?.neighbors.length) return undefined;
+  return ctx.neighbors.slice(0, 4).map((n) => ({
+    date: n.date,
+    topics: n.sharedTopics,
+    summaryPreview: n.summaryPreview,
+  }));
+}
+
+async function buildScopedCorrectionProposals(opts: {
+  input: Parameters<typeof buildCorrectionProposals>[0];
+  neighborHints?: ReturnType<typeof neighborHintsFromDuplicateContext>;
+  checkScopes?: Set<PipelineCheckScope>;
+}) {
+  const proposals = await buildCorrectionProposalsAsync(opts.input, {
+    neighborHints: opts.neighborHints,
+  });
+  return opts.checkScopes ? proposals.filter((p) => proposalMatchesCheckScopes(p, opts.checkScopes!)) : proposals;
+}
+
 function collectArticleTextForGrounding(
   tieredArticles: unknown,
   analyzedArticles: unknown,
@@ -386,26 +419,6 @@ function collectArticleTextForGrounding(
     }
   }
   return out.join(" \n ");
-}
-
-const DUPLICATE_STRONG_THRESHOLDS: Array<{ j: number; sharedTags: number; sharedTopics?: number }> = [
-  { j: 0.92, sharedTags: 1 },
-  { j: 0.84, sharedTags: 2 },
-  { j: 0.8, sharedTags: 2, sharedTopics: 1 },
-  { j: 0.76, sharedTags: 3 },
-];
-
-function isStrongDuplicateNeighbor(n: { tokenJaccard: number; sharedTags: string[]; sharedTopics: string[] }): boolean {
-  for (const rule of DUPLICATE_STRONG_THRESHOLDS) {
-    if (
-      n.tokenJaccard >= rule.j &&
-      n.sharedTags.length >= rule.sharedTags &&
-      (rule.sharedTopics == null || n.sharedTopics.length >= rule.sharedTopics)
-    ) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function currentStorylineQuality(row: {
@@ -611,6 +624,10 @@ export function storedArticleToCandidate(input: {
     score -= 0.24;
     notes.push("multi-asset market roundup penalty");
   }
+  if (isRoundupArticleContent({ title, summary: input.article.summary, text: input.article.text })) {
+    score -= 0.42;
+    notes.push("multi-story roundup penalty");
+  }
   if (/\b(bitcoin|btc)\b/.test(titleLower) && /\b(shiba inu|ethereum|dogecoin|solana|terra|xrp|cardano|altcoins?)\b/.test(text)) {
     score -= 0.12;
     notes.push("multi-asset framing penalty");
@@ -661,7 +678,59 @@ export function storedArticleToCandidate(input: {
   };
 }
 
-function storedArticleCandidates(row: {
+function normalizeArticleLookupKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function articleMatchesTopId(article: ArticleData, topArticleId: string): boolean {
+  const top = topArticleId.trim();
+  if (!top) return false;
+  if (String(article.id ?? "").trim() === top) return true;
+  const url = String(article.url ?? "").trim();
+  if (!url) return false;
+  if (url === top) return true;
+  return normalizeArticleLookupKey(url) === normalizeArticleLookupKey(top);
+}
+
+/** Resolve the stored winning article from tiered + legacy analyzed payloads. */
+export function resolveStoredWinningArticle(row: {
+  topArticleId: string | null;
+  tieredArticles: unknown;
+  analyzedArticles: unknown;
+  winningTier?: string | null;
+}): { article: ArticleData; tier: "bitcoin" | "crypto" | "macro" } | null {
+  const topId = row.topArticleId?.trim();
+  if (!topId) return null;
+
+  if (isRecord(row.tieredArticles)) {
+    for (const key of ["bitcoin", "crypto", "macro"] as const) {
+      const arr = row.tieredArticles[key];
+      if (!Array.isArray(arr)) continue;
+      for (const raw of arr) {
+        if (!isRecord(raw)) continue;
+        const article = raw as unknown as ArticleData;
+        if (articleMatchesTopId(article, topId)) {
+          return { article, tier: key };
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(row.analyzedArticles)) {
+    for (const raw of row.analyzedArticles) {
+      if (!isRecord(raw)) continue;
+      const article = raw as unknown as ArticleData;
+      if (articleMatchesTopId(article, topId)) {
+        const tier = tierFromStoredKey(String(raw.tier ?? raw.tierUsed ?? row.winningTier ?? "bitcoin"));
+        return { article, tier };
+      }
+    }
+  }
+
+  return null;
+}
+
+export function buildStoredArticleCandidates(row: {
   topArticleId: string | null;
   tieredArticles: unknown;
   analyzedArticles: unknown;
@@ -818,7 +887,7 @@ export async function continueExistingDayChecksAfterKeepingStoryline(opts: {
 
   const articleText = collectArticleTextForGrounding(row.tieredArticles, row.analyzedArticles);
   const canonicalTagIndex = await loadCanonicalTagIndex();
-  const proposals = buildCorrectionProposals({
+  const proposals = await buildCorrectionProposalsAsync({
     date: opts.date,
     summary: row.summary,
     topArticleId: row.topArticleId,
@@ -906,6 +975,63 @@ export async function continueExistingDayChecksAfterKeepingStoryline(opts: {
  *
  * Returns the next step index and whether an auto-approve was issued.
  */
+async function queueRefetchArticlePickForExistingDay(opts: {
+  runId: string;
+  stepIndex: number;
+  triage: TriageItem;
+  note: string;
+  rejectionReason: string;
+  evidence?: Record<string, unknown>;
+}): Promise<number> {
+  const pool = await fetchCandidatesForDate(opts.triage.date, {
+    requestId: `pipeline-refetch-${opts.runId}-${opts.triage.date}`,
+    source: "editorial-pipeline-refetch",
+  });
+  const stepId = await createStep({
+    runId: opts.runId,
+    stepIndex: opts.stepIndex,
+    agentName: "SourceFinderAgent",
+    status: pool.hasCandidates ? "completed" : "rejected",
+    confidence: pool.hasCandidates ? 0.84 : 0.45,
+    input: { date: opts.triage.date, mode: "refetch-after-junk-winner" },
+    output: buildStepOutput({
+      summary: pool.hasCandidates
+        ? `Refetched ${pool.candidates.length} candidate article(s) for ${opts.triage.date}.`
+        : `No replacement articles found for ${opts.triage.date}.`,
+      findings: pool.candidates.slice(0, 6).map((c) => `${c.tier}: ${c.title}`),
+    }),
+    evidence: {
+      perTierCounts: pool.perTierCounts,
+      totalCandidates: pool.candidates.length,
+      ...(opts.evidence ?? {}),
+    },
+    rejectionReason: pool.hasCandidates ? null : opts.rejectionReason,
+    suggestedAction: "manual_review",
+  });
+
+  const pickPkg: ArticlePickPackage = {
+    phase: "awaiting_article_pick",
+    scenario: "better_storyline",
+    triage: opts.triage,
+    candidates: pool.candidates,
+    hasCandidates: pool.hasCandidates,
+    note: opts.note,
+  };
+
+  await db.insert(humanReviewQueue).values({
+    runId: opts.runId,
+    stepId,
+    status: "pending",
+    priority: 92,
+    eventDate: opts.triage.date,
+    package: pickPkg,
+    reviewer: null,
+    reviewedAt: null,
+  });
+
+  return opts.stepIndex + 1;
+}
+
 async function runV3ExistingDayChecks(opts: {
   runId: string;
   triage: TriageItem;
@@ -953,16 +1079,96 @@ async function runV3ExistingDayChecks(opts: {
 
   const summary = (row.summary ?? "").trim();
 
-  // 1. Canonical date mismatch (highest priority)
-  const canonical = summary ? detectCanonicalDateMismatch(summary, triage.date) : null;
-  if (checkScopes.has("date") && canonical) {
-    const [conflict] = triage.analysisId
-      ? await db
-          .select({ id: historicalNewsAnalyses.id })
+  // 1. Canonical / LLM date consistency (highest priority)
+  if (checkScopes.has("date") && summary && triage.analysisId) {
+    const dateCheck = await evaluateDateConsistencyForDay({
+      date: triage.date,
+      analysisId: triage.analysisId,
+      summary,
+    });
+
+    const calendarExpected =
+      dateCheck.status === "canonical"
+        ? dateCheck.expectedDate
+        : dateCheck.status === "mismatch" && dateCheck.duplicateOfDate
+          ? dateCheck.duplicateOfDate
+          : null;
+
+    if (calendarExpected && calendarExpected !== triage.date) {
+      const ruleId =
+        dateCheck.status === "canonical" ? dateCheck.ruleId : "llm-duplicate-slot";
+      let neighborSummaryPreview: string | null = null;
+      if (dateCheck.status === "mismatch") {
+        const [neighborRow] = await db
+          .select({ summary: historicalNewsAnalyses.summary })
           .from(historicalNewsAnalyses)
-          .where(eq(historicalNewsAnalyses.date, canonical.expectedDate))
-          .limit(1)
-      : [];
+          .where(eq(historicalNewsAnalyses.date, calendarExpected))
+          .limit(1);
+        neighborSummaryPreview = neighborRow?.summary?.trim() ?? null;
+      }
+      const reason = formatCalendarDecisionExplanation({
+        ruleId,
+        currentDate: triage.date,
+        expectedDate: calendarExpected,
+        canonicalReason: dateCheck.status === "canonical" ? dateCheck.reason : undefined,
+        llmIssues: dateCheck.status === "mismatch" ? dateCheck.issues : undefined,
+        neighborSummaryPreview,
+      });
+      const [conflict] = await db
+        .select({ id: historicalNewsAnalyses.id })
+        .from(historicalNewsAnalyses)
+        .where(eq(historicalNewsAnalyses.date, calendarExpected))
+        .limit(1);
+      const calendarPkg: CalendarDecisionPackage = {
+        phase: "awaiting_calendar_decision",
+        triage,
+        currentDate: triage.date,
+        expectedDate: calendarExpected,
+        ruleId,
+        reason,
+        canonicalDateOccupied: Boolean(conflict),
+        note: `Summary may belong on ${calendarExpected}. Decide whether to move, keep, or delete.`,
+      };
+
+      const stepId = await createStep({
+        runId,
+        stepIndex,
+        agentName: "DateConsistencyAgent",
+        status: "rejected",
+        confidence: dateCheck.status === "canonical" ? 0.9 : 0.82,
+        input: { date: triage.date, ruleId, dateCheckStatus: dateCheck.status },
+        output: buildStepOutput({
+          summary: `Date mismatch detected (${ruleId}); expected ${calendarExpected}.`,
+          findings: [reason],
+        }),
+        evidence: { expectedDate: calendarExpected, dateCheckStatus: dateCheck.status },
+        rejectionReason: reason,
+        suggestedAction: "manual_review",
+      });
+      stepIndex += 1;
+
+      await db.insert(humanReviewQueue).values({
+        runId,
+        stepId,
+        status: "pending",
+        priority: 100,
+        eventDate: triage.date,
+        package: calendarPkg,
+        reviewer: null,
+        reviewedAt: null,
+      });
+      return { nextStepIndex: stepIndex, autoApproved: false };
+    }
+  }
+
+  // Legacy regex-only fallback when analysis id missing
+  const canonical = summary ? detectCanonicalDateMismatch(summary, triage.date) : null;
+  if (checkScopes.has("date") && canonical && !triage.analysisId) {
+    const [conflict] = await db
+      .select({ id: historicalNewsAnalyses.id })
+      .from(historicalNewsAnalyses)
+      .where(eq(historicalNewsAnalyses.date, canonical.expectedDate))
+      .limit(1);
     const calendarPkg: CalendarDecisionPackage = {
       phase: "awaiting_calendar_decision",
       triage,
@@ -1059,9 +1265,188 @@ async function runV3ExistingDayChecks(opts: {
     return { nextStepIndex: stepIndex, autoApproved: false };
   }
 
-  // 3. Storyline quality: if the current summary is valid but too generic,
-  // ask the operator to pick a better article from the already fetched pool.
+  if (checkScopes.has("duplicates") && duplicateCtx?.neighbors.length && summary) {
+    for (const neighbor of duplicateCtx.neighbors.filter(isBorderlineDuplicateNeighbor).slice(0, 2)) {
+      const semantic = await evaluateSemanticDuplicateForDay({ date: triage.date, summary, neighbor });
+      if (semantic.status === "duplicate") {
+        const dupePkg: DuplicateDecisionPackage = {
+          phase: "awaiting_duplicate_decision",
+          triage,
+          focal: {
+            date: triage.date,
+            summaryPreview: duplicateCtx.focalSummaryPreview,
+            tags: duplicateCtx.focalTags,
+            topics: duplicateCtx.focalTopics,
+          },
+          neighbors: [neighbor],
+          note: formatDuplicateQueueNote(semantic.neighborDate),
+        };
+        const stepId = await createStep({
+          runId,
+          stepIndex,
+          agentName: "DuplicateCheckerAgent",
+          status: "rejected",
+          confidence: semantic.verdict.confidence,
+          input: { date: triage.date, mode: "semantic-duplicate" },
+          output: buildStepOutput({
+            summary: "Semantic duplicate neighbor detected",
+            findings: [formatDuplicateQueueNote(semantic.neighborDate)],
+          }),
+          evidence: { neighbor: neighbor.date, verdict: semantic.verdict },
+          rejectionReason: formatDuplicateQueueNote(semantic.neighborDate),
+          suggestedAction: "manual_review",
+        });
+        stepIndex += 1;
+        await db.insert(humanReviewQueue).values({
+          runId,
+          stepId,
+          status: "pending",
+          priority: 91,
+          eventDate: triage.date,
+          package: dupePkg,
+          reviewer: null,
+          reviewedAt: null,
+        });
+        return { nextStepIndex: stepIndex, autoApproved: false };
+      }
+    }
+  }
+
+  // 3. Relevance Agent — off-topic / insufficient stories need article pick
   const storyline = currentStorylineQuality(row);
+  const suppressedCandidateSignals = await loadSuppressedCandidateSignals(triage.date);
+  const storedCandidatesRaw = await applyNeighborCollisionPenalties(
+    triage.date,
+    buildStoredArticleCandidates({ ...row, targetDate: triage.date }),
+  );
+  const storedCandidates = filterSuppressedCandidates(storedCandidatesRaw, suppressedCandidateSignals);
+  const winningResolved = resolveStoredWinningArticle({
+    topArticleId: row.topArticleId,
+    tieredArticles: row.tieredArticles,
+    analyzedArticles: row.analyzedArticles,
+  });
+  const articlePickContext = winningResolved
+    ? {
+        title: winningResolved.article.title,
+        snippet: `${winningResolved.article.summary ?? ""}\n${winningResolved.article.text ?? ""}`.slice(0, 1600),
+      }
+    : null;
+  const badWinner = summaryNeedsBetterArticleSource(summary, row.topArticleId, articlePickContext);
+  const badWinnerNote = badWinnerOperatorNote(summary, row.topArticleId, articlePickContext);
+
+  if (badWinner) {
+    if (storedCandidates.length > 0) {
+      const pickPkg: ArticlePickPackage = {
+        phase: "awaiting_article_pick",
+        scenario: "better_storyline",
+        triage,
+        candidates: storedCandidates,
+        hasCandidates: true,
+        note: `${badWinnerNote}. Pick a single dated article from stored candidates.`,
+      };
+      const stepId = await createStep({
+        runId,
+        stepIndex,
+        agentName: "RelevanceCheckerAgent",
+        status: "rejected",
+        confidence: 0.86,
+        input: { date: triage.date, mode: "bad-winner" },
+        output: buildStepOutput({
+          summary: "Current winning article is not a single dated event",
+          findings: [badWinnerNote, ...(isRoundupMultiStorySummary(summary) ? ["roundup_summary=true"] : [])],
+        }),
+        evidence: { badWinner: true, topArticleId: row.topArticleId },
+        rejectionReason: badWinnerNote,
+        suggestedAction: "manual_review",
+      });
+      stepIndex += 1;
+      await db.insert(humanReviewQueue).values({
+        runId,
+        stepId,
+        status: "pending",
+        priority: 90,
+        eventDate: triage.date,
+        package: pickPkg,
+        reviewer: null,
+        reviewedAt: null,
+      });
+      return { nextStepIndex: stepIndex, autoApproved: false };
+    }
+
+    stepIndex = await queueRefetchArticlePickForExistingDay({
+      runId,
+      stepIndex,
+      triage,
+      note: `${badWinnerNote}. No stored alternatives — fresh search results are shown below.`,
+      rejectionReason: badWinnerNote,
+      evidence: { badWinner: true, topArticleId: row.topArticleId },
+    });
+    return { nextStepIndex: stepIndex, autoApproved: false };
+  }
+
+  if (checkScopes.has("relevance") && summary.length >= 15) {
+    const relevance = await evaluateRelevanceWithAgent({
+      date: triage.date,
+      summary,
+      tags: normalizedTagsFromRow(row.tagsVersion2),
+      topics: topicLabelsFromRow(row.topicCategories),
+      topArticleId: row.topArticleId,
+    });
+    const needsArticlePick = relevanceRequiresArticlePick(relevance);
+
+    if (needsArticlePick && storedCandidates.length > 0) {
+      const pickPkg: ArticlePickPackage = {
+        phase: "awaiting_article_pick",
+        scenario: "better_storyline",
+        triage,
+        candidates: storedCandidates,
+        hasCandidates: true,
+        note: relevanceOperatorNote(relevance.classification),
+      };
+      const stepId = await createStep({
+        runId,
+        stepIndex,
+        agentName: "RelevanceCheckerAgent",
+        status: "rejected",
+        confidence: relevance.confidence === "high" ? 0.84 : 0.7,
+        input: { date: triage.date, mode: "relevance-agent" },
+        output: buildStepOutput({
+          summary: "Story failed relevance classification",
+          findings: [`classification=${relevance.classification}`],
+        }),
+        evidence: { relevance },
+        rejectionReason: relevanceOperatorNote(relevance.classification),
+        suggestedAction: "manual_review",
+      });
+      stepIndex += 1;
+      await db.insert(humanReviewQueue).values({
+        runId,
+        stepId,
+        status: "pending",
+        priority: 88,
+        eventDate: triage.date,
+        package: pickPkg,
+        reviewer: null,
+        reviewedAt: null,
+      });
+      return { nextStepIndex: stepIndex, autoApproved: false };
+    }
+
+    if (needsArticlePick && storedCandidates.length === 0) {
+      stepIndex = await queueRefetchArticlePickForExistingDay({
+        runId,
+        stepIndex,
+        triage,
+        note: `${relevanceOperatorNote(relevance.classification)} No stored alternatives — fresh search results are shown below.`,
+        rejectionReason: relevanceOperatorNote(relevance.classification),
+        evidence: { relevance, topArticleId: row.topArticleId },
+      });
+      return { nextStepIndex: stepIndex, autoApproved: false };
+    }
+  }
+
+  // 4. Storyline quality: if the current summary is valid but too generic,
+  // ask the operator to pick a better article from the already fetched pool.
   const betterStorylineWaived = await hasBetterStorylineWaiver(triage.date);
   if (checkScopes.has("relevance") && betterStorylineWaived) {
     await continueExistingDayChecksAfterKeepingStoryline({
@@ -1072,12 +1457,6 @@ async function runV3ExistingDayChecks(opts: {
     });
     return { nextStepIndex: stepIndex, autoApproved: false };
   }
-  const suppressedCandidateSignals = await loadSuppressedCandidateSignals(triage.date);
-  const storedCandidatesRaw = await applyNeighborCollisionPenalties(
-    triage.date,
-    storedArticleCandidates({ ...row, targetDate: triage.date }),
-  );
-  const storedCandidates = filterSuppressedCandidates(storedCandidatesRaw, suppressedCandidateSignals);
   const recommendedStored = storedCandidates.find((c) => c.recommended) ?? storedCandidates[0] ?? null;
   const currentTop = String(row.topArticleId ?? "").trim();
   const hasBetterStoredCandidate =
@@ -1145,19 +1524,23 @@ async function runV3ExistingDayChecks(opts: {
   // 4. Correction proposals
   const articleText = collectArticleTextForGrounding(row.tieredArticles, row.analyzedArticles);
   const canonicalTagIndex = await loadCanonicalTagIndex();
-  const proposals = buildCorrectionProposals({
-    date: triage.date,
-    summary: row.summary,
-    topArticleId: row.topArticleId,
-    isOrphan: row.isOrphan,
-    isFlagged: row.isFlagged,
-    tagsVersion2: row.tagsVersion2,
-    topicCategories: row.topicCategories,
-    legacyTags: row.tags,
-    articleText,
-    canonicalTagIndex,
-    suppressedGroundedTags: row.suppressedTagSuggestions,
-  }).filter((proposal) => proposalMatchesCheckScopes(proposal, checkScopes));
+  const proposals = await buildScopedCorrectionProposals({
+    input: {
+      date: triage.date,
+      summary: row.summary,
+      topArticleId: row.topArticleId,
+      isOrphan: row.isOrphan,
+      isFlagged: row.isFlagged,
+      tagsVersion2: row.tagsVersion2,
+      topicCategories: row.topicCategories,
+      legacyTags: row.tags,
+      articleText,
+      canonicalTagIndex,
+      suppressedGroundedTags: row.suppressedTagSuggestions,
+    },
+    neighborHints: neighborHintsFromDuplicateContext(duplicateCtx),
+    checkScopes,
+  });
   const { automatic: automaticProposals, manual: manualProposals } = splitAutomaticCorrectionProposals(proposals);
   const autoApplied = await applyAutomaticCorrectionProposals({
     date: triage.date,
@@ -1220,19 +1603,24 @@ async function runV3ExistingDayChecks(opts: {
       : [];
 
     if (topicIssuesAfterAuto.length > 0) {
-      const topicProposals = buildCorrectionProposals({
-        date: triage.date,
-        summary: row.summary,
-        topArticleId: row.topArticleId,
-        isOrphan: row.isOrphan,
-        isFlagged: row.isFlagged,
-        tagsVersion2: row.tagsVersion2,
-        topicCategories: freshRow?.topicCategories ?? row.topicCategories,
-        legacyTags: row.tags,
-        articleText,
-        canonicalTagIndex,
-        suppressedGroundedTags: row.suppressedTagSuggestions,
-      }).filter(
+      const topicProposals = (
+        await buildCorrectionProposalsAsync(
+          {
+            date: triage.date,
+            summary: row.summary,
+            topArticleId: row.topArticleId,
+            isOrphan: row.isOrphan,
+            isFlagged: row.isFlagged,
+            tagsVersion2: row.tagsVersion2,
+            topicCategories: freshRow?.topicCategories ?? row.topicCategories,
+            legacyTags: row.tags,
+            articleText,
+            canonicalTagIndex,
+            suppressedGroundedTags: row.suppressedTagSuggestions,
+          },
+          { neighborHints: neighborHintsFromDuplicateContext(duplicateCtx) },
+        )
+      ).filter(
         (proposal) => proposal.kind === "set_topic_categories" && proposalMatchesCheckScopes(proposal, checkScopes),
       );
 
@@ -1245,7 +1633,7 @@ async function runV3ExistingDayChecks(opts: {
       const stepId = await createStep({
         runId,
         stepIndex,
-        agentName: "TopicManagerAgent",
+        agentName: "TopicValidatorAgent",
         status: "rejected",
         confidence: 0.45,
         input: { date: triage.date, route: triage.route },
@@ -1306,7 +1694,7 @@ async function runV3ExistingDayChecks(opts: {
       const stepId = await createStep({
         runId,
         stepIndex,
-        agentName: "TopicManagerAgent",
+        agentName: "TopicValidatorAgent",
         status: "rejected",
         confidence: 0.45,
         input: { date: triage.date, route: triage.route },
@@ -1408,10 +1796,7 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
     // V3 gated fetch: for empty/missing days, fetch Exa candidates only and
     // hand off to a human picker. The legacy chain is intentionally skipped —
     // summary/tag/topic generation happens after the operator picks an article.
-    const useGatedFetch =
-      EDITORIAL_PIPELINE_V3_GATED_FETCH &&
-      checkScopes.has("relevance") &&
-      (item.route === "empty_day" || item.route === "missing_day");
+    const useGatedFetch = shouldUseGatedArticlePick(item.route, checkScopes);
 
     if (useGatedFetch) {
       const pool = await fetchCandidatesForDate(item.date, {
@@ -1478,16 +1863,10 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
       continue;
     }
 
-    // V3 existing-day branch: for `existing_*` routes, run a deterministic set
-    // of checks (canonical mismatch → duplicate → correction proposals) and
-    // emit the most-specific decision package. This short-circuits the legacy
-    // multi-agent chain so the operator sees one clear card per day.
-    const useV3ExistingChecks =
-      EDITORIAL_PIPELINE_V3_GATED_FETCH &&
-      item.analysisId &&
-      (item.route === "existing_needs_correction" || item.route === "existing_ok");
+    // Unified existing-day branch: deterministic + LLM checks via corpus-clean graph.
+    const useUnifiedExistingChecks = shouldUseUnifiedExistingDayClean(item.route, item.analysisId);
 
-    if (useV3ExistingChecks) {
+    if (useUnifiedExistingChecks) {
       const handled = await runV3ExistingDayChecks({
         runId,
         triage: item,

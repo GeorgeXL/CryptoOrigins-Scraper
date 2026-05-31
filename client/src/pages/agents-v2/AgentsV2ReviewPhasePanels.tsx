@@ -10,6 +10,11 @@ import {
   formatCorrectionChangeLines,
   summarizeCorrectionProposals,
 } from "@/lib/correction-proposal-view";
+import {
+  CorrectionSummarySourcePanel,
+  type SummarySourceAction,
+} from "@/pages/agents-v2/CorrectionSummarySourcePanel";
+import { CalendarMismatchReview } from "@/pages/agents-v2/CalendarMismatchReview";
 import { effectiveReviewItemPhase } from "@/pages/agents-v2/map-review-queue";
 import { TOPIC_HIERARCHY, formatTopicLeafWithGroup } from "@shared/topic-hierarchy";
 
@@ -18,6 +23,48 @@ type PanelProps = {
   onApprove: (id: string, opts?: ApproveReviewOpts) => void;
   busy?: boolean;
 };
+
+function knownEventKindLabel(kind: string | null | undefined): string {
+  switch (kind) {
+    case "milestone":
+      return "Canonical milestone";
+    case "manual_override":
+      return "Manual override";
+    case "manual_entry":
+      return "Manual entry";
+    case "known_marker":
+      return "Known-event marker";
+    case "manual_marker":
+      return "Manual-event marker";
+    default:
+      return "Known event";
+  }
+}
+
+function KnownEventExplanation({ item }: { item: EditorialReviewItem }) {
+  const ctx = item.knownEventContext;
+  if (!ctx?.isKnownEvent || !ctx.explanation) return null;
+  return (
+    <div className="rounded-lg border border-sky-500/25 bg-sky-500/[0.07] p-3 text-xs leading-relaxed text-muted-foreground">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className="border-sky-500/30 text-[10px] text-sky-500">
+          {knownEventKindLabel(ctx.kind)}
+        </Badge>
+        {ctx.label ? <span className="font-medium text-foreground">{ctx.label}</span> : null}
+      </div>
+      <p>{ctx.explanation}</p>
+      {ctx.referenceText ? (
+        <p className="mt-2 text-[11px]">
+          <span className="font-medium text-foreground">Reference:</span> {ctx.referenceText}
+        </p>
+      ) : null}
+      <p className="mt-2 text-[11px]">
+        Summary Agent validates against this known event, not an Exa article. Uncheck summary edit if you want to keep
+        the current line.
+      </p>
+    </div>
+  );
+}
 
 function ChipEditor({
   values,
@@ -360,6 +407,12 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
   const proposals = item.proposals ?? [];
   const isPending = item.status === "pending";
   const changeSummary = useMemo(() => summarizeCorrectionProposals(proposals), [proposals]);
+  const summarySource = item.correctionSummarySource;
+  const showSummarySourcePanel = Boolean(
+    summarySource && (summarySource.hasRedoSummary || summarySource.hasEditSummary),
+  );
+  const [summaryAction, setSummaryAction] = useState<SummarySourceAction>("patch");
+  const [replaceArticleId, setReplaceArticleId] = useState<string | null>(null);
   const [selectedAdds, setSelectedAdds] = useState<Set<string>>(
     () => new Set(changeSummary.tagsToAdd),
   );
@@ -393,7 +446,9 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
     setIncludeSummaryEdit(Boolean(next.summaryEdit));
     setSelectedMisc(new Set(next.misc.map((m) => m.id)));
     setSummaryDraft(next.summaryEdit?.currentSummary ?? "");
-  }, [proposals]);
+    setSummaryAction("patch");
+    setReplaceArticleId(null);
+  }, [item.id, proposals]);
 
   const toggleInSet = (value: string, checked: boolean, setter: Dispatch<SetStateAction<Set<string>>>) => {
     setter((prev) => {
@@ -431,14 +486,58 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
     !includeSummaryEdit ||
     (summaryLen >= (changeSummary.summaryEdit?.targetMin ?? 100) &&
       summaryLen <= (changeSummary.summaryEdit?.targetMax ?? 110));
-  const topicOk = !includeTopic || Boolean(topicSelection.trim());
-  const hasAdds = changeSummary.tagsToAdd.length > 0 || Boolean(changeSummary.topicToAdd);
+  const isReplaceMode = showSummarySourcePanel && summaryAction === "replace";
+  const topicOk =
+    isReplaceMode ||
+    !changeSummary.topicProposalId ||
+    (includeTopic && Boolean(topicSelection.trim()));
+  const needsTopicPick = Boolean(changeSummary.topicProposalId);
+  const hasTopicSuggestions =
+    Boolean(changeSummary.topicToAdd) || changeSummary.topicOptions.length > 0;
+  const showAddSection =
+    !isReplaceMode &&
+    (changeSummary.tagsToAdd.length > 0 || hasTopicSuggestions || needsTopicPick);
+  const hasAdds = changeSummary.tagsToAdd.length > 0 || hasTopicSuggestions || needsTopicPick;
   const hasRemoves = changeSummary.tagsToRemove.length > 0 || changeSummary.topicsToRemove.length > 0;
-  const hasChanges = hasAdds || hasRemoves || changeSummary.summaryEdit || changeSummary.misc.length > 0;
+  const visibleMisc = changeSummary.misc.filter(
+    (entry) => !(showSummarySourcePanel && entry.id === changeSummary.redoSummaryProposalId),
+  );
+  const hasChanges =
+    isReplaceMode ||
+    hasAdds ||
+    hasRemoves ||
+    changeSummary.summaryEdit ||
+    visibleMisc.length > 0 ||
+    (showSummarySourcePanel && summaryAction === "regenerate");
+
+  const approveDisabled =
+    busy ||
+    (isReplaceMode
+      ? !replaceArticleId
+      : summaryAction === "regenerate"
+        ? !changeSummary.redoSummaryProposalId
+        : !summaryOk || !topicOk);
+
+  const approveLabel = isReplaceMode
+    ? "Switch article & re-run tags/topics"
+    : summaryAction === "regenerate"
+      ? "Regenerate summary & apply fixes"
+      : "Apply changes";
 
   return (
     <div className="max-h-none space-y-3 sm:max-h-56 sm:overflow-y-auto">
-      {changeSummary.summaryEdit ? (
+      <KnownEventExplanation item={item} />
+      {showSummarySourcePanel && summarySource ? (
+        <CorrectionSummarySourcePanel
+          source={summarySource}
+          busy={busy}
+          summaryAction={summaryAction}
+          onSummaryActionChange={setSummaryAction}
+          replaceArticleId={replaceArticleId}
+          onReplaceArticleIdChange={setReplaceArticleId}
+        />
+      ) : null}
+      {!isReplaceMode && changeSummary.summaryEdit ? (
         <div className="rounded-lg border border-border/70 p-2">
           <label className="mb-1 flex items-center gap-2 text-[11px] font-medium">
             <input
@@ -462,7 +561,7 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
         </div>
       ) : null}
 
-      {hasAdds ? (
+      {showAddSection ? (
         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/[0.04] p-2">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Add</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -483,6 +582,27 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
                 </button>
               );
             })}
+            {changeSummary.topicOptions.map((leaf) => {
+              const label = formatTopicLeafWithGroup(leaf);
+              const selected = includeTopic && topicSelection === leaf;
+              return (
+                <button
+                  key={`topic-opt-${leaf}`}
+                  type="button"
+                  disabled={!isPending || busy}
+                  onClick={() => {
+                    setIncludeTopic(true);
+                    setTopicSelection(leaf);
+                  }}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[11px]",
+                    selected ? "border-emerald-500 bg-emerald-500/10" : "border-border/70 text-muted-foreground",
+                  )}
+                >
+                  {selected ? "✓ " : ""}Topic: {label}
+                </button>
+              );
+            })}
             {changeSummary.topicToAdd ? (
               <button
                 type="button"
@@ -497,11 +617,16 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
               </button>
             ) : null}
           </div>
-          {changeSummary.topicProposalId && includeTopic ? (
-            <div className="mt-2">
+          {needsTopicPick && changeSummary.topicOptions.length === 0 ? (
+            <div className="mt-2 space-y-1">
+              {!changeSummary.topicToAdd ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Choose a replacement topic for this summary.
+                </p>
+              ) : null}
               <Select
                 value={topicSelection || undefined}
-                disabled={!isPending || busy}
+                disabled={!isPending || busy || !includeTopic}
                 onValueChange={setTopicSelection}
               >
                 <SelectTrigger className="h-8 text-xs">
@@ -525,11 +650,15 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
                 </SelectContent>
               </Select>
             </div>
+          ) : changeSummary.topicOptions.length > 1 ? (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Pick the topic that best matches the summary.
+            </p>
           ) : null}
         </div>
       ) : null}
 
-      {hasRemoves ? (
+      {!isReplaceMode && hasRemoves ? (
         <div className="rounded-lg border border-red-500/30 bg-red-500/[0.04] p-2">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-red-400">Remove</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -562,9 +691,9 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
         </div>
       ) : null}
 
-      {changeSummary.misc.length > 0 ? (
+      {!isReplaceMode && visibleMisc.length > 0 ? (
         <div className="space-y-1 rounded-lg border border-border/70 p-2">
-          {changeSummary.misc.map((entry) => (
+          {visibleMisc.map((entry) => (
             <label key={entry.id} className="flex items-center gap-2 text-[11px] text-muted-foreground">
               <input
                 type="checkbox"
@@ -594,8 +723,12 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
           type="button"
           size="sm"
           className="w-full"
-          disabled={busy || !summaryOk || !topicOk}
-          onClick={() =>
+          disabled={approveDisabled}
+          onClick={() => {
+            if (isReplaceMode && replaceArticleId) {
+              onApprove(item.id, { replaceArticleId });
+              return;
+            }
             onApprove(
               item.id,
               buildCorrectionApprovePayload({
@@ -608,11 +741,12 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
                 selectedMisc,
                 includeSummaryEdit,
                 editedSummary: summaryDraft,
+                summaryAction: showSummarySourcePanel ? summaryAction : "patch",
               }),
-            )
-          }
+            );
+          }}
         >
-          Apply changes
+          {approveLabel}
         </Button>
       ) : null}
     </div>
@@ -623,31 +757,21 @@ function CalendarPanel({ item, onApprove, busy }: PanelProps) {
   const p = item.calendarDecision;
   const isPending = item.status === "pending";
   if (!p) return null;
+  if (!isPending) {
+    return <p className="text-[11px] text-muted-foreground">Calendar decision already resolved.</p>;
+  }
   return (
-    <div className="flex flex-col gap-2">
-      <p className="text-[11px] text-muted-foreground">{p.reason}</p>
-      {isPending ? (
-        <>
-          <Button
-            type="button"
-            size="sm"
-            disabled={busy || p.canonicalDateOccupied}
-            onClick={() => onApprove(item.id, { calendarDecision: "move_to_canonical" })}
-          >
-            Move to {p.expectedDate}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={() => onApprove(item.id, { calendarDecision: "keep_as_is" })}
-          >
-            Keep on {p.currentDate}
-          </Button>
-        </>
-      ) : null}
-    </div>
+    <CalendarMismatchReview
+      decision={p}
+      currentSummary={item.daySummary}
+      currentTags={item.dayTags}
+      currentTopics={item.dayTopicCategories}
+      busy={busy}
+      compact
+      onKeep={() => onApprove(item.id, { calendarDecision: "keep_as_is" })}
+      onMove={() => onApprove(item.id, { calendarDecision: "move_to_canonical" })}
+      onDelete={() => onApprove(item.id, { calendarDecision: "delete" })}
+    />
   );
 }
 

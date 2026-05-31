@@ -11,7 +11,8 @@ import { useToast } from "@/hooks/use-toast";
 
 const AGENT_LABEL: Record<string, string> = {
   VerificationAgent: "Re-verify sources",
-  TopicManagerAgent: "Re-run topics",
+  TopicValidatorAgent: "Re-run topics",
+  TopicManagerAgent: "Re-run topics (legacy name)",
   TagManagerAgent: "Re-run tags",
   SummaryAgent: "Regenerate summary",
   DuplicateCheckerAgent: "Duplicate check",

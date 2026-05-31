@@ -89,7 +89,7 @@ function parseSingleDayIso(raw: string): string | null {
 }
 
 function stepToLogStatus(status: string): LogStatus {
-  if (status === "completed" || status === "skipped") return "approved";
+  if (status === "completed" || status === "skipped" || status === "approved") return "approved";
   if (status === "rejected" || status === "error") return "rejected";
   return "pending";
 }
@@ -100,12 +100,13 @@ function shortAgentName(agentName: string): string {
 
 function stepLabel(agentName: string, status: string, rejectionReason?: string | null): string {
   const short = shortAgentName(agentName);
-  if (rejectionReason) return `${short} · ${status} — ${rejectionReason.slice(0, 80)}`;
+  if (rejectionReason) return `${short} · ${status} — ${rejectionReason.slice(0, 120)}`;
+  if (status === "error") return `${short} · error — step failed (see run error below)`;
   return `${short} · ${status}`;
 }
 
 function isSuccessfulTerminal(status: string): boolean {
-  return status === "completed" || status === "skipped";
+  return status === "completed" || status === "skipped" || status === "approved";
 }
 
 function humanReviewQueuedCount(stats: Record<string, unknown> | undefined): number {
@@ -118,6 +119,14 @@ function autoApprovedCount(stats: Record<string, unknown> | undefined): number {
   const raw = stats?.autoApprovedCount;
   const n = typeof raw === "number" ? raw : Number(raw);
   return Number.isFinite(n) ? n : 0;
+}
+
+function runFailureMessage(status: string, stats: Record<string, unknown> | undefined): string {
+  const err = stats?.error;
+  if (typeof err === "string" && err.trim()) return err.trim();
+  if (status === "stopped") return "Run stopped before completion.";
+  if (status === "error") return "Pipeline failed — no error detail was recorded.";
+  return `Run ended with status: ${status}`;
 }
 
 function extractStepEventDate(step: { input?: unknown }): string | null {
@@ -257,9 +266,10 @@ function buildActivityLogFromDetail(detail: PipelineRunDetail): LogLine[] {
         status: pending > 0 ? "review" : "approved",
       });
     } else {
+      const failMsg = runFailureMessage(run.status, run.stats as Record<string, unknown> | undefined);
       lines.push({
         id: `run-terminal-${run.status}`,
-        text: `Run ${run.status}`,
+        text: `Run ${run.status} — ${failMsg.slice(0, 240)}`,
         status: "rejected",
       });
     }
@@ -602,12 +612,22 @@ export default function AgentsV2AgentPanel() {
           slicePlanRef.current = null;
           completedSliceLogLinesRef.current = visibleLines;
           const pending = humanReviewQueuedCount(detail.run.stats);
+          const failMsg =
+            detail.run.status !== "completed"
+              ? runFailureMessage(detail.run.status, detail.run.stats)
+              : null;
           toast({
-            title: detail.run.status === "completed" ? "Run finished" : "Run stopped",
+            title:
+              detail.run.status === "completed"
+                ? "Run finished"
+                : detail.run.status === "error"
+                  ? "Run failed"
+                  : "Run stopped",
             description:
-              detail.run.status === "completed" && pending > 0 ?
-                `${pending} item(s) handed to manual review — see the Queue tab; each handoff is listed in the activity log.`
-              : "Check the Queue tab for human review items.",
+              detail.run.status === "completed" && pending > 0
+                ? `${pending} item(s) handed to manual review — see the Queue tab; each handoff is listed in the activity log.`
+                : failMsg ?? "Check the Queue tab for human review items.",
+            variant: detail.run.status === "error" ? "destructive" : undefined,
           });
         }
       } catch {

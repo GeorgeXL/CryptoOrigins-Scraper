@@ -29,7 +29,15 @@ export type ArticleCandidate = {
 
 export type CorrectionProposal =
   | { id: string; kind: "promote_v1_to_v2_tags"; current: string[]; proposed: string[]; rationale: string }
-  | { id: string; kind: "set_topic_categories"; current: string[]; proposed: string[]; rationale: string }
+  | {
+      id: string;
+      kind: "set_topic_categories";
+      current: string[];
+      proposed: string[];
+      rationale: string;
+      topicAgentSource?: "llm" | "rules" | "skipped";
+      topicAgentConfidence?: "high" | "medium" | "low";
+    }
   | { id: string; kind: "redo_summary"; currentSummary: string; rationale: string }
   | {
       id: string;
@@ -91,6 +99,46 @@ export type EditorialReviewItem = {
     ruleId: string;
     reason: string;
     canonicalDateOccupied: boolean;
+    expectedDateSummary?: string | null;
+    expectedDateTags?: string[] | null;
+    expectedDateTopics?: string[] | null;
+    chronologyHint?: {
+      likelyEventDate: string;
+      duplicateDate: string;
+      confidence: "high" | "medium" | "low";
+      rationale: string;
+      reciprocalConflict: boolean;
+      keepDate: string;
+      removeDate: string;
+    } | null;
+  } | null;
+  calendarReciprocalPair?: {
+    pairKey: string;
+    sideA: {
+      queueItemId?: string;
+      date: string;
+      summary: string;
+      tags: string[];
+      topics: string[];
+      pointsAtDate: string;
+    };
+    sideB: {
+      queueItemId?: string;
+      date: string;
+      summary: string;
+      tags: string[];
+      topics: string[];
+      pointsAtDate: string;
+    };
+    chronology: {
+      likelyEventDate: string;
+      duplicateDate: string;
+      confidence: "high" | "medium" | "low";
+      rationale: string;
+      reciprocalConflict: boolean;
+      keepDate: string;
+      removeDate: string;
+    };
   } | null;
   duplicateDecision?: {
     focal: { date: string; summaryPreview: string; tags: string[]; topics: string[] };
@@ -103,15 +151,38 @@ export type EditorialReviewItem = {
     }>;
   } | null;
   actionPlan?: OperatorActionPlan | null;
+  knownEventContext?: {
+    isKnownEvent: boolean;
+    kind: string | null;
+    label: string | null;
+    description?: string | null;
+    explanation: string | null;
+    referenceText?: string | null;
+  } | null;
+  correctionSummarySource?: {
+    current: {
+      id: string;
+      title: string;
+      url: string;
+      preview: string;
+      tier: "bitcoin" | "crypto" | "macro";
+    } | null;
+    alternateCandidates: ArticleCandidate[];
+    hasRedoSummary: boolean;
+    hasEditSummary: boolean;
+  } | null;
 };
 
 export type ApproveReviewOpts = {
   selectedArticleId?: string;
+  /** Correction queue: swap winning article and re-run summary + tags + topics (summary approval gate). */
+  replaceArticleId?: string;
   keepCurrentSummary?: boolean;
   acceptedProposalIds?: string[];
   proposalTagSelections?: Record<string, string[]>;
   proposalTopicSelections?: Record<string, string[]>;
   calendarDecision?: "move_to_canonical" | "keep_as_is" | "delete";
+  calendarPairResolution?: "accept_chronology" | "keep_both";
   duplicateDecision?: "keep_both" | "delete_focal" | "delete_neighbor" | "differentiate" | "find_another_event";
   duplicateNeighborDate?: string;
   editedSummary?: string;
@@ -125,6 +196,7 @@ export type PipelineAgentName =
   | "SourceFinderAgent"
   | "RelevanceCheckerAgent"
   | "VerificationAgent"
+  | "TopicValidatorAgent"
   | "TopicManagerAgent"
   | "TagManagerAgent"
   | "TopicApplierAgent"
@@ -331,4 +403,98 @@ export function readLastPipelineRunId(): string | null {
   } catch {
     return null;
   }
+}
+
+export type CorpusOverviewMetrics = {
+  totalDays: number;
+  emptySummaryDays: number;
+  summaryTooShort: number;
+  summaryTooLong: number;
+  summaryInTarget: number;
+  orphanDays: number;
+  flaggedDays: number;
+  reviewQueue: {
+    pending: number;
+    approved: number;
+    rejected: number;
+    pendingByPhase: Record<string, number>;
+  };
+  yearCounts: Array<{ year: number; count: number }>;
+  computedAt: string;
+};
+
+export type CorpusMetricsSampleReport = {
+  sampled: number;
+  usefulTopicSuggestionPct: number;
+  legacyTopicPct: number;
+  modelReasonPct: number;
+  autoPassPct: number;
+  phaseCounts: Record<string, number>;
+  samples: Array<{
+    date: string;
+    phase: string;
+    hasTopicSuggestion: boolean;
+    hasModelTopicReason: boolean;
+    legacyTopic: boolean;
+    wouldAutoApply: number;
+    wouldQueue: number;
+  }>;
+  dateFrom?: string;
+  dateTo?: string;
+  seed?: string;
+};
+
+export type VerificationCheckStatus = "pass" | "warn" | "fail";
+
+export type DayVerificationResult = {
+  date: string;
+  mode: "quick" | "full";
+  passed: boolean;
+  checks: Array<{
+    id: string;
+    label: string;
+    status: VerificationCheckStatus;
+    message: string;
+  }>;
+  summaryPreview: string | null;
+  topics: string[];
+  tags: string[];
+  corpusPhase?: string;
+  wouldQueue?: string[];
+};
+
+export async function fetchCorpusOverviewMetrics() {
+  const res = await fetch("/api/agent/pipeline/metrics/overview", {
+    headers: jsonHeaders,
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as CorpusOverviewMetrics;
+}
+
+export async function fetchCorpusMetricsSample(body: {
+  dateFrom: string;
+  dateTo: string;
+  count: number;
+  seed?: string;
+}) {
+  const res = await fetch("/api/agent/pipeline/metrics/sample", {
+    method: "POST",
+    headers: jsonHeaders,
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as CorpusMetricsSampleReport;
+}
+
+export async function verifyEditorialDay(date: string, mode: "quick" | "full" = "quick") {
+  const res = await fetch("/api/agent/pipeline/verify-day", {
+    method: "POST",
+    headers: jsonHeaders,
+    credentials: "include",
+    body: JSON.stringify({ date, mode }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as DayVerificationResult;
 }
