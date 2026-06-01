@@ -47,7 +47,7 @@ import {
   sampleDatesInRange,
 } from "../services/editorial-pipeline/corpus-metrics";
 import { verifyEditorialDay } from "../services/editorial-pipeline/day-verification";
-import { resolveKnownEventContext } from "../services/editorial-pipeline/known-event-context";
+import { resolveKnownEventContextBatch, type KnownEventContext } from "../services/editorial-pipeline/known-event-context";
 import {
   buildCalendarReciprocalPair,
   inferCalendarChronologyHint,
@@ -378,24 +378,28 @@ function buildCorrectionSummarySource(opts: {
 function buildDayAnalysisPreview(row: {
   summary: string | null;
   topArticleId: string | null;
-  tieredArticles: unknown;
-  analyzedArticles: unknown;
+  tieredArticles?: unknown;
+  analyzedArticles?: unknown;
   topicCategories: unknown;
   tagsVersion2: string[] | null;
   totalArticlesFetched: number | null;
   tierUsed: string | null;
   winningTier: string | null;
 }): DayAnalysisPreview {
-  const tiered = row.tieredArticles;
-  const analyzed = row.analyzedArticles;
+  const tiered = row.tieredArticles ?? null;
+  const analyzed = row.analyzedArticles ?? null;
+  const topArticle =
+    tiered || analyzed ?
+      resolveDayTopArticle({
+        topArticleId: row.topArticleId,
+        tieredArticles: tiered,
+        analyzedArticles: analyzed,
+      })
+    : topArticleFromIdOnly(row.topArticleId);
   return {
     summary: row.summary ?? "",
     topArticleId: row.topArticleId ?? null,
-    topArticle: resolveDayTopArticle({
-      topArticleId: row.topArticleId,
-      tieredArticles: tiered,
-      analyzedArticles: analyzed,
-    }),
+    topArticle,
     tags: Array.isArray(row.tagsVersion2)
       ? row.tagsVersion2.filter((t): t is string => typeof t === "string" && t.trim() !== "")
       : [],
@@ -403,11 +407,26 @@ function buildDayAnalysisPreview(row: {
     totalArticlesFetched: row.totalArticlesFetched ?? null,
     tierUsed: row.tierUsed?.trim() || null,
     winningTier: row.winningTier?.trim() || null,
-    sourceArticles: collectDaySourceArticles({ tieredArticles: tiered, analyzedArticles: analyzed }),
+    sourceArticles:
+      tiered || analyzed ?
+        collectDaySourceArticles({ tieredArticles: tiered, analyzedArticles: analyzed })
+      : [],
     redoSummaryAvailable: isValidPipelineTopArticleId(row.topArticleId),
     tieredArticles: tiered,
     analyzedArticles: analyzed,
   };
+}
+
+function topArticleFromIdOnly(topArticleId: string | null): { title: string; url: string } | null {
+  const id = topArticleId?.trim();
+  if (!id || !isValidPipelineTopArticleId(id)) return null;
+  if (id.startsWith("http")) return { title: "Winning article", url: id };
+  return null;
+}
+
+function correctionNeedsHeavyArticles(pkg: unknown): boolean {
+  if (!isCorrectionApprovalPackage(pkg)) return false;
+  return pkg.proposals.some((p) => p.kind === "redo_summary" || p.kind === "edit_summary");
 }
 
 function normalizeEventDate(d: unknown): string | null {
@@ -619,7 +638,19 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 100, 500);
     const items = await withTransientDbRetry(async () => {
     const rows = await db
-      .select()
+      .select({
+        id: humanReviewQueue.id,
+        runId: humanReviewQueue.runId,
+        stepId: humanReviewQueue.stepId,
+        status: humanReviewQueue.status,
+        priority: humanReviewQueue.priority,
+        eventDate: humanReviewQueue.eventDate,
+        reviewer: humanReviewQueue.reviewer,
+        reviewNotes: humanReviewQueue.reviewNotes,
+        package: humanReviewQueue.package,
+        createdAt: humanReviewQueue.createdAt,
+        reviewedAt: humanReviewQueue.reviewedAt,
+      })
       .from(humanReviewQueue)
       .where(eq(humanReviewQueue.status, status))
       .orderBy(
@@ -643,15 +674,13 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
     const analysisLookupDates = [...new Set([...dates, ...calendarExpectedDates])];
 
     const analysisByDate = new Map<string, DayAnalysisPreview>();
-    const knownEventByDate = new Map<string, Awaited<ReturnType<typeof resolveKnownEventContext>>>();
+    const knownEventByDate = new Map<string, KnownEventContext>();
     if (analysisLookupDates.length) {
-      const analyses = await db
+      const lightAnalyses = await db
         .select({
           date: historicalNewsAnalyses.date,
           summary: historicalNewsAnalyses.summary,
           topArticleId: historicalNewsAnalyses.topArticleId,
-          tieredArticles: historicalNewsAnalyses.tieredArticles,
-          analyzedArticles: historicalNewsAnalyses.analyzedArticles,
           topicCategories: historicalNewsAnalyses.topicCategories,
           tagsVersion2: historicalNewsAnalyses.tagsVersion2,
           totalArticlesFetched: historicalNewsAnalyses.totalArticlesFetched,
@@ -661,17 +690,70 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
         .from(historicalNewsAnalyses)
         .where(inArray(historicalNewsAnalyses.date, analysisLookupDates));
 
-      for (const a of analyses) {
+      const lightByDate = new Map<string, (typeof lightAnalyses)[number]>();
+      for (const a of lightAnalyses) {
         const ymd = normalizeEventDate(a.date);
-        if (!ymd) continue;
-        analysisByDate.set(ymd, buildDayAnalysisPreview(a));
+        if (ymd) lightByDate.set(ymd, a);
       }
 
-      await Promise.all(
-        dates.map(async (ymd) => {
-          knownEventByDate.set(ymd, await resolveKnownEventContext(ymd));
+      const heavyDates = [
+        ...new Set(
+          rows
+            .map((r) => {
+              const ymd = normalizeEventDate(r.eventDate);
+              if (!ymd || !correctionNeedsHeavyArticles(r.package)) return null;
+              const topArticleId = lightByDate.get(ymd)?.topArticleId ?? null;
+              return isValidPipelineTopArticleId(topArticleId) ? ymd : null;
+            })
+            .filter((x): x is string => Boolean(x)),
+        ),
+      ];
+
+      const heavyByDate = new Map<string, { tieredArticles: unknown; analyzedArticles: unknown }>();
+      if (heavyDates.length) {
+        const heavyAnalyses = await db
+          .select({
+            date: historicalNewsAnalyses.date,
+            tieredArticles: historicalNewsAnalyses.tieredArticles,
+            analyzedArticles: historicalNewsAnalyses.analyzedArticles,
+          })
+          .from(historicalNewsAnalyses)
+          .where(inArray(historicalNewsAnalyses.date, heavyDates));
+
+        for (const a of heavyAnalyses) {
+          const ymd = normalizeEventDate(a.date);
+          if (!ymd) continue;
+          heavyByDate.set(ymd, {
+            tieredArticles: a.tieredArticles,
+            analyzedArticles: a.analyzedArticles,
+          });
+        }
+      }
+
+      for (const ymd of analysisLookupDates) {
+        const light = lightByDate.get(ymd);
+        if (!light) continue;
+        const heavy = heavyByDate.get(ymd);
+        analysisByDate.set(
+          ymd,
+          buildDayAnalysisPreview({
+            ...light,
+            tieredArticles: heavy?.tieredArticles,
+            analyzedArticles: heavy?.analyzedArticles,
+          }),
+        );
+      }
+
+      const knownEvents = await resolveKnownEventContextBatch(
+        dates,
+        lightAnalyses.filter((a) => {
+          const ymd = normalizeEventDate(a.date);
+          return ymd ? dates.includes(ymd) : false;
         }),
       );
+      for (const [ymd, ctx] of knownEvents) {
+        knownEventByDate.set(ymd, ctx);
+      }
     }
 
     const mappedItems = rows.map((r) => {

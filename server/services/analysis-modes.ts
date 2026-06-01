@@ -1,4 +1,4 @@
-import { normalizeEditorialSummaryText } from './editorial-pipeline/editorial-quality';
+import { coerceEditorialSummaryLength, normalizeEditorialSummaryText } from './editorial-pipeline/editorial-quality';
 import { hierarchicalSearch } from './hierarchical-search';
 import { aiService } from './ai';
 import { apiMonitor } from './api-monitor';
@@ -507,7 +507,8 @@ export async function generateSummaryWithOpenAI(
   });
   
   try {
-    // Use generateCompletion - just get the summary text (plain text, not JSON)
+    const MAX_GENERATION_ATTEMPTS = 3;
+    const maxAdjustmentRounds = 4;
     const summaryPrompt = `Create a summary for a historical timeline entry from this article.
 
 Date: ${date}
@@ -526,103 +527,135 @@ CRITICAL REQUIREMENTS:
 8. Emphasize the actual event/outcome over the reporting
 
 IMPORTANT: After writing your summary, count the characters. If it's not between 100-110 characters, rewrite it until it is. Return ONLY the summary text, nothing else.`;
-    
-    let summaryResult = await openaiProvider.generateCompletion({
-      prompt: summaryPrompt,
-      model: LEGACY_ANALYSIS_OPENAI_MODEL,
-      maxTokens: 150,
-      temperature: 0.2,
-      context: 'summary-generation',
-      purpose: `Generate summary for ${tier} tier article`
-    });
-    
-    let finalSummary = normalizeEditorialSummaryText(summaryResult.text);
-    let length = finalSummary.length;
-    let adjustmentRound = 0;
-    const maxAdjustmentRounds = 3;
-    
-    console.log(`   📝 Initial summary (${length} chars): "${finalSummary.substring(0, 60)}${finalSummary.length > 60 ? '...' : ''}"`);
-    
-    while ((length < 100 || length > 110) && adjustmentRound < maxAdjustmentRounds) {
-      adjustmentRound++;
-      console.log(`   ⚠️ Summary length ${length} chars (round ${adjustmentRound}/${maxAdjustmentRounds}), adjusting...`);
-      
-      if (length < 100) {
-        const adjustPrompt = `⚠️ CRITICAL: The following summary is too short (${length} chars). You MUST expand it to exactly 100-110 characters. Count every character including spaces. Verify the character count before responding.
+
+    let lastSummary = "";
+    let lastLength = 0;
+
+    for (let generationAttempt = 1; generationAttempt <= MAX_GENERATION_ATTEMPTS; generationAttempt += 1) {
+      const temperature = generationAttempt === 1 ? 0.2 : 0.35;
+      if (generationAttempt > 1) {
+        console.log(
+          `   🔁 [${requestId}] Summary length retry ${generationAttempt}/${MAX_GENERATION_ATTEMPTS} (previous=${lastLength} chars)`,
+        );
+      }
+
+      const summaryResult = await openaiProvider.generateCompletion({
+        prompt: summaryPrompt,
+        model: LEGACY_ANALYSIS_OPENAI_MODEL,
+        maxTokens: 150,
+        temperature,
+        context: 'summary-generation',
+        purpose: `Generate summary for ${tier} tier article (attempt ${generationAttempt})`,
+      });
+
+      let finalSummary = normalizeEditorialSummaryText(summaryResult.text);
+      let length = finalSummary.length;
+      let adjustmentRound = 0;
+
+      console.log(
+        `   📝 Initial summary attempt ${generationAttempt} (${length} chars): "${finalSummary.substring(0, 60)}${finalSummary.length > 60 ? "..." : ""}"`,
+      );
+
+      while ((length < 100 || length > 110) && adjustmentRound < maxAdjustmentRounds) {
+        adjustmentRound += 1;
+        console.log(`   ⚠️ Summary length ${length} chars (round ${adjustmentRound}/${maxAdjustmentRounds}), adjusting...`);
+
+        if (length < 100) {
+          const need = 100 - length;
+          const adjustPrompt = `⚠️ CRITICAL: The following summary is too short (${length} chars). You MUST expand it to exactly 100-110 characters (add about ${need} characters). Count every character including spaces. Verify the character count before responding.
 
 Current: "${finalSummary}"
 
 Return ONLY the expanded summary text (100-110 chars), nothing else.`;
-        
-        const adjusted = await openaiProvider.generateCompletion({
-          prompt: adjustPrompt,
-          model: LEGACY_ANALYSIS_OPENAI_MODEL,
-          maxTokens: 150,
-          temperature: 0.2,
-          context: 'summary-adjustment',
-          purpose: `Adjust summary length (round ${adjustmentRound})`
-        });
-        
-        finalSummary = normalizeEditorialSummaryText(adjusted.text);
-        length = finalSummary.length;
-        console.log(`   📝 After adjustment round ${adjustmentRound} (${length} chars): "${finalSummary.substring(0, 60)}${finalSummary.length > 60 ? '...' : ''}"`);
-      } else if (length > 110) {
-        const adjustPrompt = `⚠️ CRITICAL: The following summary is too long (${length} chars). You MUST shorten it to exactly 100-110 characters. Count every character including spaces. Verify the character count before responding.
+
+          const adjusted = await openaiProvider.generateCompletion({
+            prompt: adjustPrompt,
+            model: LEGACY_ANALYSIS_OPENAI_MODEL,
+            maxTokens: 150,
+            temperature,
+            context: 'summary-adjustment',
+            purpose: `Adjust summary length (attempt ${generationAttempt}, round ${adjustmentRound})`,
+          });
+
+          finalSummary = normalizeEditorialSummaryText(adjusted.text);
+          length = finalSummary.length;
+        } else {
+          const trimBy = length - 110;
+          const adjustPrompt = `⚠️ CRITICAL: The following summary is too long (${length} chars). You MUST shorten it to exactly 100-110 characters (remove about ${trimBy} characters). Count every character including spaces. Verify the character count before responding.
 
 Current: "${finalSummary}"
 
 Return ONLY the shortened summary text (100-110 chars), nothing else.`;
-        
-        const adjusted = await openaiProvider.generateCompletion({
-          prompt: adjustPrompt,
-          model: LEGACY_ANALYSIS_OPENAI_MODEL,
-          maxTokens: 150,
-          temperature: 0.2,
-          context: 'summary-adjustment',
-          purpose: `Adjust summary length (round ${adjustmentRound})`
-        });
-        
-        finalSummary = normalizeEditorialSummaryText(adjusted.text);
-        length = finalSummary.length;
-        console.log(`   📝 After adjustment round ${adjustmentRound} (${length} chars): "${finalSummary.substring(0, 60)}${finalSummary.length > 60 ? '...' : ''}"`);
+
+          const adjusted = await openaiProvider.generateCompletion({
+            prompt: adjustPrompt,
+            model: LEGACY_ANALYSIS_OPENAI_MODEL,
+            maxTokens: 150,
+            temperature,
+            context: 'summary-adjustment',
+            purpose: `Adjust summary length (attempt ${generationAttempt}, round ${adjustmentRound})`,
+          });
+
+          finalSummary = normalizeEditorialSummaryText(adjusted.text);
+          length = finalSummary.length;
+        }
+
+        console.log(
+          `   📝 After adjustment round ${adjustmentRound} (${length} chars): "${finalSummary.substring(0, 60)}${finalSummary.length > 60 ? "..." : ""}"`,
+        );
+      }
+
+      lastSummary = finalSummary;
+      lastLength = length;
+
+      if (finalSummary.trim() && length >= 100 && length <= 110) {
+        console.log(`✅ [${requestId}] Summary generated successfully: ${length} chars`);
+        apiMonitor.updateRequest(summaryRequestId, { status: 'success' });
+        return {
+          summary: finalSummary,
+          topArticleId: articleId,
+          reasoning: `Selected article from ${tier} tier for ${date}`,
+          aiProvider: 'openai',
+          confidenceScore: 75,
+          sentimentScore: 0,
+          sentimentLabel: 'neutral' as const,
+          topicCategories: [],
+        };
+      }
+
+      const coerced = coerceEditorialSummaryLength(finalSummary);
+      if (coerced) {
+        console.log(`✅ [${requestId}] Summary coerced to editorial length: ${coerced.length} chars`);
+        apiMonitor.updateRequest(summaryRequestId, { status: 'success' });
+        return {
+          summary: coerced,
+          topArticleId: articleId,
+          reasoning: `Selected article from ${tier} tier for ${date}`,
+          aiProvider: 'openai',
+          confidenceScore: 75,
+          sentimentScore: 0,
+          sentimentLabel: 'neutral' as const,
+          topicCategories: [],
+        };
       }
     }
-    
-    // Final validation - ensure summary is not empty
-    if (!finalSummary || finalSummary.trim().length === 0) {
+
+    if (!lastSummary || lastSummary.trim().length === 0) {
       console.error(`❌ [${requestId}] Summary generation failed - returned empty string`);
       apiMonitor.updateRequest(summaryRequestId, {
         status: 'error',
-        error: 'Summary generation returned empty string'
+        error: 'Summary generation returned empty string',
       });
       throw new Error(`Summary generation failed for ${date} - OpenAI returned empty summary`);
     }
-    
-    // Final validation: summary length is a hard cleanup gate.
-    if (length < 100 || length > 110) {
-      apiMonitor.updateRequest(summaryRequestId, {
-        status: 'error',
-        error: `Summary length ${length} chars is outside 100-110 range`
-      });
-      throw new Error(`Summary generation failed for ${date} - final summary length ${length} is outside 100-110`);
-    }
 
-    console.log(`✅ [${requestId}] Summary generated successfully: ${length} chars`);
-    
     apiMonitor.updateRequest(summaryRequestId, {
-      status: 'success'
+      status: 'error',
+      error: `Summary length ${lastLength} chars is outside 100-110 range after ${MAX_GENERATION_ATTEMPTS} attempts`,
     });
-    
-    return {
-      summary: finalSummary,
-      topArticleId: articleId,
-      reasoning: `Selected article from ${tier} tier for ${date}`,
-      aiProvider: 'openai',
-      confidenceScore: 75,
-      sentimentScore: 0,
-      sentimentLabel: 'neutral' as const,
-      topicCategories: []
-    };
+    throw new Error(
+      `Summary generation failed for ${date} - final summary length ${lastLength} is outside 100-110`,
+    );
   } catch (error) {
     apiMonitor.updateRequest(summaryRequestId, {
       status: 'error',

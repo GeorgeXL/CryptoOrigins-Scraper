@@ -11,6 +11,7 @@ import {
   isRoundupMultiStorySummary,
   summaryDisallowedSymbol,
   normalizeEditorialSummaryText,
+  coerceEditorialSummaryLength,
   summaryHasTrailingPunctuation,
   findImproperProperNouns,
 } from "../services/editorial-pipeline/editorial-quality";
@@ -105,4 +106,13 @@ test("evaluateSummaryQuality rejects trailing full stop and lowercase bitcoin", 
   const lowercase =
     "bitcoin reaches new highs as markets rally with strong momentum from traders worldwide pushing prices higher";
   assert.equal(evaluateSummaryQuality(lowercase)?.code, "improper_capitalization");
+});
+
+test("coerceEditorialSummaryLength trims slightly overlong summaries to 100-110", () => {
+  const raw =
+    "Bitcoin wallet providers announce coordinated security upgrades after researchers disclose vulnerabilities affecting";
+  assert.ok(raw.length > 110 && raw.length <= 120);
+  const coerced = coerceEditorialSummaryLength(raw);
+  assert.ok(coerced);
+  assert.ok(coerced.length >= 100 && coerced.length <= 110);
 });

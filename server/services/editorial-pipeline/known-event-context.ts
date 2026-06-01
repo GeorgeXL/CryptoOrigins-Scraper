@@ -1,7 +1,7 @@
 /**
  * Known / manual / milestone days — no Exa article required, but summary must match the event.
  */
-import { eq } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { db } from "../../db";
 import {
   canonicalMilestones,
@@ -107,43 +107,114 @@ export function buildKnownEventContext(input: {
 }
 
 export async function resolveKnownEventContext(date: string): Promise<KnownEventContext> {
-  const [row] = await db
-    .select({
-      topArticleId: historicalNewsAnalyses.topArticleId,
-      isManualOverride: historicalNewsAnalyses.isManualOverride,
-    })
-    .from(historicalNewsAnalyses)
-    .where(eq(historicalNewsAnalyses.date, date))
-    .limit(1);
+  const batch = await resolveKnownEventContextBatch([date]);
+  return batch.get(date) ?? buildKnownEventContext({});
+}
 
-  const [milestone] = await db
+function normalizeContextDate(d: unknown): string | null {
+  if (d == null) return null;
+  if (typeof d === "string") return d.length >= 10 ? d.slice(0, 10) : null;
+  if (d instanceof Date) return d.toISOString().slice(0, 10);
+  return null;
+}
+
+/** Batched known-event lookup — 2–3 queries total instead of 3×N. */
+export async function resolveKnownEventContextBatch(
+  dates: string[],
+  preloadedAnalyses?: Iterable<{
+    date: unknown;
+    topArticleId?: string | null;
+    isManualOverride?: boolean | null;
+  }>,
+): Promise<Map<string, KnownEventContext>> {
+  const uniqueDates = [...new Set(dates.map((d) => d.trim()).filter(Boolean))];
+  const out = new Map<string, KnownEventContext>();
+  if (uniqueDates.length === 0) return out;
+
+  const analysisByDate = new Map<string, { topArticleId?: string | null; isManualOverride?: boolean | null }>();
+  if (preloadedAnalyses) {
+    for (const row of preloadedAnalyses) {
+      const ymd = normalizeContextDate(row.date);
+      if (ymd) {
+        analysisByDate.set(ymd, {
+          topArticleId: row.topArticleId,
+          isManualOverride: row.isManualOverride,
+        });
+      }
+    }
+  } else {
+    const analyses = await db
+      .select({
+        date: historicalNewsAnalyses.date,
+        topArticleId: historicalNewsAnalyses.topArticleId,
+        isManualOverride: historicalNewsAnalyses.isManualOverride,
+      })
+      .from(historicalNewsAnalyses)
+      .where(inArray(historicalNewsAnalyses.date, uniqueDates));
+
+    for (const row of analyses) {
+      const ymd = normalizeContextDate(row.date);
+      if (ymd) analysisByDate.set(ymd, row);
+    }
+  }
+
+  const milestones = await db
     .select({
+      expectedDate: canonicalMilestones.expectedDate,
       slug: canonicalMilestones.slug,
       label: canonicalMilestones.label,
       description: canonicalMilestones.description,
     })
     .from(canonicalMilestones)
-    .where(eq(canonicalMilestones.expectedDate, date))
-    .limit(1);
+    .where(inArray(canonicalMilestones.expectedDate, uniqueDates));
 
-  const manualEntries = await db
+  const milestoneByDate = new Map<string, (typeof milestones)[number]>();
+  for (const row of milestones) {
+    const ymd = normalizeContextDate(row.expectedDate);
+    if (ymd) milestoneByDate.set(ymd, row);
+  }
+
+  const manualRows = await db
     .select({
+      date: manualNewsEntries.date,
       title: manualNewsEntries.title,
       description: manualNewsEntries.description,
     })
     .from(manualNewsEntries)
-    .where(eq(manualNewsEntries.date, date));
+    .where(inArray(manualNewsEntries.date, uniqueDates));
 
-  const manualEntry = manualEntries[0] ?? null;
+  const manualByDate = new Map<string, typeof manualRows>();
+  for (const row of manualRows) {
+    const ymd = normalizeContextDate(row.date);
+    if (!ymd) continue;
+    const list = manualByDate.get(ymd) ?? [];
+    list.push(row);
+    manualByDate.set(ymd, list);
+  }
 
-  return buildKnownEventContext({
-    topArticleId: row?.topArticleId,
-    isManualOverride: row?.isManualOverride,
-    manualEntryCount: manualEntries.length,
-    manualEntryTitle: manualEntry?.title ?? null,
-    manualEntryDescription: manualEntry?.description ?? null,
-    milestone: milestone ? { slug: milestone.slug, label: milestone.label, description: milestone.description } : null,
-  });
+  for (const ymd of uniqueDates) {
+    const row = analysisByDate.get(ymd);
+    const milestone = milestoneByDate.get(ymd);
+    const manualEntries = manualByDate.get(ymd) ?? [];
+    const manualEntry = manualEntries[0] ?? null;
+
+    out.set(
+      ymd,
+      buildKnownEventContext({
+        topArticleId: row?.topArticleId,
+        isManualOverride: row?.isManualOverride,
+        manualEntryCount: manualEntries.length,
+        manualEntryTitle: manualEntry?.title ?? null,
+        manualEntryDescription: manualEntry?.description ?? null,
+        milestone:
+          milestone ?
+            { slug: milestone.slug, label: milestone.label, description: milestone.description }
+          : null,
+      }),
+    );
+  }
+
+  return out;
 }
 
 /** True when the day is curated without requiring a fetched article winner. */

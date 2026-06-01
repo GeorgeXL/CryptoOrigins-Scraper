@@ -98,6 +98,21 @@ export function normalizeEditorialSummaryText(summary: string): string {
   return fixEditorialSummaryProperNouns(stripTrailingSummaryPunctuation(summary.trim()));
 }
 
+/** Trim slightly-overlong summaries to the 100–110 window at a word boundary. */
+export function coerceEditorialSummaryLength(summary: string): string | null {
+  const normalized = normalizeEditorialSummaryText(summary);
+  if (!normalized) return null;
+  const len = normalized.length;
+  if (len >= EDITORIAL_SUMMARY_TARGET_MIN && len <= EDITORIAL_SUMMARY_TARGET_MAX) return normalized;
+  if (len > EDITORIAL_SUMMARY_TARGET_MAX && len <= EDITORIAL_SUMMARY_TARGET_MAX + 10) {
+    let cut = normalized.slice(0, EDITORIAL_SUMMARY_TARGET_MAX);
+    const lastSpace = cut.lastIndexOf(" ");
+    if (lastSpace >= EDITORIAL_SUMMARY_TARGET_MIN) cut = cut.slice(0, lastSpace).trim();
+    if (cut.length >= EDITORIAL_SUMMARY_TARGET_MIN && cut.length <= EDITORIAL_SUMMARY_TARGET_MAX) return cut;
+  }
+  return null;
+}
+
 /** Mirrors Events Manager quality rules — timeline summaries are one clause, one event. */
 export function summaryDisallowedSymbol(summary: string): string | null {
   if (summary.includes(";")) return "semicolon";
