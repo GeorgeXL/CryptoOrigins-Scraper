@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { asc, desc, eq, and, inArray } from "drizzle-orm";
+import { asc, desc, eq, and, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 import { historicalNewsAnalyses, humanReviewQueue, pipelineRuns } from "@shared/schema";
 import { requireAgentSecret } from "../services/agents-sdk/auth";
@@ -429,6 +429,33 @@ function correctionNeedsHeavyArticles(pkg: unknown): boolean {
   return pkg.proposals.some((p) => p.kind === "redo_summary" || p.kind === "edit_summary");
 }
 
+const REVIEW_QUEUE_SCENARIO_PHASES = [
+  "awaiting_article_pick",
+  "awaiting_summary_approval",
+  "awaiting_correction_approval",
+  "awaiting_calendar_decision",
+  "awaiting_duplicate_decision",
+] as const;
+
+type ReviewQueueScenarioPhase = (typeof REVIEW_QUEUE_SCENARIO_PHASES)[number] | "triage";
+
+function reviewQueuePhaseWhere(phase: ReviewQueueScenarioPhase) {
+  if (phase === "triage") {
+    return sql`(
+      ${humanReviewQueue.package}->>'phase' IS NULL
+      OR ${humanReviewQueue.package}->>'phase' = 'legacy'
+      OR ${humanReviewQueue.package}->>'phase' NOT IN (
+        'awaiting_article_pick',
+        'awaiting_summary_approval',
+        'awaiting_correction_approval',
+        'awaiting_calendar_decision',
+        'awaiting_duplicate_decision'
+      )
+    )`;
+  }
+  return sql`${humanReviewQueue.package}->>'phase' = ${phase}`;
+}
+
 function normalizeEventDate(d: unknown): string | null {
   if (d == null) return null;
   if (typeof d === "string") return d.length >= 10 ? d.slice(0, 10) : null;
@@ -634,10 +661,46 @@ router.get("/api/agent/pipeline/runs/:id/evidence", async (req, res) => {
 router.get("/api/agent/pipeline/review", async (req, res) => {
   try {
     requireAgentSecret(req);
-    const status = (req.query.status as string) || "pending";
-    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const statusParam = (req.query.status as string) || "pending";
+    if (!["pending", "approved", "rejected", "all"].includes(statusParam)) {
+      return res.status(400).json({ error: "Invalid status (pending | approved | rejected | all)" });
+    }
+    const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 100);
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const phaseParam = typeof req.query.phase === "string" ? req.query.phase.trim() : "";
+    const scenarioPhase: ReviewQueueScenarioPhase | null =
+      phaseParam && phaseParam !== "all" ?
+        (phaseParam as ReviewQueueScenarioPhase)
+      : null;
+    if (
+      scenarioPhase &&
+      scenarioPhase !== "triage" &&
+      !(REVIEW_QUEUE_SCENARIO_PHASES as readonly string[]).includes(scenarioPhase)
+    ) {
+      return res.status(400).json({ error: "Invalid phase filter" });
+    }
+    const statusFilter = statusParam === "all" ? null : statusParam;
     const items = await withTransientDbRetry(async () => {
-    const rows = await db
+    const queueOrder =
+      statusFilter === "approved" || statusFilter === "rejected"
+        ? [desc(humanReviewQueue.reviewedAt), asc(humanReviewQueue.createdAt)]
+        : statusFilter === "pending"
+          ? [desc(humanReviewQueue.priority), asc(humanReviewQueue.createdAt)]
+          : [desc(humanReviewQueue.eventDate), desc(humanReviewQueue.createdAt)];
+
+    const whereParts = [];
+    if (statusFilter) whereParts.push(eq(humanReviewQueue.status, statusFilter));
+    if (scenarioPhase) whereParts.push(reviewQueuePhaseWhere(scenarioPhase));
+    const queueWhere = whereParts.length === 0 ? undefined : whereParts.length === 1 ? whereParts[0] : and(...whereParts);
+
+    const [countRow] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(humanReviewQueue)
+      .where(queueWhere ?? sql`true`);
+
+    const total = Number(countRow?.count ?? 0);
+
+    let rowsQuery = db
       .select({
         id: humanReviewQueue.id,
         runId: humanReviewQueue.runId,
@@ -652,14 +715,13 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
         reviewedAt: humanReviewQueue.reviewedAt,
       })
       .from(humanReviewQueue)
-      .where(eq(humanReviewQueue.status, status))
-      .orderBy(
-        status === "approved" || status === "rejected"
-          ? desc(humanReviewQueue.reviewedAt)
-          : desc(humanReviewQueue.priority),
-        asc(humanReviewQueue.createdAt),
-      )
-      .limit(limit);
+      .$dynamic();
+
+    if (queueWhere) {
+      rowsQuery = rowsQuery.where(queueWhere);
+    }
+
+    const rows = await rowsQuery.orderBy(...queueOrder).limit(limit).offset(offset);
 
     const dates = [
       ...new Set(rows.map((r) => normalizeEventDate(r.eventDate)).filter((x): x is string => Boolean(x))),
@@ -850,10 +912,10 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
 
     const withCalendarPairs = attachCalendarReciprocalPairs(mappedItems);
 
-    return withCalendarPairs;
+    return { items: withCalendarPairs, total, limit, offset, hasMore: offset + withCalendarPairs.length < total };
     });
 
-    res.json({ items });
+    res.json(items);
   } catch (e: any) {
     res.status(e.status || 500).json({ error: e.message || "Failed to load review queue" });
   }

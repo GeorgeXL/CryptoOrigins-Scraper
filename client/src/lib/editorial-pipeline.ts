@@ -251,14 +251,41 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-export async function fetchReviewQueue(status: "pending" | "approved" | "rejected", limit = 200) {
-  const res = await fetch(`/api/agent/pipeline/review?status=${status}&limit=${limit}`, {
+export type ReviewQueuePage = {
+  items: EditorialReviewItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+export async function fetchReviewQueue(
+  status: "pending" | "approved" | "rejected" | "all",
+  opts?: { limit?: number; offset?: number; phase?: string },
+): Promise<ReviewQueuePage> {
+  const limit = opts?.limit ?? 50;
+  const offset = opts?.offset ?? 0;
+  const params = new URLSearchParams({
+    status,
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (opts?.phase && opts.phase !== "all") {
+    params.set("phase", opts.phase);
+  }
+  const res = await fetch(`/api/agent/pipeline/review?${params.toString()}`, {
     headers: jsonHeaders,
     credentials: "include",
   });
   if (!res.ok) throw new Error(await parseError(res));
-  const data = (await res.json()) as { items?: EditorialReviewItem[] };
-  return data.items ?? [];
+  const data = (await res.json()) as Partial<ReviewQueuePage>;
+  return {
+    items: data.items ?? [],
+    total: data.total ?? data.items?.length ?? 0,
+    limit: data.limit ?? limit,
+    offset: data.offset ?? offset,
+    hasMore: data.hasMore ?? false,
+  };
 }
 
 export async function startPipelineRun(body: {

@@ -40,7 +40,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { Check, ChevronDown, Copy, Info, Link2, Loader2, RefreshCw, ShieldCheck, Trash2, X, XCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Info, Link2, Loader2, RefreshCw, ShieldCheck, Trash2, X, XCircle } from "lucide-react";
 
 type QueueStatus = "pending" | "approved" | "rejected";
 type FilterTab = QueueStatus | "all";
@@ -1073,7 +1073,9 @@ function QueueList({
                                   Verify
                                 </Button>
                                 <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" asChild>
-                                  <Link href={`/day/${row.date}`}>Open day</Link>
+                                  <Link href={`/day/${row.date}`} target="_blank" rel="noopener noreferrer">
+                                    Open day
+                                  </Link>
                                 </Button>
                               </>
                             ) : null}
@@ -1116,6 +1118,8 @@ function QueueList({
   );
 }
 
+const QUEUE_PAGE_SIZE = 50;
+
 export default function AgentsV2HomePanel() {
   const [filter, setFilter] = useState<FilterTab>("pending");
   const [scenarioFilter, setScenarioFilter] = useState<ScenarioFilter>("all");
@@ -1125,23 +1129,21 @@ export default function AgentsV2HomePanel() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [advanceSignal, setAdvanceSignal] = useState<{ id: string; nonce: number } | null>(null);
+  const [page, setPage] = useState(0);
+  const [queueTotal, setQueueTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
 
   const loadQueue = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     try {
-      if (filter === "all") {
-        const [pending, approved, rejected] = await Promise.all([
-          fetchReviewQueue("pending"),
-          fetchReviewQueue("approved"),
-          fetchReviewQueue("rejected"),
-        ]);
-        const merged = [...pending, ...approved, ...rejected].map(mapReviewItemToQueueRow);
-        merged.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-        setRows(merged);
-      } else {
-        const items = await fetchReviewQueue(filter);
-        setRows(items.map(mapReviewItemToQueueRow));
-      }
+      const status = filter === "all" ? "all" : filter;
+      const offset = page * QUEUE_PAGE_SIZE;
+      const phase =
+        filter === "pending" && scenarioFilter !== "all" ? scenarioFilter : undefined;
+      const result = await fetchReviewQueue(status, { limit: QUEUE_PAGE_SIZE, offset, phase });
+      setRows(result.items.map(mapReviewItemToQueueRow));
+      setQueueTotal(result.total);
+      setHasMore(result.hasMore);
     } catch (e) {
       toast({
         title: "Queue",
@@ -1151,7 +1153,7 @@ export default function AgentsV2HomePanel() {
     } finally {
       if (!opts?.silent) setLoading(false);
     }
-  }, [filter]);
+  }, [filter, page, scenarioFilter]);
 
   useEffect(() => {
     void loadQueue();
@@ -1274,14 +1276,10 @@ export default function AgentsV2HomePanel() {
   };
 
   const statusFiltered = filter === "all" ? rows : rows.filter((r) => r.status === filter);
-  const scenarioFiltered =
-    filter === "pending" && scenarioFilter !== "all"
-      ? statusFiltered.filter((r) => r.pipelinePhase === scenarioFilter)
-      : statusFiltered;
   const scenarioFilteredRows =
     filter === "pending" && scenarioFilter === "awaiting_duplicate_decision"
-      ? consolidateQueueRows(scenarioFiltered)
-      : scenarioFiltered;
+      ? consolidateQueueRows(statusFiltered)
+      : statusFiltered;
   const listProps = {
     rows: scenarioFilteredRows,
     busyId,
@@ -1293,6 +1291,9 @@ export default function AgentsV2HomePanel() {
     onRemove: handleRemove,
   };
 
+  const pageStart = queueTotal === 0 ? 0 : page * QUEUE_PAGE_SIZE + 1;
+  const pageEnd = Math.min((page + 1) * QUEUE_PAGE_SIZE, queueTotal);
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6 md:p-8">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1300,6 +1301,7 @@ export default function AgentsV2HomePanel() {
           <h2 className="text-lg font-semibold tracking-tight text-foreground">Review queue</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Review the recommended action, then approve, reject, or open the day.
+            {queueTotal > 0 ? ` ${queueTotal.toLocaleString()} item${queueTotal === 1 ? "" : "s"} in this tab.` : null}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1345,6 +1347,7 @@ export default function AgentsV2HomePanel() {
         onValueChange={(v) => {
           if (v === "pending" || v === "approved" || v === "rejected" || v === "all") {
             setFilter(v);
+            setPage(0);
             setExpandedId(null);
             if (v !== "pending" && scenarioFilter !== "all") {
               setScenarioFilter("all");
@@ -1366,7 +1369,11 @@ export default function AgentsV2HomePanel() {
             <select
               value={scenarioFilter}
               disabled={filter !== "pending"}
-              onChange={(e) => setScenarioFilter(e.target.value as ScenarioFilter)}
+              onChange={(e) => {
+                setScenarioFilter(e.target.value as ScenarioFilter);
+                setPage(0);
+                setExpandedId(null);
+              }}
               className="h-9 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-auto sm:min-w-[11rem]"
             >
               <option value="all">All scenarios</option>
@@ -1380,7 +1387,41 @@ export default function AgentsV2HomePanel() {
           </label>
         </div>
 
-        <div className="mt-4">
+        <div className="mt-4 space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-muted-foreground">
+              {loading ?
+                "Loading…"
+              : queueTotal === 0 ?
+                "No items on this page."
+              : `Showing ${pageStart.toLocaleString()}–${pageEnd.toLocaleString()} of ${queueTotal.toLocaleString()}`}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={loading || page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <ChevronLeft className="size-4" />
+                Previous
+              </Button>
+              <span className="min-w-[4.5rem] text-center text-xs text-muted-foreground">
+                Page {page + 1}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={loading || !hasMore}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
+          </div>
           {loading ? (
             <p className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> Loading…
