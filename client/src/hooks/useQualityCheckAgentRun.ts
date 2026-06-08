@@ -24,7 +24,6 @@ import {
 } from "@shared/quality-check-agent-actions";
 
 const POLL_MS = 1500;
-const STOP_GUARD_MS = 8000;
 
 type SlicePlan = { slices: PipelineRunWindow[]; currentIndex: number; checkScopes: PipelineCheckScope[] };
 
@@ -34,10 +33,11 @@ export function useQualityCheckAgentRun() {
   const [runId, setRunId] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<LogLine[]>([]);
   const [progressLabel, setProgressLabel] = useState<string | null>(null);
-  const [stopEnabledAtMs, setStopEnabledAtMs] = useState(0);
 
   const runningRef = useRef(running);
   runningRef.current = running;
+  const runIdRef = useRef<string | null>(null);
+  runIdRef.current = runId;
   const stopRequestedRef = useRef(false);
   const slicePlanRef = useRef<SlicePlan | null>(null);
   const completedLogRef = useRef<LogLine[]>([]);
@@ -57,14 +57,19 @@ export function useQualityCheckAgentRun() {
       checkScopes: PipelineCheckScope[],
       options: { appendLog?: boolean; sliceIndex?: number; sliceTotal?: number } = {},
     ) => {
+      if (stopRequestedRef.current) {
+        setRunning(false);
+        setProgressLabel(null);
+        return;
+      }
+
       if (!options.appendLog) {
         completedLogRef.current = [];
         slicePlanRef.current = null;
         setLogLines([]);
       }
       setRunId(null);
-      setStopEnabledAtMs(Date.now() + STOP_GUARD_MS);
-      stopRequestedRef.current = false;
+      runIdRef.current = null;
       setRunning(true);
       setProgressLabel(
         options.sliceIndex && options.sliceTotal
@@ -91,12 +96,12 @@ export function useQualityCheckAgentRun() {
           status: "rejected",
         });
         setRunning(false);
-        setStopEnabledAtMs(0);
         setProgressLabel(null);
         return;
       }
 
       setRunId(out.runId);
+      runIdRef.current = out.runId;
       rememberLastPipelineRunId(out.runId);
       const slicePrefix =
         options.sliceIndex && options.sliceTotal ? `Slice ${options.sliceIndex}/${options.sliceTotal} · ` : "";
@@ -180,6 +185,7 @@ export function useQualityCheckAgentRun() {
       }
 
       const checkScopes = action.checkScopes ?? [];
+      stopRequestedRef.current = false;
       slicePlanRef.current = { slices: windows, currentIndex: 0, checkScopes };
       completedLogRef.current = [
         {
@@ -199,37 +205,44 @@ export function useQualityCheckAgentRun() {
   );
 
   const stopRun = useCallback(async () => {
-    if (Date.now() < stopEnabledAtMs) {
-      toast({ title: "Run is starting", description: "Wait a few seconds before stopping." });
-      return;
-    }
     stopRequestedRef.current = true;
-    if (!runId) {
-      setRunning(false);
-      setStopEnabledAtMs(0);
-      setProgressLabel(null);
+    slicePlanRef.current = null;
+
+    const rid = runIdRef.current;
+    setRunning(false);
+    setProgressLabel(null);
+
+    if (!rid) {
       pushLog({ id: `qc-agent-stop-${Date.now()}`, text: "Cancelled before pipeline attached", status: "rejected" });
       return;
     }
-    try {
-      await stopPipelineRun(runId);
-    } catch {
-      /* best effort */
-    }
+
     setRunId(null);
-    setRunning(false);
-    setStopEnabledAtMs(0);
-    setProgressLabel(null);
-    slicePlanRef.current = null;
-    pushLog({ id: `qc-agent-stop-${Date.now()}`, text: "Stopped by operator", status: "rejected" });
-  }, [pushLog, runId, stopEnabledAtMs, toast]);
+    runIdRef.current = null;
+
+    try {
+      await stopPipelineRun(rid);
+      pushLog({ id: `qc-agent-stop-${Date.now()}`, text: "Stopped by operator", status: "rejected" });
+    } catch (error) {
+      pushLog({
+        id: `qc-agent-stop-${Date.now()}`,
+        text: error instanceof Error ? error.message : "Stop failed — run may still be active on the server",
+        status: "rejected",
+      });
+      toast({
+        title: "Could not stop run",
+        description: error instanceof Error ? error.message : "The pipeline may still be running.",
+        variant: "destructive",
+      });
+    }
+  }, [pushLog, toast]);
 
   useEffect(() => {
     if (!running || !runId) return;
     let cancelled = false;
 
     const poll = async () => {
-      if (cancelled || !runningRef.current) return;
+      if (cancelled || !runningRef.current || stopRequestedRef.current) return;
       try {
         const detail = await fetchPipelineRun(runId);
         if (cancelled) return;
@@ -258,7 +271,7 @@ export function useQualityCheckAgentRun() {
             ];
             setLogLines(completedLogRef.current);
             setRunId(null);
-            setStopEnabledAtMs(0);
+            runIdRef.current = null;
             void startPipelineSlice(plan.slices[nextIndex]!, plan.checkScopes, {
               appendLog: true,
               sliceIndex: nextIndex + 1,
@@ -270,9 +283,11 @@ export function useQualityCheckAgentRun() {
           completedLogRef.current = visible;
           setRunning(false);
           setRunId(null);
-          setStopEnabledAtMs(0);
+          runIdRef.current = null;
           setProgressLabel(null);
           slicePlanRef.current = null;
+          if (stopRequestedRef.current) return;
+
           const pending = humanReviewQueuedCount(detail.run.stats);
           toast({
             title: detail.run.status === "completed" ? "Agent run finished" : "Agent run stopped",
