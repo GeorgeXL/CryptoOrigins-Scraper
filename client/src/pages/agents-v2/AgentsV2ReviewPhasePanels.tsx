@@ -28,7 +28,16 @@ import {
   collectCalendarDateEntries,
 } from "@/pages/agents-v2/calendar-date-entries";
 import { effectiveReviewItemPhase, mapReviewItemToQueueRow } from "@/pages/agents-v2/map-review-queue";
-import { TOPIC_HIERARCHY, formatTopicLeafWithGroup } from "@shared/topic-hierarchy";
+import {
+  TOPIC_HIERARCHY,
+  TOPIC_HIERARCHY_LEAVES,
+  formatTopicLeafWithGroup,
+} from "@shared/topic-hierarchy";
+
+const TOPIC_SELECT_GROUPS = TOPIC_HIERARCHY.map((group) => ({
+  name: group.name,
+  leaves: [...group.leaves].sort((a, b) => a.localeCompare(b)),
+}));
 
 type PanelProps = {
   item: EditorialReviewItem;
@@ -143,6 +152,42 @@ function ChipEditor({
         className="min-w-[5rem] flex-1 border-0 bg-transparent text-xs outline-none"
       />
     </div>
+  );
+}
+
+function TopicHierarchySelect({
+  value,
+  onChange,
+  disabled,
+  placeholder = "Choose topic",
+}: {
+  value: string;
+  onChange: (leaf: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <Select value={value || undefined} disabled={disabled} onValueChange={onChange}>
+      <SelectTrigger className="h-8 w-full text-xs">
+        <SelectValue placeholder={placeholder}>
+          {value ? formatTopicLeafWithGroup(value) : undefined}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent className="max-h-72">
+        {TOPIC_SELECT_GROUPS.map((group) => (
+          <SelectGroup key={group.name}>
+            <SelectLabel className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {group.name}
+            </SelectLabel>
+            {group.leaves.map((leaf) => (
+              <SelectItem key={leaf} value={leaf} className="pl-6 text-xs">
+                {leaf}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -373,6 +418,8 @@ function SummaryApprovalPanel({ item, onApprove, busy }: PanelProps) {
 
   const len = summaryDraft.trim().length;
   const lengthOk = len >= 100 && len <= 110;
+  const validTopic = topicsDraft.find((topic) => TOPIC_HIERARCHY_LEAVES.includes(topic)) ?? "";
+  const needsTopicPick = !validTopic;
 
   return (
     <div className="space-y-2.5">
@@ -469,13 +516,29 @@ function SummaryApprovalPanel({ item, onApprove, busy }: PanelProps) {
           </Button>
         </div>
       ) : null}
-      <ChipEditor values={topicsDraft} onChange={setTopicsDraft} placeholder="topics" disabled={!isPending || busy} />
+      {needsTopicPick ? (
+        <div className="space-y-1.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.04] p-2">
+          <p className="text-[11px] font-medium text-amber-600">No storyline topic — choose one before approving</p>
+          <TopicHierarchySelect
+            value={validTopic}
+            onChange={(leaf) => setTopicsDraft([leaf])}
+            disabled={!isPending || busy}
+          />
+        </div>
+      ) : (
+        <ChipEditor
+          values={topicsDraft}
+          onChange={setTopicsDraft}
+          placeholder="topics"
+          disabled={!isPending || busy}
+        />
+      )}
       {isPending ? (
         <Button
           type="button"
           size="sm"
           className="w-full"
-          disabled={busy || !summaryDraft.trim() || !lengthOk}
+          disabled={busy || !summaryDraft.trim() || !lengthOk || needsTopicPick}
           onClick={() =>
             onApprove(item.id, {
               editedSummary: summaryDraft !== payload.generatedSummary ? summaryDraft : undefined,
