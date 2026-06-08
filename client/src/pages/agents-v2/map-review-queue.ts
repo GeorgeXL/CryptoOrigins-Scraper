@@ -20,6 +20,13 @@ export type AgentsV2QueueRow = {
   outcomePreview?: { kind: "approve" | "reject"; line: string };
   operatorSnapshot: OperatorSnapshot | null;
   item: EditorialReviewItem;
+  /** When multiple calendar queue items share a date, they render as one merged row. */
+  calendarGroup?: {
+    key: string;
+    dates: string[];
+    sharedDates: string[];
+    rows: AgentsV2QueueRow[];
+  };
 };
 
 function candidateCountFromItem(item: EditorialReviewItem): number {
@@ -327,4 +334,172 @@ export function mapReviewItemToQueueRow(item: EditorialReviewItem): AgentsV2Queu
     operatorSnapshot,
     item,
   };
+}
+
+export function calendarDatesInRow(row: AgentsV2QueueRow): string[] {
+  if (row.pipelinePhase !== "awaiting_calendar_decision") return [row.date];
+  const pair = row.item.calendarReciprocalPair;
+  if (pair) return [pair.sideA.date, pair.sideB.date];
+  const cd = row.item.calendarDecision;
+  if (cd) return [cd.currentDate, cd.expectedDate];
+  return [row.date];
+}
+
+function dedupeReciprocalCalendarRows(rows: AgentsV2QueueRow[]): AgentsV2QueueRow[] {
+  const seen = new Set<string>();
+  const out: AgentsV2QueueRow[] = [];
+  for (const row of rows) {
+    const key = row.item.calendarReciprocalPair?.pairKey;
+    if (!key) {
+      out.push(row);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const pair = row.item.calendarReciprocalPair!;
+    const primary =
+      rows.find(
+        (candidate) =>
+          candidate.item.calendarReciprocalPair?.pairKey === key &&
+          candidate.date === pair.chronology.keepDate,
+      ) ?? row;
+    out.push(primary);
+  }
+  return out;
+}
+
+function buildCalendarGroupDisplayRow(groupRows: AgentsV2QueueRow[]): AgentsV2QueueRow {
+  const dates = [...new Set(groupRows.flatMap(calendarDatesInRow))].sort();
+  const dateCounts = new Map<string, number>();
+  for (const row of groupRows) {
+    for (const date of calendarDatesInRow(row)) {
+      dateCounts.set(date, (dateCounts.get(date) ?? 0) + 1);
+    }
+  }
+  const sharedDates = [...dateCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([date]) => date)
+    .sort();
+  const primary = [...groupRows].sort((a, b) => a.date.localeCompare(b.date))[0];
+  const key = `calendar-group:${dates.join("|")}`;
+
+  const subtitle =
+    sharedDates.length > 0
+      ? `${sharedDates.join(", ")} ${sharedDates.length === 1 ? "is" : "are"} in multiple calendar flags`
+      : `${groupRows.length} related calendar flags — review together`;
+
+  return {
+    ...primary,
+    id: key,
+    date: sharedDates[0] ?? dates[0] ?? primary.date,
+    title: "Linked calendar conflicts",
+    subtitle,
+    calendarGroup: {
+      key,
+      dates,
+      sharedDates,
+      rows: groupRows,
+    },
+  };
+}
+
+/** Merge calendar queue rows that share any date so operators see linked conflicts once. */
+export function groupCalendarQueueRows(rows: AgentsV2QueueRow[]): AgentsV2QueueRow[] {
+  const calendarRows = rows.filter((row) => row.pipelinePhase === "awaiting_calendar_decision");
+  if (calendarRows.length === 0) return rows;
+
+  const deduped = dedupeReciprocalCalendarRows(calendarRows);
+  const parent = new Map<string, string>();
+  const find = (date: string): string => {
+    const current = parent.get(date) ?? date;
+    if (current === date) return date;
+    const root = find(current);
+    parent.set(date, root);
+    return root;
+  };
+  const union = (left: string, right: string) => {
+    const rootLeft = find(left);
+    const rootRight = find(right);
+    if (rootLeft !== rootRight) parent.set(rootRight, rootLeft);
+  };
+
+  for (const row of deduped) {
+    const dates = calendarDatesInRow(row);
+    for (const date of dates) {
+      if (!parent.has(date)) parent.set(date, date);
+    }
+    for (let i = 1; i < dates.length; i += 1) union(dates[0], dates[i]);
+  }
+
+  const components = new Map<string, AgentsV2QueueRow[]>();
+  for (const row of deduped) {
+    const root = find(calendarDatesInRow(row)[0]);
+    const list = components.get(root) ?? [];
+    list.push(row);
+    components.set(root, list);
+  }
+
+  const memberToDisplay = new Map<string, AgentsV2QueueRow>();
+  for (const groupRows of components.values()) {
+    if (groupRows.length === 1) {
+      memberToDisplay.set(groupRows[0].id, groupRows[0]);
+      continue;
+    }
+    const display = buildCalendarGroupDisplayRow(groupRows);
+    for (const row of groupRows) {
+      memberToDisplay.set(row.id, display);
+    }
+    for (const row of calendarRows) {
+      const pairKey = row.item.calendarReciprocalPair?.pairKey;
+      if (!pairKey) continue;
+      if (groupRows.some((member) => member.item.calendarReciprocalPair?.pairKey === pairKey)) {
+        memberToDisplay.set(row.id, display);
+      }
+    }
+  }
+
+  const emitted = new Set<string>();
+  const result: AgentsV2QueueRow[] = [];
+  for (const row of rows) {
+    if (row.pipelinePhase !== "awaiting_calendar_decision") {
+      result.push(row);
+      continue;
+    }
+    const display = memberToDisplay.get(row.id);
+    if (!display) continue;
+    if (emitted.has(display.id)) continue;
+    emitted.add(display.id);
+    result.push(display);
+  }
+  return result;
+}
+
+export function duplicatePairKey(row: AgentsV2QueueRow): string | null {
+  if (row.pipelinePhase !== "awaiting_duplicate_decision") return null;
+  const decision = row.item.duplicateDecision;
+  if (!decision?.neighbors?.length) return null;
+  const neighbor = decision.neighbors[0]?.date;
+  if (!neighbor) return null;
+  const [a, b] = [row.date, neighbor].sort();
+  return `${a}::${b}`;
+}
+
+export function consolidateDuplicateQueueRows(rows: AgentsV2QueueRow[]): AgentsV2QueueRow[] {
+  const seen = new Set<string>();
+  const out: AgentsV2QueueRow[] = [];
+  for (const row of rows) {
+    const key = duplicatePairKey(row);
+    if (!key) {
+      out.push(row);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
+export function consolidateQueueRows(rows: AgentsV2QueueRow[]): AgentsV2QueueRow[] {
+  return consolidateDuplicateQueueRows(groupCalendarQueueRows(rows));
 }

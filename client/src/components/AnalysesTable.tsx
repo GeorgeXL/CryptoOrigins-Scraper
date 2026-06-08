@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Table,
   TableBody,
@@ -17,7 +18,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Tag, Check, X, RefreshCw, FileText, ChevronDown } from "lucide-react";
+import { Loader2, Tag, Check, X, RefreshCw, FileText, ChevronDown, Lock, LockOpen, AlertTriangle } from "lucide-react";
+import { parseIsLocked } from "@/lib/parseIsLocked";
+import { fetchPendingAgentQueueByDates } from "@/lib/pendingAgentQueue";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,6 +43,7 @@ export interface HistoricalNewsAnalysis {
   source_url?: string;
   isManualOverride?: boolean;
    isFlagged?: boolean;
+  isLocked?: boolean;
 }
 
 interface CategoryData {
@@ -124,6 +133,19 @@ export function AnalysesTable({
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [contextTarget, setContextTarget] = useState<HistoricalNewsAnalysis | null>(null);
+
+  const visibleDates = useMemo(
+    () => analyses.map((analysis) => analysis.date).sort().join(","),
+    [analyses],
+  );
+
+  const { data: pendingQueueByDate = {} } = useQuery({
+    queryKey: ["pending-agent-queue-batch", visibleDates],
+    queryFn: () => fetchPendingAgentQueueByDates(analyses.map((analysis) => analysis.date)),
+    enabled: analyses.length > 0,
+    staleTime: 30_000,
+    retry: false,
+  });
 
   const resolveRowHref = (analysis: HistoricalNewsAnalysis) => {
     return getRowHref ? getRowHref(analysis) : `/day/${analysis.date}`;
@@ -331,6 +353,7 @@ export function AnalysesTable({
               </TableHead>
             )}
             <TableHead className="w-36">Date</TableHead>
+            <TableHead className="w-8 px-1"><span className="sr-only">Lock</span></TableHead>
             <TableHead>Summary</TableHead>
             <TableHead className="w-32">Tags</TableHead>
           </TableRow>
@@ -338,6 +361,8 @@ export function AnalysesTable({
         <TableBody>
           {analyses.map((analysis) => {
             const isSelected = selectedDates.has(analysis.date);
+            const isLocked = parseIsLocked(analysis.isLocked);
+            const pendingItems = pendingQueueByDate[analysis.date] ?? [];
 
             return (
               <TableRow
@@ -350,6 +375,7 @@ export function AnalysesTable({
                 }`}
                 onClick={() => onRowClick?.(analysis.date)}
                 onContextMenu={(e) => {
+                  if (isLocked) return;
                   e.preventDefault();
                   setContextTarget(analysis);
                   setContextMenuPos({ x: e.clientX, y: e.clientY });
@@ -360,18 +386,59 @@ export function AnalysesTable({
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     <Checkbox
                       checked={isSelected}
-                      onCheckedChange={() => toggleDateSelection(analysis.date)}
+                      disabled={isLocked}
+                      onCheckedChange={() => {
+                        if (!isLocked) toggleDateSelection(analysis.date);
+                      }}
                     />
                   </TableCell>
                 )}
                 <TableCell className="font-medium text-sm whitespace-nowrap">
-                  {(() => {
-                    const date = new Date(analysis.date);
-                    const day = date.getDate();
-                    const month = date.toLocaleDateString("en-US", { month: "short" });
-                    const year = date.getFullYear();
-                    return `${day} ${month} ${year}`;
-                  })()}
+                  <div className="flex items-center gap-1.5">
+                    {pendingItems.length > 0 ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            className="inline-flex shrink-0 items-center justify-center"
+                            aria-label="Pending admin agent review"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <AlertTriangle className="h-3.5 w-3.5 text-orange-400" strokeWidth={2.25} />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          <p className="font-medium text-foreground">Pending admin agent review</p>
+                          <ul className="mt-1.5 space-y-1 text-xs text-muted-foreground">
+                            {pendingItems.map((item) => (
+                              <li key={item.id}>
+                                <span className="font-medium text-orange-300">{item.queue}</span>
+                                {" — "}
+                                {item.label}
+                              </li>
+                            ))}
+                          </ul>
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <span className="inline-flex h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    )}
+                    <span>
+                      {(() => {
+                        const date = new Date(analysis.date);
+                        const day = date.getDate();
+                        const month = date.toLocaleDateString("en-US", { month: "short" });
+                        const year = date.getFullYear();
+                        return `${day} ${month} ${year}`;
+                      })()}
+                    </span>
+                  </div>
+                </TableCell>
+                <TableCell className="w-8 px-1">
+                  {isLocked ? (
+                    <Lock className="h-3.5 w-3.5 text-amber-400" aria-label="Locked" />
+                  ) : (
+                    <LockOpen className="h-3.5 w-3.5 text-muted-foreground" aria-label="Unlocked" />
+                  )}
                 </TableCell>
                 <TableCell>
                   <p className="text-sm text-foreground/90">{analysis.summary}</p>

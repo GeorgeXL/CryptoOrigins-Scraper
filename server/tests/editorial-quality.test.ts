@@ -10,6 +10,7 @@ import {
   isBlogPaginationWinner,
   isRoundupMultiStorySummary,
   summaryDisallowedSymbol,
+  findSummaryDisallowedSymbols,
   normalizeEditorialSummaryText,
   coerceEditorialSummaryLength,
   summaryHasTrailingPunctuation,
@@ -74,6 +75,17 @@ test("2019-08-18 roundup summary is weak and needs article re-pick", () => {
   const issue = evaluateSummaryQuality(summary);
   assert.equal(issue?.code, "disallowed_symbols");
   assert.equal(summaryNeedsBetterArticleSource(summary, "https://example.com/roundup"), true);
+});
+
+test("summaryDisallowedSymbol flags pipe, dash, slash, ampersand, and quotes", () => {
+  assert.deepEqual(
+    findSummaryDisallowedSymbols("Bitcoin hits highs | Ethereum follows with strong gains across markets today for traders"),
+    ["pipe"],
+  );
+  assert.equal(summaryDisallowedSymbol("Bitcoin hits highs — markets rally worldwide today with strong momentum from traders pushing prices higher"), "em-dash");
+  assert.equal(summaryDisallowedSymbol("Bitcoin rises / Ethereum falls as markets split on macro outlook today with mixed sentiment"), "slash");
+  assert.equal(summaryDisallowedSymbol("Coinbase & Binance expand services as Bitcoin adoption grows worldwide with strong institutional demand today"), "ampersand");
+  assert.equal(summaryDisallowedSymbol('"Bitcoin" hits new highs as markets rally worldwide today with strong momentum from traders pushing prices higher'), "quote");
 });
 
 test("relevance rules path triggers article pick for 2019-08-18 roundup summary", async () => {

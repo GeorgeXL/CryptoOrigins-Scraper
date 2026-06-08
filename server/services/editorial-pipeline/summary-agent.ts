@@ -131,7 +131,7 @@ Set needs_regeneration=true only for clear factual mismatch with the reference o
 Return JSON only: {"publishable":boolean,"needs_regeneration":boolean,"confidence":"high"|"medium"|"low","issues":string[],"reason":string,"suggested_summary":string|null}
 Set reason to "" (preferred) or at most 6 words — internal only. issues: short labels only (max 8 words each). suggested_summary only when you can rewrite to 100–110 chars using the reference.`
     : `You review a historical timeline one-line summary (100–110 chars, active voice, no date tokens, no trailing period).
-One event only — never compress multiple headlines into one line. Forbidden symbols: semicolon, colon, question mark, and " - ".
+One event only — never compress multiple headlines into one line. Forbidden symbols: ; : ? " - " | — – / & "
 Capitalize proper names (Bitcoin, Ethereum, Coinbase, PayPal, Lightning Network). Never write "bitcoin" for the asset/network.
 Judge whether it is publishable for the calendar date and winning article context.
 If article_snippet names a specific company but the summary only says "firm", "company", etc., set needs_regeneration=true and name the organization in suggested_summary when you can fit 100–110 chars.

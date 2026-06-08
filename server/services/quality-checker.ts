@@ -1,3 +1,5 @@
+import { findSummaryDisallowedSymbols } from "./editorial-pipeline/editorial-quality";
+
 export interface QualityIssue {
   type: 'TOO_SHORT' | 'TOO_LONG' | 'EXCESSIVE_DOTS' | 'GENERIC_FALLBACK' | 'REPEATED_WORDS' | 'PLACEHOLDER_TEXT' | 'DUPLICATE_SUMMARY' | 'SIMILAR_SUMMARY' | 'INVALID_LINKS' | 'UNUSUAL_SYMBOLS';
   message: string;
@@ -114,16 +116,9 @@ export class QualityCheckerService {
       }
     }
 
-    // Check for unusual symbols (semicolon, colon, hyphen, question mark)
-    // These are typically not used in well-formatted summaries
-    const unusualSymbols = /[;:?]| - /;
-    if (unusualSymbols.test(summary)) {
-      const foundSymbols: string[] = [];
-      if (summary.includes(';')) foundSymbols.push('semicolon');
-      if (summary.includes(':')) foundSymbols.push('colon');
-      if (summary.includes('?')) foundSymbols.push('question mark');
-      if (/ - /.test(summary)) foundSymbols.push('space-hyphen');
-      
+    // Check for unusual symbols — one-event summaries avoid punctuation that stacks headlines
+    const foundSymbols = findSummaryDisallowedSymbols(summary);
+    if (foundSymbols.length > 0) {
       issues.push({
         type: 'UNUSUAL_SYMBOLS',
         message: `Summary contains unusual symbols: ${foundSymbols.join(', ')}`,

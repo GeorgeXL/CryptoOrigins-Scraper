@@ -31,6 +31,7 @@ export const historicalNewsAnalyses = pgTable("historical_news_analyses", {
   tieredArticles: jsonb("tiered_articles"), // Store articles from ALL tiers: { bitcoin: [...], crypto: [...], macro: [...] }
   analyzedArticles: jsonb("analyzed_articles"), // Store the exact articles that were analyzed (legacy, for backward compatibility)
   isFlagged: boolean("is_flagged").default(false),
+  isLocked: boolean("is_locked").default(false),
   flagReason: text("flag_reason"),
   flaggedAt: timestamp("flagged_at"),
   isOrphan: boolean("is_orphan").default(false), // Marks entries where neither Perplexity nor Gemini found relevant articles

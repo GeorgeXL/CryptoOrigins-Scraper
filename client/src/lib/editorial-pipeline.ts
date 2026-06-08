@@ -183,6 +183,8 @@ export type ApproveReviewOpts = {
   proposalTopicSelections?: Record<string, string[]>;
   calendarDecision?: "move_to_canonical" | "keep_as_is" | "delete";
   calendarPairResolution?: "accept_chronology" | "keep_both";
+  calendarKeepDate?: string;
+  calendarRerunDate?: string;
   duplicateDecision?: "keep_both" | "delete_focal" | "delete_neighbor" | "differentiate" | "find_another_event";
   duplicateNeighborDate?: string;
   editedSummary?: string;

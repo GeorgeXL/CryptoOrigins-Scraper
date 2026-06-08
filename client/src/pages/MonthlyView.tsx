@@ -34,6 +34,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { AnalysesTable, HistoricalNewsAnalysis } from "@/components/AnalysesTable";
+import { parseIsLocked } from "@/lib/parseIsLocked";
 import { supabase } from "@/lib/supabase";
 import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
 import { useToggleFlag } from "@/hooks/useToggleFlag";
@@ -177,6 +178,8 @@ export default function MonthlyView() {
     pagination: { totalCount: number; totalPages: number };
   }>({
     queryKey: ['monthly-analyses', selectedYear, selectedMonth || 'all', currentPage, pageSize],
+    refetchOnMount: "always",
+    staleTime: 0,
     queryFn: async () => {
       if (!supabase || !dateRange) {
         return { analyses: [], pagination: { totalCount: 0, totalPages: 0 } };
@@ -197,7 +200,7 @@ export default function MonthlyView() {
       // Get paginated results
       const { data, error } = await supabase
         .from("historical_news_analyses")
-        .select("date, summary, tags_version2, tier_used, is_manual_override, is_flagged")
+        .select("date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked")
         .gte("date", startDate)
         .lte("date", endDate)
         .order("date", { ascending: false })
@@ -215,6 +218,7 @@ export default function MonthlyView() {
           source_url: undefined,
           isManualOverride: item.is_manual_override || false,
           isFlagged: item.is_flagged || false,
+          isLocked: parseIsLocked(item.is_locked),
         })),
         pagination: { totalCount, totalPages },
       };

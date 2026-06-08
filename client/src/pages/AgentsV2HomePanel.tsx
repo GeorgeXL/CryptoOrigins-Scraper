@@ -8,6 +8,9 @@ import { AgentsV2ResumeSlicePanel } from "@/pages/agents-v2/AgentsV2ResumeSliceP
 import { AgentsV2ReviewPhasePanel } from "@/pages/agents-v2/AgentsV2ReviewPhasePanels";
 import { formatCorrectionChangeLines, summarizeCorrectionProposals } from "@/lib/correction-proposal-view";
 import {
+  calendarDatesInRow,
+  consolidateQueueRows,
+  duplicatePairKey,
   expectedFirstOperatorExperienceV3,
   mapReviewItemToQueueRow,
   type AgentsV2PipelinePhase,
@@ -398,6 +401,23 @@ function ReviewCardDateField({ date }: { date: string }) {
   );
 }
 
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  return target.isContentEditable;
+}
+
+function orderArticlePickCandidates<T extends { id: string; recommended?: boolean }>(
+  candidates: T[],
+): { ordered: T[]; recommended: T | null } {
+  const recommended = candidates.find((c) => c.recommended) ?? candidates[0] ?? null;
+  const ordered = recommended
+    ? [recommended, ...candidates.filter((c) => c.id !== recommended.id)]
+    : candidates;
+  return { ordered, recommended };
+}
+
 function TailoredLiveReviewCard({
   row,
   busy,
@@ -411,11 +431,23 @@ function TailoredLiveReviewCard({
 }) {
   const [duplicatePick, setDuplicatePick] = useState<"keep" | "replace" | "delete_focal" | null>(null);
   const [articlePickId, setArticlePickId] = useState<string | null>(null);
+  const candidatesListRef = useRef<HTMLDivElement>(null);
   const phase = row.pipelinePhase;
   const item = row.item;
   const topArticleUrl = item.dayTopArticle?.url ?? null;
   const dayTags = item.dayTags ?? [];
   const dayTopics = item.dayTopicCategories ?? [];
+  const isArticlePick = phase === "awaiting_article_pick";
+  const articleCandidates = isArticlePick ? (item.candidates ?? []) : [];
+  const { ordered: orderedArticleCandidates, recommended: recommendedArticle } = isArticlePick
+    ? orderArticlePickCandidates(articleCandidates)
+    : { ordered: [], recommended: null };
+  const selectedArticleId = isArticlePick ? (articlePickId ?? recommendedArticle?.id ?? null) : null;
+  const selectedArticleCandidate =
+    isArticlePick ? (articleCandidates.find((c) => c.id === selectedArticleId) ?? null) : null;
+  const selectedArticleBlocked = selectedArticleCandidate?.calendarSanityOk === false;
+  const betterStoryline = isArticlePick && item.scenario === "better_storyline";
+  const hasOpenDay = /^\d{4}-\d{2}-\d{2}$/.test(row.date);
   const previousSummary =
     phase === "awaiting_summary_approval" && item.daySummary && item.summaryApproval?.generatedSummary
       ? item.daySummary
@@ -423,13 +455,93 @@ function TailoredLiveReviewCard({
         ? item.daySummary
         : null;
 
-  if (phase === "awaiting_article_pick") {
-    const candidates = item.candidates ?? [];
-    const recommended = candidates.find((c) => c.recommended) ?? candidates[0] ?? null;
-    const selectedId = articlePickId ?? recommended?.id ?? null;
-    const selectedCandidate = candidates.find((c) => c.id === selectedId) ?? null;
-    const selectedBlocked = selectedCandidate?.calendarSanityOk === false;
-    const betterStoryline = item.scenario === "better_storyline";
+  useEffect(() => {
+    setArticlePickId(null);
+  }, [row.id]);
+
+  useEffect(() => {
+    if (busy) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableKeyboardTarget(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const key = e.key.toLowerCase();
+
+      if (key === "r") {
+        e.preventDefault();
+        onReject(row.id);
+        return;
+      }
+
+      if (key === "o" && hasOpenDay) {
+        e.preventDefault();
+        window.open(`/day/${row.date}`, "_blank", "noopener,noreferrer");
+        return;
+      }
+
+      if (!isArticlePick) return;
+
+      if (key === "arrowdown" || key === "arrowup") {
+        if (orderedArticleCandidates.length === 0) return;
+        e.preventDefault();
+        const currentIndex = Math.max(
+          0,
+          orderedArticleCandidates.findIndex((c) => c.id === selectedArticleId),
+        );
+        const delta = key === "arrowdown" ? 1 : -1;
+        const nextIndex = Math.min(
+          orderedArticleCandidates.length - 1,
+          Math.max(0, currentIndex + delta),
+        );
+        const next = orderedArticleCandidates[nextIndex];
+        if (next) {
+          setArticlePickId(next.id);
+          queueMicrotask(() => {
+            candidatesListRef.current
+              ?.querySelector(`[data-candidate-id="${CSS.escape(next.id)}"]`)
+              ?.scrollIntoView({ block: "nearest" });
+          });
+        }
+        return;
+      }
+
+      if (key === "a") {
+        if (!selectedArticleId || selectedArticleBlocked) return;
+        e.preventDefault();
+        onApprove(item.id, { selectedArticleId: selectedArticleId });
+        return;
+      }
+
+      if (key === "k") {
+        e.preventDefault();
+        if (betterStoryline) {
+          onApprove(item.id, { keepCurrentSummary: true });
+        }
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    busy,
+    row.id,
+    row.date,
+    item.id,
+    isArticlePick,
+    betterStoryline,
+    hasOpenDay,
+    selectedArticleId,
+    selectedArticleBlocked,
+    orderedArticleCandidates,
+    onApprove,
+    onReject,
+  ]);
+
+  if (isArticlePick) {
+    const recommended = recommendedArticle;
+    const selectedId = selectedArticleId;
+    const selectedBlocked = selectedArticleBlocked;
     const currentSummary = item.daySummary?.trim() ?? "";
     const currentTags = (item.dayTags ?? []).filter(Boolean);
     const currentTopics = (item.dayTopicCategories ?? []).filter(Boolean);
@@ -481,17 +593,22 @@ function TailoredLiveReviewCard({
         ) : null}
         <div className="grid gap-3 lg:grid-cols-[1.25fr_0.75fr]">
           <div className="rounded-lg border border-border bg-background p-3 space-y-2">
-            <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Candidates</p>
-            <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
-            {(recommended ? [recommended, ...candidates.filter((c) => c.id !== recommended.id)] : candidates)
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Candidates</p>
+              <p className="text-[10px] text-muted-foreground/80">↑↓ pick · A approve · K keep · R reject · O day</p>
+            </div>
+            <div ref={candidatesListRef} className="max-h-80 space-y-2 overflow-y-auto pr-1">
+            {orderedArticleCandidates
               .map((c, i) => {
                 const blocked = c.calendarSanityOk === false;
                 return (
                   <div
                     key={c.id}
+                    data-candidate-id={c.id}
                     role="button"
                     tabIndex={busy ? -1 : 0}
                     aria-disabled={busy}
+                    aria-pressed={selectedId === c.id}
                     onClick={() => {
                       if (busy) return;
                       setArticlePickId(c.id);
@@ -562,8 +679,9 @@ function TailoredLiveReviewCard({
                 className="w-full"
                 disabled={busy || !selectedId || selectedBlocked}
                 onClick={() => selectedId && onApprove(item.id, { selectedArticleId: selectedId })}
+                title="Approve selected pick (A)"
               >
-                Approve selected pick
+                Approve selected pick <kbd className="ml-1 rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground">A</kbd>
               </Button>
               <Button
                 size="sm"
@@ -575,8 +693,15 @@ function TailoredLiveReviewCard({
                     ? onApprove(item.id, { keepCurrentSummary: true })
                     : onReject(row.id)
                 }
+                title={betterStoryline ? "Keep current summary (K)" : "Reject and rerun (R)"}
               >
-                {betterStoryline ? "Keep current summary" : "Reject and rerun"}
+                {betterStoryline ? (
+                  <>
+                    Keep current summary <kbd className="ml-1 rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground">K</kbd>
+                  </>
+                ) : (
+                  "Reject and rerun"
+                )}
               </Button>
             </div>
           </div>
@@ -591,10 +716,10 @@ function TailoredLiveReviewCard({
       <CalendarConflictPairReview
         pair={pair}
         busy={busy}
-        onAcceptChronology={() => onApprove(item.id, { calendarPairResolution: "accept_chronology" })}
+        onKeepDateRerunOther={(keepDate, rerunDate) =>
+          onApprove(item.id, { calendarKeepDate: keepDate, calendarRerunDate: rerunDate })
+        }
         onKeepBoth={() => onApprove(item.id, { calendarPairResolution: "keep_both" })}
-        onKeepSide={(queueItemId) => onApprove(queueItemId, { calendarDecision: "keep_as_is" })}
-        onDeleteSide={(queueItemId) => onApprove(queueItemId, { calendarDecision: "delete" })}
       />
     );
   }
@@ -607,9 +732,10 @@ function TailoredLiveReviewCard({
         currentTags={dayTags}
         currentTopics={dayTopics}
         busy={busy}
-        onKeep={() => onApprove(item.id, { calendarDecision: "keep_as_is" })}
-        onMove={() => onApprove(item.id, { calendarDecision: "move_to_canonical" })}
-        onDelete={() => onApprove(item.id, { calendarDecision: "delete" })}
+        onKeepBoth={() => onApprove(item.id, { calendarDecision: "keep_as_is" })}
+        onKeepDateRerunOther={(keepDate, rerunDate) =>
+          onApprove(item.id, { calendarKeepDate: keepDate, calendarRerunDate: rerunDate })
+        }
       />
     );
   }
@@ -818,62 +944,21 @@ type QueueListProps = {
   onRemove: (id: string) => Promise<void>;
 };
 
-function calendarPairKey(row: QueueRow): string | null {
-  const pair = row.item.calendarReciprocalPair;
-  return pair?.pairKey ?? null;
-}
-
-function consolidateCalendarRows(rows: QueueRow[]): QueueRow[] {
-  const seen = new Set<string>();
-  const out: QueueRow[] = [];
-  for (const row of rows) {
-    const key = calendarPairKey(row);
-    if (!key) {
-      out.push(row);
-      continue;
-    }
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const pair = row.item.calendarReciprocalPair!;
-    const primary =
-      rows.find(
-        (candidate) =>
-          candidate.item.calendarReciprocalPair?.pairKey === key &&
-          candidate.date === pair.chronology.keepDate,
-      ) ?? row;
-    out.push(primary);
+function calendarRowLabel(row: QueueRow): string {
+  if (row.calendarGroup) return row.calendarGroup.dates.join(" · ");
+  if (row.item.calendarReciprocalPair) {
+    const pair = row.item.calendarReciprocalPair;
+    return `${pair.sideA.date} ↔ ${pair.sideB.date}`;
   }
-  return out;
+  const cd = row.item.calendarDecision;
+  if (cd) return `${cd.currentDate} ↔ ${cd.expectedDate}`;
+  return row.date;
 }
 
-function duplicatePairKey(row: QueueRow): string | null {
-  if (row.pipelinePhase !== "awaiting_duplicate_decision") return null;
-  const decision = row.item.duplicateDecision;
-  if (!decision?.neighbors?.length) return null;
-  const neighbor = decision.neighbors[0]?.date;
-  if (!neighbor) return null;
-  const [a, b] = [row.date, neighbor].sort();
-  return `${a}::${b}`;
-}
-
-function consolidateDuplicateRows(rows: QueueRow[]): QueueRow[] {
-  const seen = new Set<string>();
-  const out: QueueRow[] = [];
-  for (const row of rows) {
-    const key = duplicatePairKey(row);
-    if (!key) {
-      out.push(row);
-      continue;
-    }
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(row);
-  }
-  return out;
-}
-
-function consolidateQueueRows(rows: QueueRow[]): QueueRow[] {
-  return consolidateDuplicateRows(consolidateCalendarRows(rows));
+function rowIsBusy(row: QueueRow, busyId: string | null): boolean {
+  if (!busyId) return false;
+  if (busyId === row.id) return true;
+  return row.calendarGroup?.rows.some((member) => member.id === busyId) ?? false;
 }
 
 function QueueList({
@@ -896,7 +981,14 @@ function QueueList({
     : { duration: 0.3, ease: PANEL_EASE };
 
   useEffect(() => {
-    if (expandedId && !rows.some((r) => r.id === expandedId)) onExpandedIdChange(null);
+    if (
+      expandedId &&
+      !rows.some(
+        (r) => r.id === expandedId || r.calendarGroup?.rows.some((member) => member.id === expandedId),
+      )
+    ) {
+      onExpandedIdChange(null);
+    }
   }, [rows, expandedId, onExpandedIdChange]);
 
   useEffect(() => {
@@ -905,7 +997,12 @@ function QueueList({
     lastAdvanceNonceRef.current = advanceSignal.nonce;
 
     const previous = previousRowsRef.current;
-    const prevIndex = previous.findIndex((r) => r.id === advanceSignal.id);
+    const rowIndex = (list: QueueRow[]) =>
+      list.findIndex(
+        (r) =>
+          r.id === advanceSignal.id || r.calendarGroup?.rows.some((member) => member.id === advanceSignal.id),
+      );
+    const prevIndex = rowIndex(previous);
     if (rows.length === 0) {
       onExpandedIdChange(null);
       return;
@@ -932,6 +1029,9 @@ function QueueList({
       ) : (
         rows.map((row) => {
           const open = expandedId === row.id;
+          const group = row.calendarGroup;
+          const reviewRows = group?.rows ?? [row];
+          const busy = rowIsBusy(row, busyId);
           return (
             <li key={row.id} className="bg-card/20">
               <button
@@ -953,13 +1053,22 @@ function QueueList({
                 <div className="min-w-0 flex-1 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <p className="font-mono text-xs text-muted-foreground">
-                      {row.item.calendarReciprocalPair
-                        ? `${row.item.calendarReciprocalPair.sideA.date} ↔ ${row.item.calendarReciprocalPair.sideB.date}`
-                        : row.date}
+                      {row.pipelinePhase === "awaiting_calendar_decision" ? calendarRowLabel(row) : row.date}
                     </p>
                     <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal text-muted-foreground">
                       {phaseChipLabel(row.pipelinePhase)}
                     </Badge>
+                    {group && group.rows.length > 1 ? (
+                      <Badge variant="secondary" className="h-5 gap-1 px-1.5 text-[10px] font-normal">
+                        <Link2 className="size-3" aria-hidden />
+                        {group.rows.length} conflicts
+                      </Badge>
+                    ) : null}
+                    {group && group.sharedDates.length > 0 ? (
+                      <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal text-muted-foreground">
+                        shared {group.sharedDates.join(", ")}
+                      </Badge>
+                    ) : null}
                     {statusBadge(row.status)}
                   </div>
                   <p className="text-sm font-medium leading-snug text-foreground">{row.title}</p>
@@ -981,130 +1090,250 @@ function QueueList({
                   >
                     <div className="px-4 pb-4 pt-3 sm:px-5">
                       <div className="space-y-4">
-                        {row.status === "pending" ? (
-                          <TailoredLiveReviewCard
-                            row={row}
-                            busy={busyId === row.id}
-                            onApprove={(id, opts) => void onApprove(id, opts)}
-                            onReject={(id) => void onReject(id)}
-                          />
-                        ) : (
-                          <ReviewerBriefCard row={row} />
-                        )}
+                        {group && group.rows.length > 1 ? (
+                          <div className="rounded-lg border border-border/40 bg-muted/25 px-3.5 py-3">
+                            <div className="flex items-start gap-2">
+                              <Link2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+                              <div className="space-y-1">
+                                <p className="text-sm font-medium text-foreground">Linked calendar conflicts</p>
+                                <p className="text-xs leading-relaxed text-muted-foreground">
+                                  These flags share{" "}
+                                  {group.sharedDates.length > 0 ? group.sharedDates.join(", ") : "related dates"}.
+                                  Resolving one may affect another — review each conflict below.
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+                        {reviewRows.map((reviewRow, index) => (
+                          <div
+                            key={reviewRow.id}
+                            className={cn(
+                              "space-y-4",
+                              group && group.rows.length > 1 && "rounded-xl border border-border/60 bg-background/35 p-4",
+                            )}
+                          >
+                            {group && group.rows.length > 1 ? (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                  Conflict {index + 1} of {group.rows.length}
+                                </p>
+                                <p className="font-mono text-xs text-muted-foreground">
+                                  {calendarDatesInRow(reviewRow).join(" · ")}
+                                </p>
+                              </div>
+                            ) : null}
+                            {reviewRow.status === "pending" ? (
+                              <TailoredLiveReviewCard
+                                row={reviewRow}
+                                busy={busyId === reviewRow.id}
+                                onApprove={(id, opts) => void onApprove(id, opts)}
+                                onReject={(id) => void onReject(id)}
+                              />
+                            ) : (
+                              <ReviewerBriefCard row={reviewRow} />
+                            )}
+                            {reviewRow.status === "pending" ? (
+                              <div className="rounded-xl border border-border/70 bg-background/45 p-4">
+                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                  Actions
+                                </p>
+                                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="w-full sm:w-auto"
+                                    disabled={busy}
+                                    title="Reject (R)"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void onReject(reviewRow.id);
+                                    }}
+                                  >
+                                    Reject{" "}
+                                    <kbd className="ml-1 hidden rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground sm:inline">
+                                      R
+                                    </kbd>
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="w-full border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
+                                    disabled={busy}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (
+                                        !window.confirm(
+                                          "Remove this pending review from the queue? This cannot be undone.",
+                                        )
+                                      ) {
+                                        return;
+                                      }
+                                      void onRemove(reviewRow.id);
+                                    }}
+                                  >
+                                    <Trash2 className="mr-2 size-4 shrink-0" aria-hidden />
+                                    Remove from queue
+                                  </Button>
+                                  {/^\d{4}-\d{2}-\d{2}$/.test(reviewRow.date) ? (
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="w-full sm:w-auto"
+                                      asChild
+                                      title="Open day (O)"
+                                    >
+                                      <Link
+                                        href={`/day/${reviewRow.date}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                      >
+                                        Open day{" "}
+                                        <kbd className="ml-1 hidden rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground sm:inline">
+                                          O
+                                        </kbd>
+                                      </Link>
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
                         {row.status === "pending" &&
                         row.pipelinePhase === "triage" &&
+                        !group &&
                         (row.operatorSnapshot?.shortCircuited || row.operatorSnapshot?.resumeStartsAvailable?.length) &&
                         /^\d{4}-\d{2}-\d{2}$/.test(row.date) ? (
                           <AgentsV2ResumeSlicePanel
                             date={row.date}
                             snapshot={row.operatorSnapshot}
-                            disabled={busyId === row.id}
+                            disabled={busy}
                             onSliceStarted={(runId) => rememberLastPipelineRunId(runId)}
                           />
                         ) : null}
-                        <div className="rounded-xl border border-border/70 bg-background/45 p-4">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Actions</p>
-                          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                            {row.status === "pending" ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="w-full sm:w-auto"
-                                disabled={busyId === row.id}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void onReject(row.id);
-                                }}
-                              >
-                                Reject
-                              </Button>
-                            ) : null}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="w-full border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
-                              disabled={busyId === row.id}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const msg =
-                                  row.status === "pending" ?
-                                    "Remove this pending review from the queue? This cannot be undone."
-                                  : "Remove this queue entry from the database? Pipeline step history is kept.";
-                                if (!window.confirm(msg)) return;
-                                void onRemove(row.id);
-                              }}
-                            >
-                              <Trash2 className="mr-2 size-4 shrink-0" aria-hidden />
-                              <span className="sm:hidden">Remove</span>
-                              <span className="hidden sm:inline">Remove from queue</span>
-                            </Button>
-                            {/^\d{4}-\d{2}-\d{2}$/.test(row.date) ? (
-                              <>
+                        {!group ? (
+                          <div className="rounded-xl border border-border/70 bg-background/45 p-4">
+                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Actions</p>
+                            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                              {row.status === "pending" ? (
                                 <Button
                                   type="button"
                                   variant="outline"
                                   size="sm"
                                   className="w-full sm:w-auto"
-                                  disabled={busyId === row.id || verifyBusyId === row.id}
+                                  disabled={busy}
+                                  title="Reject (R)"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setVerifyBusyId(row.id);
-                                    void verifyEditorialDay(row.date, "quick")
-                                      .then((result) => {
-                                        setVerifyResults((prev) => ({ ...prev, [row.id]: result }));
-                                      })
-                                      .catch(() => {
-                                        toast({
-                                          title: "Verify failed",
-                                          description: "Could not verify this day.",
-                                          variant: "destructive",
-                                        });
-                                      })
-                                      .finally(() => setVerifyBusyId(null));
+                                    void onReject(row.id);
                                   }}
                                 >
-                                  {verifyBusyId === row.id ? (
-                                    <Loader2 className="mr-2 size-4 animate-spin" />
-                                  ) : (
-                                    <ShieldCheck className="mr-2 size-4 shrink-0" aria-hidden />
-                                  )}
-                                  Verify
+                                  Reject{" "}
+                                  <kbd className="ml-1 hidden rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground sm:inline">
+                                    R
+                                  </kbd>
                                 </Button>
-                                <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" asChild>
-                                  <Link href={`/day/${row.date}`} target="_blank" rel="noopener noreferrer">
-                                    Open day
-                                  </Link>
-                                </Button>
-                              </>
+                              ) : null}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="w-full border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
+                                disabled={busy}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const msg =
+                                    row.status === "pending"
+                                      ? "Remove this pending review from the queue? This cannot be undone."
+                                      : "Remove this queue entry from the database? Pipeline step history is kept.";
+                                  if (!window.confirm(msg)) return;
+                                  void onRemove(row.id);
+                                }}
+                              >
+                                <Trash2 className="mr-2 size-4 shrink-0" aria-hidden />
+                                <span className="sm:hidden">Remove</span>
+                                <span className="hidden sm:inline">Remove from queue</span>
+                              </Button>
+                              {/^\d{4}-\d{2}-\d{2}$/.test(row.date) ? (
+                                <>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="w-full sm:w-auto"
+                                    disabled={busy || verifyBusyId === row.id}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setVerifyBusyId(row.id);
+                                      void verifyEditorialDay(row.date, "quick")
+                                        .then((result) => {
+                                          setVerifyResults((prev) => ({ ...prev, [row.id]: result }));
+                                        })
+                                        .catch(() => {
+                                          toast({
+                                            title: "Verify failed",
+                                            description: "Could not verify this day.",
+                                            variant: "destructive",
+                                          });
+                                        })
+                                        .finally(() => setVerifyBusyId(null));
+                                    }}
+                                  >
+                                    {verifyBusyId === row.id ? (
+                                      <Loader2 className="mr-2 size-4 animate-spin" />
+                                    ) : (
+                                      <ShieldCheck className="mr-2 size-4 shrink-0" aria-hidden />
+                                    )}
+                                    Verify
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="w-full sm:w-auto"
+                                    asChild
+                                    title="Open day (O)"
+                                  >
+                                    <Link href={`/day/${row.date}`} target="_blank" rel="noopener noreferrer">
+                                      Open day{" "}
+                                      <kbd className="ml-1 hidden rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground sm:inline">
+                                        O
+                                      </kbd>
+                                    </Link>
+                                  </Button>
+                                </>
+                              ) : null}
+                            </div>
+                            {verifyResults[row.id] ? (
+                              <div
+                                className={cn(
+                                  "mt-3 rounded-lg border px-3 py-2 text-xs leading-relaxed",
+                                  verifyResults[row.id].passed
+                                    ? "border-emerald-500/30 bg-emerald-500/[0.06] text-muted-foreground"
+                                    : "border-amber-500/35 bg-amber-500/[0.06] text-muted-foreground",
+                                )}
+                              >
+                                <p className="font-medium text-foreground">
+                                  {verifyResults[row.id].passed ? "Quick verify passed" : "Quick verify found issues"}
+                                </p>
+                                <ul className="mt-2 space-y-1">
+                                  {verifyResults[row.id].checks
+                                    .filter((c) => c.status !== "pass")
+                                    .slice(0, 4)
+                                    .map((c) => (
+                                      <li key={c.id}>
+                                        {c.label}: {c.message}
+                                      </li>
+                                    ))}
+                                </ul>
+                              </div>
                             ) : null}
                           </div>
-                          {verifyResults[row.id] ? (
-                            <div
-                              className={cn(
-                                "mt-3 rounded-lg border px-3 py-2 text-xs leading-relaxed",
-                                verifyResults[row.id].passed
-                                  ? "border-emerald-500/30 bg-emerald-500/[0.06] text-muted-foreground"
-                                  : "border-amber-500/35 bg-amber-500/[0.06] text-muted-foreground",
-                              )}
-                            >
-                              <p className="font-medium text-foreground">
-                                {verifyResults[row.id].passed ? "Quick verify passed" : "Quick verify found issues"}
-                              </p>
-                              <ul className="mt-2 space-y-1">
-                                {verifyResults[row.id].checks
-                                  .filter((c) => c.status !== "pass")
-                                  .slice(0, 4)
-                                  .map((c) => (
-                                    <li key={c.id}>
-                                      {c.label}: {c.message}
-                                    </li>
-                                  ))}
-                              </ul>
-                            </div>
-                          ) : null}
-                        </div>
+                        ) : null}
                       </div>
                     </div>
                   </motion.div>
@@ -1165,21 +1394,11 @@ export default function AgentsV2HomePanel() {
       const source = rows.find((r) => r.id === id);
       const pair = source?.item.calendarReciprocalPair;
 
-      if (opts?.calendarPairResolution === "accept_chronology" && pair) {
-        const keepRow = rows.find(
-          (r) =>
-            r.status === "pending" &&
-            r.item.calendarReciprocalPair?.pairKey === pair.pairKey &&
-            r.date === pair.chronology.keepDate,
-        );
-        const removeRow = rows.find(
-          (r) =>
-            r.status === "pending" &&
-            r.item.calendarReciprocalPair?.pairKey === pair.pairKey &&
-            r.date === pair.chronology.removeDate,
-        );
-        if (keepRow) await approveReviewItem(keepRow.id, { calendarDecision: "keep_as_is" });
-        if (removeRow) await approveReviewItem(removeRow.id, { calendarDecision: "delete" });
+      if (opts?.calendarKeepDate && opts?.calendarRerunDate) {
+        await approveReviewItem(id, {
+          calendarKeepDate: opts.calendarKeepDate,
+          calendarRerunDate: opts.calendarRerunDate,
+        });
       } else if (opts?.calendarPairResolution === "keep_both" && pair) {
         const pairRows = rows.filter(
           (r) => r.status === "pending" && r.item.calendarReciprocalPair?.pairKey === pair.pairKey,
@@ -1276,10 +1495,7 @@ export default function AgentsV2HomePanel() {
   };
 
   const statusFiltered = filter === "all" ? rows : rows.filter((r) => r.status === filter);
-  const scenarioFilteredRows =
-    filter === "pending" && scenarioFilter === "awaiting_duplicate_decision"
-      ? consolidateQueueRows(statusFiltered)
-      : statusFiltered;
+  const scenarioFilteredRows = filter === "pending" ? consolidateQueueRows(statusFiltered) : statusFiltered;
   const listProps = {
     rows: scenarioFilteredRows,
     busyId,

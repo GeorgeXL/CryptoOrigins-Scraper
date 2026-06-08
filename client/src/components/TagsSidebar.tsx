@@ -32,6 +32,12 @@ export interface QualityCheckItem {
   isLoading?: boolean;
 }
 
+export interface LockStatsItem {
+  lockedCount: number;
+  totalCount: number;
+  isLoading?: boolean;
+}
+
 export interface CategoryData {
   category: string;
   name: string;
@@ -69,6 +75,10 @@ interface TagsSidebarProps {
   veriBadgeItems?: QualityCheckItem[];
   selectedVeriBadge?: string | null;
   onVeriBadgeSelect?: (id: string) => void;
+  // Lock stats props
+  lockStats?: LockStatsItem;
+  selectedLocked?: boolean;
+  onLockedSelect?: () => void;
 }
 
 export function TagsSidebar({
@@ -90,6 +100,9 @@ export function TagsSidebar({
   veriBadgeItems,
   selectedVeriBadge,
   onVeriBadgeSelect,
+  lockStats,
+  selectedLocked,
+  onLockedSelect,
 }: TagsSidebarProps) {
   const memoizedCatalog = useMemo(() => {
     if (!catalogData) return null;
@@ -109,7 +122,11 @@ export function TagsSidebar({
     };
   }, [catalogData]);
 
-  if (!memoizedCatalog) {
+  const hasQualityPanel = Boolean(qualityCheckItems?.length);
+  const hasVeriBadgePanel = Boolean(veriBadgeItems?.length);
+  const hasLockPanel = Boolean(lockStats);
+
+  if (!memoizedCatalog && !hasQualityPanel && !hasVeriBadgePanel && !hasLockPanel) {
     return null;
   }
 
@@ -196,7 +213,7 @@ export function TagsSidebar({
         )}
       </SidebarHeader>
       <SidebarContent>
-        {showOverview && (
+        {showOverview && memoizedCatalog && (
           <SidebarGroup>
             <SidebarGroupLabel>Overview</SidebarGroupLabel>
             <SidebarGroupContent>
@@ -255,6 +272,37 @@ export function TagsSidebar({
           </SidebarGroup>
         )}
 
+        {lockStats && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Locked</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    onClick={() => onLockedSelect?.()}
+                    isActive={selectedLocked}
+                    className="data-[active=true]:bg-white data-[active=true]:text-black"
+                    tooltip={
+                      lockStats.isLoading
+                        ? "Loading..."
+                        : `${lockStats.lockedCount.toLocaleString()} locked of ${lockStats.totalCount.toLocaleString()} days`
+                    }
+                  >
+                    <span className="truncate">Days locked</span>
+                    <SidebarMenuBadge className="bg-muted text-muted-foreground tabular-nums">
+                      {lockStats.isLoading ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        `${lockStats.lockedCount.toLocaleString()} / ${lockStats.totalCount.toLocaleString()}`
+                      )}
+                    </SidebarMenuBadge>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
         {veriBadgeItems && veriBadgeItems.length > 0 && (
           <SidebarGroup>
             <SidebarGroupLabel>VeriBadge</SidebarGroupLabel>
@@ -288,7 +336,7 @@ export function TagsSidebar({
           </SidebarGroup>
         )}
 
-        {showCategories && memoizedCatalog.categories.map((category) => {
+        {showCategories && memoizedCatalog && memoizedCatalog.categories.map((category) => {
           if (category.total === 0) return null;
           return (
             <SidebarGroup key={category.key}>

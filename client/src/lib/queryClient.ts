@@ -94,3 +94,36 @@ export function clearCacheForDate(date: string) {
   const year = date.substring(0, 4);
   queryClient.removeQueries({ queryKey: [`/api/analysis/year/${year}`] });
 }
+
+type AnalysisListCache = {
+  analyses?: Array<{ date?: string; isLocked?: boolean; is_locked?: boolean }>;
+};
+
+function normalizeDateKey(date: string): string {
+  return date.slice(0, 10);
+}
+
+/** Patch lock state in cached home/monthly table rows (instant UI when navigating back). */
+export function patchAnalysisListLockInCache(date: string, locked: boolean) {
+  const dateKey = normalizeDateKey(date);
+  const patch = (old: AnalysisListCache | undefined): AnalysisListCache | undefined => {
+    if (!old?.analyses?.length) return old;
+    let changed = false;
+    const analyses = old.analyses.map((row) => {
+      if (!row.date || normalizeDateKey(String(row.date)) !== dateKey) return row;
+      changed = true;
+      return { ...row, isLocked: locked, is_locked: locked };
+    });
+    return changed ? { ...old, analyses } : old;
+  };
+
+  queryClient.setQueriesData({ queryKey: ["supabase-tags-analyses"] }, patch);
+  queryClient.setQueriesData({ queryKey: ["monthly-analyses"] }, patch);
+}
+
+/** Home / monthly tables — refetch even when those pages are not mounted. */
+export function invalidateAnalysisListQueries() {
+  void queryClient.invalidateQueries({ queryKey: ["supabase-tags-analyses"], refetchType: "all" });
+  void queryClient.invalidateQueries({ queryKey: ["monthly-analyses"], refetchType: "all" });
+  void queryClient.invalidateQueries({ queryKey: ["pending-agent-queue-batch"], refetchType: "all" });
+}

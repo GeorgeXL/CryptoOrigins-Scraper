@@ -18,6 +18,7 @@ import {
   type ArticleData,
 } from "@shared/schema";
 import { storage } from "../../storage";
+import { isDayLocked } from "../day-lock";
 import { runExistingSearchAndSummaryForDate } from "./tools";
 import {
   isArticlePickPackage,
@@ -693,6 +694,66 @@ function normalizeUserTopicList(raw: unknown): string[] {
 
 export type CalendarDecisionInput = "move_to_canonical" | "keep_as_is" | "delete";
 
+async function applyCalendarKeepRerun(opts: {
+  keepDate: string;
+  rerunDate: string;
+  reviewer?: string | null;
+}): Promise<{ ok: boolean; message: string }> {
+  if (opts.keepDate === opts.rerunDate) {
+    return { ok: false, message: "keepDate and rerunDate must be different." };
+  }
+
+  const keepAnalysis = await storage.getAnalysisByDate(opts.keepDate);
+  if (!keepAnalysis) {
+    return { ok: false, message: `No analysis row on ${opts.keepDate} to keep.` };
+  }
+
+  await storage.updateAnalysis(opts.keepDate, { isManualOverride: true });
+
+  const rerunAnalysis = await storage.getAnalysisByDate(opts.rerunDate);
+  if (rerunAnalysis) {
+    await storage.deleteAnalysis(opts.rerunDate);
+  }
+
+  const rerun = await rerunDateAfterDestructiveEdit({
+    date: opts.rerunDate,
+    reason: "calendar-keep-rerun-other",
+    reviewer: opts.reviewer ?? null,
+  });
+
+  await dismissPendingCalendarReviewItemsForDates([opts.keepDate, opts.rerunDate], opts.reviewer ?? null);
+
+  return {
+    ok: true,
+    message: rerun.ok
+      ? `Kept ${opts.keepDate}. Deleted ${opts.rerunDate} and started a fresh pipeline run (runId=${rerun.runId}).`
+      : `Kept ${opts.keepDate}. Cleared ${opts.rerunDate}, but auto-rerun failed: ${rerun.message}`,
+  };
+}
+
+async function dismissPendingCalendarReviewItemsForDates(dates: string[], reviewer: string | null) {
+  const pending = await db
+    .select({ id: humanReviewQueue.id, eventDate: humanReviewQueue.eventDate, package: humanReviewQueue.package })
+    .from(humanReviewQueue)
+    .where(eq(humanReviewQueue.status, "pending"));
+
+  const dateSet = new Set(dates);
+  for (const item of pending) {
+    if (!isCalendarDecisionPackage(item.package)) continue;
+    const eventDate = item.eventDate?.slice(0, 10);
+    if (!eventDate || !dateSet.has(eventDate)) continue;
+    await db
+      .update(humanReviewQueue)
+      .set({
+        status: "approved",
+        reviewer,
+        reviewNotes: "Auto-resolved via calendar keep+rerun",
+        reviewedAt: new Date(),
+      })
+      .where(eq(humanReviewQueue.id, item.id));
+  }
+}
+
 async function applyCalendarDecision(opts: {
   date: string;
   expectedDate: string;
@@ -750,6 +811,9 @@ async function rerunDateAfterDestructiveEdit(opts: {
   reason: string;
   reviewer?: string | null;
 }): Promise<{ ok: boolean; runId?: string; message?: string }> {
+  if (await isDayLocked(opts.date)) {
+    return { ok: false, message: `Day ${opts.date} is locked by operator — pipeline rerun blocked.` };
+  }
   try {
     // Lazy import to avoid the writer ↔ run.ts circular module load.
     const { startEditorialPipelineRun } = await import("./run");
@@ -857,6 +921,8 @@ export type ApprovalOptions = {
   proposalTagSelections?: Record<string, string[]>;
   proposalTopicSelections?: Record<string, string[]>;
   calendarDecision?: CalendarDecisionInput;
+  calendarKeepDate?: string;
+  calendarRerunDate?: string;
   duplicateDecision?: DuplicateDecisionInput;
   replaceArticleId?: string;
   /** Operator-edited summary text (overrides package proposedSummary on summary-approval). */
@@ -957,6 +1023,13 @@ export async function executeApprovedReviewItem(
   if (decision.action.kind === "apply_calendar_decision") {
     if (!isCalendarDecisionPackage(item.package)) {
       return { ok: false, message: "Calendar-decision package shape is invalid" };
+    }
+    if (opts?.calendarKeepDate && opts?.calendarRerunDate) {
+      return applyCalendarKeepRerun({
+        keepDate: opts.calendarKeepDate,
+        rerunDate: opts.calendarRerunDate,
+        reviewer: opts?.reviewer ?? null,
+      });
     }
     if (!opts?.calendarDecision) {
       return { ok: false, message: "calendarDecision is required (move_to_canonical | keep_as_is | delete)" };

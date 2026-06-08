@@ -15,12 +15,122 @@ import { batchProcessor } from "../services/batch-processor";
 import { conflictClusterer } from "../services/conflict-clusterer";
 import { perplexityCleaner } from "../services/perplexity-cleaner";
 import { entityExtractor } from "../services/entity-extractor";
-import { sql, eq, desc, and, asc } from "drizzle-orm";
+import { sql, eq, desc, and, asc, inArray } from "drizzle-orm";
 import { aiService } from "../services/ai";
 import { db } from "../db";
 import { historicalNewsAnalyses, humanReviewQueue, pipelineSteps } from "@shared/schema";
+import { TOPIC_HIERARCHY_LEAVES } from "@shared/topic-hierarchy";
+import { ensureTopicCategoryAndStorylineLinks, syncStorylineAssignmentsForDate } from "../services/editorial-pipeline/storyline-taxonomy";
+import { invalidTopicReasons } from "../services/editorial-pipeline/topic-validation";
+import { assertDayNotLocked, DayLockedError, setDayLocked } from "../services/day-lock";
 
 const router = Router();
+
+async function requireUnlockedDay(date: string, res: import("express").Response): Promise<boolean> {
+  try {
+    await assertDayNotLocked(date);
+    return true;
+  } catch (error) {
+    if (error instanceof DayLockedError) {
+      res.status(423).json({ error: error.message });
+      return false;
+    }
+    throw error;
+  }
+}
+
+function readReviewPackagePhase(pkg: unknown): string {
+  if (!pkg || typeof pkg !== "object") return "triage";
+  const phase = (pkg as { phase?: unknown }).phase;
+  return typeof phase === "string" && phase.trim().length > 0 ? phase : "triage";
+}
+
+function pendingAgentQueueLabel(pkg: unknown): string {
+  const phase = readReviewPackagePhase(pkg);
+  switch (phase) {
+    case "awaiting_article_pick":
+      return "Article pick — choose winning source";
+    case "awaiting_summary_approval":
+      return "Summary approval — sign off generated copy";
+    case "awaiting_correction_approval":
+      return "Correction approval — review suggested fixes";
+    case "awaiting_calendar_decision":
+      return "Calendar decision — resolve date mismatch";
+    case "awaiting_duplicate_decision":
+      return "Duplicate decision — resolve overlapping days";
+    default:
+      return "Editorial triage — operator review needed";
+  }
+}
+
+function pendingAgentQueueShortName(phase: string): string {
+  switch (phase) {
+    case "awaiting_article_pick":
+      return "Article pick";
+    case "awaiting_summary_approval":
+      return "Summary approval";
+    case "awaiting_correction_approval":
+      return "Correction approval";
+    case "awaiting_calendar_decision":
+      return "Calendar decision";
+    case "awaiting_duplicate_decision":
+      return "Duplicate decision";
+    default:
+      return "Editorial triage";
+  }
+}
+
+function toIsoEventDate(value: unknown): string | null {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+function mapPendingAgentQueueRows(
+  rows: Array<{
+    id: string;
+    eventDate: unknown;
+    package: unknown;
+    priority: number;
+    createdAt: Date | null;
+  }>,
+): Record<string, Array<{
+  id: string;
+  phase: string;
+  queue: string;
+  label: string;
+  priority: number;
+  createdAt: string | null;
+}>> {
+  const byDate: Record<string, Array<{
+    id: string;
+    phase: string;
+    queue: string;
+    label: string;
+    priority: number;
+    createdAt: string | null;
+  }>> = {};
+
+  for (const row of rows) {
+    const date = toIsoEventDate(row.eventDate);
+    if (!date) continue;
+    const phase = readReviewPackagePhase(row.package);
+    const item = {
+      id: row.id,
+      phase,
+      queue: pendingAgentQueueShortName(phase),
+      label: pendingAgentQueueLabel(row.package),
+      priority: row.priority,
+      createdAt: row.createdAt?.toISOString?.() ?? null,
+    };
+    if (!byDate[date]) byDate[date] = [];
+    byDate[date].push(item);
+  }
+
+  return byDate;
+}
 
 // Global state for fact-checking process
 let shouldStopPerplexityFactCheck = false;
@@ -236,10 +346,77 @@ function parsePerplexityDate(dateText: string | null): string | null {
     }
   });
 
+  /** Pending admin agent review rows for many calendar dates (table views). */
+  router.post("/api/analysis/pending-agent-queue/batch", async (req, res) => {
+    try {
+      const { dates } = req.body as { dates?: unknown };
+      if (!Array.isArray(dates) || dates.length === 0) {
+        return res.json({ byDate: {} });
+      }
+
+      const validDates = [...new Set(
+        dates
+          .filter((d): d is string => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d))
+          .slice(0, 200),
+      )];
+      if (validDates.length === 0) {
+        return res.json({ byDate: {} });
+      }
+
+      const rows = await db
+        .select({
+          id: humanReviewQueue.id,
+          eventDate: humanReviewQueue.eventDate,
+          package: humanReviewQueue.package,
+          priority: humanReviewQueue.priority,
+          createdAt: humanReviewQueue.createdAt,
+        })
+        .from(humanReviewQueue)
+        .where(and(eq(humanReviewQueue.status, "pending"), inArray(humanReviewQueue.eventDate, validDates)))
+        .orderBy(desc(humanReviewQueue.priority), asc(humanReviewQueue.createdAt));
+
+      res.json({ byDate: mapPendingAgentQueueRows(rows) });
+    } catch (error) {
+      console.error("pending-agent-queue batch:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  /** Pending admin agent review queue rows for this calendar date (if any). */
+  router.get("/api/analysis/date/:date/pending-agent-queue", async (req, res) => {
+    try {
+      const { date } = req.params;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
+      }
+
+      const rows = await db
+        .select({
+          id: humanReviewQueue.id,
+          package: humanReviewQueue.package,
+          priority: humanReviewQueue.priority,
+          createdAt: humanReviewQueue.createdAt,
+        })
+        .from(humanReviewQueue)
+        .where(and(eq(humanReviewQueue.eventDate, date), eq(humanReviewQueue.status, "pending")))
+        .orderBy(desc(humanReviewQueue.priority), asc(humanReviewQueue.createdAt));
+
+      res.json({
+        pending: mapPendingAgentQueueRows(
+          rows.map((row) => ({ ...row, eventDate: date })),
+        )[date] ?? [],
+      });
+    } catch (error) {
+      console.error(`pending-agent-queue ${req.params.date}:`, error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
   // Update flagged state for a specific date
   router.post("/api/analysis/date/:date/flag", async (req, res) => {
     try {
       const { date } = req.params;
+      if (!(await requireUnlockedDay(date, res))) return;
       const { isFlagged, flagReason } = req.body as { isFlagged: boolean; flagReason?: string };
 
       if (typeof isFlagged !== "boolean") {
@@ -261,6 +438,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
       }
+      if (!(await requireUnlockedDay(date, res))) return;
 
       if (!veriBadge || !['Manual', 'Orphan', 'Verified', 'Not Available'].includes(veriBadge)) {
         return res.status(400).json({ error: "Invalid veri_badge value. Must be one of: Manual, Orphan, Verified, Not Available" });
@@ -318,6 +496,82 @@ function parsePerplexityDate(dateText: string | null): string | null {
     } catch (error) {
       console.error(`💥 Error updating veri_badge for ${req.params.date}:`, error);
       res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post("/api/analysis/date/:date/topic", async (req, res) => {
+    try {
+      const { date } = req.params;
+      const { topic } = req.body as { topic?: string | null };
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
+      }
+      if (!(await requireUnlockedDay(date, res))) return;
+
+      const existingAnalysis = await storage.getAnalysisByDate(date);
+      if (!existingAnalysis) {
+        return res.status(404).json({ error: `Analysis not found for date: ${date}` });
+      }
+
+      const topicLabel = typeof topic === "string" ? topic.trim() : "";
+      if (!topicLabel) {
+        await syncStorylineAssignmentsForDate(date, []);
+        await storage.updateAnalysis(date, { topicCategories: [] });
+        return res.json({ success: true, date, topics: [], message: "Topic cleared" });
+      }
+
+      const canonical = new Set(TOPIC_HIERARCHY_LEAVES.map((leaf) => leaf.trim().toLowerCase()));
+      if (!canonical.has(topicLabel.toLowerCase())) {
+        return res.status(400).json({ error: `"${topicLabel}" is not a valid hierarchy topic` });
+      }
+
+      const issues = invalidTopicReasons([topicLabel]);
+      if (issues.length > 0) {
+        return res.status(400).json({ error: `Topic rejected: ${issues.join("; ")}` });
+      }
+
+      const linked = await ensureTopicCategoryAndStorylineLinks(date, [topicLabel]);
+      await storage.updateAnalysis(date, { topicCategories: linked });
+
+      res.json({
+        success: true,
+        date,
+        topics: linked,
+        message: `Topic set to ${linked[0] ?? topicLabel}`,
+      });
+    } catch (error) {
+      console.error(`💥 Error updating topic for ${req.params.date}:`, error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post("/api/analysis/date/:date/lock", async (req, res) => {
+    try {
+      const { date } = req.params;
+      const { locked } = req.body as { locked?: boolean };
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
+      }
+      if (typeof locked !== "boolean") {
+        return res.status(400).json({ error: "locked (boolean) is required" });
+      }
+
+      const updated = await setDayLocked(date, locked);
+      res.json({
+        success: true,
+        date,
+        isLocked: updated.isLocked ?? locked,
+        message: locked ? `Locked ${date}` : `Unlocked ${date}`,
+      });
+    } catch (error) {
+      console.error(`💥 Error updating lock for ${req.params.date}:`, error);
+      const message = (error as Error).message;
+      if (message.includes("not found")) {
+        return res.status(404).json({ error: message });
+      }
+      res.status(500).json({ error: message });
     }
   });
 
@@ -388,6 +642,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
       }
+      if (!(await requireUnlockedDay(date, res))) return;
 
       console.log(`🚀 [${requestId}] POST /api/analysis/date/${date} - RECEIVED`);
       console.log(`📊 [${requestId}] Request details: force=${isForce}, aiProvider=${aiProvider}`);
@@ -689,6 +944,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
       }
+      if (!(await requireUnlockedDay(date, res))) return;
 
       console.log(`📝 [${requestId}] POST /api/analysis/date/${date}/redo-summary - RECEIVED`);
 
@@ -779,6 +1035,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
       }
+      if (!(await requireUnlockedDay(date, res))) return;
       
       if (!articleId) {
         return res.status(400).json({ error: "articleId is required" });
@@ -874,6 +1131,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
       }
+      if (!(await requireUnlockedDay(date, res))) return;
       
       if (!articleId) {
         return res.status(400).json({ error: "articleId is required" });
@@ -981,6 +1239,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
       }
+      if (!(await requireUnlockedDay(date, res))) return;
 
       if (!summary || typeof summary !== 'string') {
         return res.status(400).json({ error: "Summary is required and must be a string" });

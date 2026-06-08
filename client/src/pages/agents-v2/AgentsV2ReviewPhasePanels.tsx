@@ -768,9 +768,10 @@ function CalendarPanel({ item, onApprove, busy }: PanelProps) {
       currentTopics={item.dayTopicCategories}
       busy={busy}
       compact
-      onKeep={() => onApprove(item.id, { calendarDecision: "keep_as_is" })}
-      onMove={() => onApprove(item.id, { calendarDecision: "move_to_canonical" })}
-      onDelete={() => onApprove(item.id, { calendarDecision: "delete" })}
+      onKeepBoth={() => onApprove(item.id, { calendarDecision: "keep_as_is" })}
+      onKeepDateRerunOther={(keepDate, rerunDate) =>
+        onApprove(item.id, { calendarKeepDate: keepDate, calendarRerunDate: rerunDate })
+      }
     />
   );
 }

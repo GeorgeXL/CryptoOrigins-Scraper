@@ -21,7 +21,9 @@ import {
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
 import { VeriBadge } from "@/components/VeriBadge";
+import { TopicBadgeEditor } from "@/components/TopicBadgeEditor";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
+import { SingleDayAgentDialog } from "@/components/SingleDayAgentDialog";
 import { useToast } from "@/hooks/use-toast";
 import { useTagging } from "@/hooks/useTagging";
 import { SiOpenai } from "react-icons/si";
@@ -31,7 +33,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { queryClient, clearCacheForDate } from "@/lib/queryClient";
+import { queryClient, clearCacheForDate, invalidateAnalysisListQueries, patchAnalysisListLockInCache } from "@/lib/queryClient";
 import { apiRequest } from "@/lib/queryClient";
 import { debounce } from "@/lib/debounce";
 import { useApiHealthCheck } from "@/hooks/useApiHealthCheck";
@@ -57,6 +59,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 
 
@@ -95,11 +102,17 @@ import {
   Minus,
   Plus,
   Flag,
+  Lock,
+  LockOpen,
+  AlertTriangle,
   Info
 } from "lucide-react";
 import { getCategoryColor, getCategoryIcon, getTagCategory } from "@/utils/tagHelpers";
 import { getCategoryKeyFromPath, getCategoryDisplayMeta } from "@shared/taxonomy";
 import { deserializePageState, reconstructPageUrl } from "@/lib/navigationState";
+import { updateDayTopic } from "@/lib/updateDayTopic";
+import { setDayLocked } from "@/lib/dayLock";
+import { parseIsLocked } from "@/lib/parseIsLocked";
 
 interface DayAnalysisData {
   analysis: {
@@ -113,6 +126,7 @@ interface DayAnalysisData {
     aiProvider: string;
     isManualOverride?: boolean;
     isFlagged?: boolean;
+    isLocked?: boolean;
     flagReason?: string;
     flaggedAt?: string | null;
     veriBadge?: 'Manual' | 'Orphan' | 'Verified' | 'Not Available' | null;
@@ -186,6 +200,15 @@ type PipelineReviewLatest = {
   steps?: PipelineReviewStepSummary[];
 };
 
+type PendingAgentQueueItem = {
+  id: string;
+  phase: string;
+  queue: string;
+  label: string;
+  priority: number;
+  createdAt: string | null;
+};
+
 function formatTriageRouteLabel(route: string | null): string {
   if (!route) return "—";
   const labels: Record<string, string> = {
@@ -241,6 +264,7 @@ export default function DayAnalysis() {
   const [selectionData, setSelectionData] = React.useState<any>(null);
   const [activeTab, setActiveTab] = React.useState<string>('');
   const [showRedoSummaryDialog, setShowRedoSummaryDialog] = React.useState(false);
+  const [showSingleDayAgentDialog, setShowSingleDayAgentDialog] = React.useState(false);
   const articlesPerPage = 10;
   const { triggerHealthCheck } = useApiHealthCheck();
   const { aiProvider } = useAiProvider();
@@ -325,6 +349,7 @@ export default function DayAnalysis() {
             aiProvider: 'unknown',
             isManualOverride: false,
             isFlagged: false,
+            isLocked: false,
             flagReason: '',
             tagsVersion2: [],
             topicCategories: [],
@@ -376,6 +401,7 @@ export default function DayAnalysis() {
           aiProvider: analysis.ai_provider || 'unknown',
           isManualOverride: analysis.is_manual_override || false,
           isFlagged: analysis.is_flagged || false,
+          isLocked: parseIsLocked(analysis.is_locked),
           flagReason: analysis.flag_reason || '',
           veriBadge: analysis.veri_badge as 'Manual' | 'Orphan' | 'Verified' | 'Not Available' | null | undefined,
           tagsVersion2: analysis.tags_version2 || [],
@@ -417,6 +443,15 @@ export default function DayAnalysis() {
     },
   });
 
+  const isLocked = parseIsLocked(dayData?.analysis?.isLocked);
+
+  React.useEffect(() => {
+    if (isLocked) {
+      setIsTaggingMode(false);
+      setIsEditing(false);
+    }
+  }, [isLocked]);
+
   const { data: pipelineReviewSummary } = useQuery({
     queryKey: ["pipeline-review-summary", date],
     queryFn: async (): Promise<{ latest: PipelineReviewLatest | null }> => {
@@ -431,6 +466,49 @@ export default function DayAnalysis() {
     staleTime: 60_000,
     retry: false,
   });
+
+  const { data: pendingAgentQueue } = useQuery({
+    queryKey: ["pending-agent-queue", date],
+    queryFn: async (): Promise<{ pending: PendingAgentQueueItem[] }> => {
+      if (!date) return { pending: [] };
+      const res = await fetch(`/api/analysis/date/${date}/pending-agent-queue`, {
+        credentials: "include",
+      });
+      if (!res.ok) return { pending: [] };
+      return res.json();
+    },
+    enabled: Boolean(date),
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  const pendingQueueItems = pendingAgentQueue?.pending ?? [];
+
+  const pendingAgentAlert = pendingQueueItems.length > 0 ? (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-orange-400 hover:bg-orange-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="Pending admin agent review"
+        >
+          <AlertTriangle className="h-4 w-4" strokeWidth={2.25} />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-xs">
+        <p className="font-medium text-foreground">Pending admin agent review</p>
+        <ul className="mt-1.5 space-y-1 text-xs text-muted-foreground">
+          {pendingQueueItems.map((item) => (
+            <li key={item.id}>
+              <span className="font-medium text-orange-300">{item.queue}</span>
+              {" — "}
+              {item.label}
+            </li>
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
+  ) : null;
 
   // Query for all available tags (for the add tag dialog)
   const { data: allTags } = useQuery<Array<{ name: string; category: string; subcategory_path: string[] | null }>>({
@@ -976,6 +1054,31 @@ export default function DayAnalysis() {
     },
   });
 
+  const lockDayMutation = useMutation({
+    mutationFn: async (locked: boolean) => {
+      if (!date) throw new Error("Date missing");
+      return setDayLocked(date, locked);
+    },
+    onSuccess: (_data, locked) => {
+      queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+      if (date) patchAnalysisListLockInCache(date, locked);
+      invalidateAnalysisListQueries();
+      toast({
+        title: locked ? "Day locked" : "Day unlocked",
+        description: locked
+          ? "This day is protected from pipeline runs and edits."
+          : "Edits and pipeline runs are allowed again.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update lock",
+        description: error.message || "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
   const updateVeriBadgeMutation = useMutation({
     mutationFn: async (newBadge: 'Manual' | 'Orphan' | 'Verified' | 'Not Available') => {
       const res = await fetch(`/api/analysis/date/${date}/veri-badge`, {
@@ -1004,6 +1107,33 @@ export default function DayAnalysis() {
         description: error.message || "Failed to update verification badge",
       });
     }
+  });
+
+  const updateTopicMutation = useMutation({
+    mutationFn: async (newTopic: string | null) => {
+      if (!date || !dayData?.analysis?.id) {
+        throw new Error("Day analysis not loaded");
+      }
+      return updateDayTopic(date, newTopic);
+    },
+    onSuccess: (topics) => {
+      queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+      queryClient.invalidateQueries({ queryKey: ["supabase-tags-analyses"] });
+      queryClient.invalidateQueries({ queryKey: ["supabase-analysis-topic-categories"] });
+      queryClient.invalidateQueries({ queryKey: ["supabase-page-topics-rows"] });
+      queryClient.invalidateQueries({ queryKey: ["supabase-topics-rows"] });
+      toast({
+        title: "Topic updated",
+        description: topics.length ? `Set to ${topics[0]}` : "Topic cleared",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Topic update failed",
+        description: error instanceof Error ? error.message : "Could not save topic",
+      });
+    },
   });
 
   // Handle text selection for tagging - adds to queue instead of direct mutation
@@ -1070,8 +1200,8 @@ export default function DayAnalysis() {
 
   // Handle article selection
   const handleArticleSelect = (articleId: string) => {
-    if (selectingArticleId || selectArticleMutation.isPending) {
-      return; // Prevent multiple selections
+    if (isLocked || selectingArticleId || selectArticleMutation.isPending) {
+      return;
     }
     selectArticleMutation.mutate(articleId);
   };
@@ -1451,7 +1581,8 @@ export default function DayAnalysis() {
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
             </Button>
-            <div>
+            <div className="flex items-center space-x-3">
+              {pendingAgentAlert}
               <h1 className="text-xl font-bold text-foreground">
                 {new Date(date!).toLocaleDateString('en-US', { 
                   weekday: 'long',
@@ -1488,7 +1619,8 @@ export default function DayAnalysis() {
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
             </Button>
-            <div>
+            <div className="flex items-center space-x-3">
+              {pendingAgentAlert}
               <h1 className="text-xl font-bold text-foreground">
                 {new Date(date!).toLocaleDateString('en-US', { 
                   weekday: 'long',
@@ -1536,6 +1668,7 @@ export default function DayAnalysis() {
             Back
           </Button>
           <div className="flex items-center space-x-3">
+            {pendingAgentAlert}
             <h1 className="text-xl font-bold text-foreground">
               {new Date(date!).toLocaleDateString('en-US', { 
                 weekday: 'long',
@@ -1544,7 +1677,29 @@ export default function DayAnalysis() {
                 day: 'numeric' 
               })}
             </h1>
-            {hasUnsavedChanges || hasNewAnalysis ? (
+            {dayData?.analysis?.id ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={() => lockDayMutation.mutate(!isLocked)}
+                disabled={lockDayMutation.isPending}
+                title={isLocked ? "Unlock day" : "Lock day"}
+              >
+                {lockDayMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : isLocked ? (
+                  <Lock className="h-4 w-4 text-amber-400" />
+                ) : (
+                  <LockOpen className="h-4 w-4 text-muted-foreground" />
+                )}
+              </Button>
+            ) : null}
+            {isLocked ? (
+              <Badge variant="outline" className="border-amber-500/40 text-amber-400">
+                Locked
+              </Badge>
+            ) : hasUnsavedChanges || hasNewAnalysis ? (
               <Badge variant="outline" className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
                 Unsaved changes
               </Badge>
@@ -1574,8 +1729,10 @@ export default function DayAnalysis() {
           >
             <ArrowRight className="w-4 h-4" />
           </Button>
-          <div className="w-px h-6 bg-border"></div>
-          <DropdownMenu>
+          {!isLocked && (
+            <>
+              <div className="w-px h-6 bg-border"></div>
+              <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
@@ -1603,8 +1760,17 @@ export default function DayAnalysis() {
                 <FileText className="w-4 h-4 mr-2" />
                 Redo Summary
               </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setShowSingleDayAgentDialog(true)}
+                disabled={!date}
+              >
+                <Bot className="w-4 h-4 mr-2" />
+                Run editorial agent
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+            </>
+          )}
         </div>
       </div>
 
@@ -1658,7 +1824,7 @@ export default function DayAnalysis() {
                     </Badge>
                   )}
                   <div className="flex items-center space-x-1">
-                    {hasUnsavedChanges && (
+                    {!isLocked && hasUnsavedChanges && (
                       <Button 
                         variant="ghost" 
                         size="sm" 
@@ -1674,6 +1840,7 @@ export default function DayAnalysis() {
                         )}
                       </Button>
                     )}
+                    {!isLocked && (
                     <Button 
                       variant="ghost" 
                       size="sm" 
@@ -1687,6 +1854,7 @@ export default function DayAnalysis() {
                         <Pencil className="w-4 h-4" />
                       )}
                     </Button>
+                    )}
                   </div>
                 </div>
                 {/* Show loading state during article selection */}
@@ -1731,6 +1899,8 @@ export default function DayAnalysis() {
                   <div>
                     <div className="flex items-center space-x-2 mb-2">
                       <h5 className="text-sm font-semibold text-foreground">Tags</h5>
+                      {!isLocked && (
+                        <>
                       <Button 
                         variant="ghost" 
                         size="sm" 
@@ -1770,6 +1940,8 @@ export default function DayAnalysis() {
                       {isTaggingMode && (
                         <span className="text-xs text-orange-400">Select text in summary to add tags</span>
                       )}
+                        </>
+                      )}
                     </div>
                     {dayData.analysis.tagsVersion2 && dayData.analysis.tagsVersion2.length > 0 ? (
                       <div className="flex flex-wrap gap-2">
@@ -1789,15 +1961,17 @@ export default function DayAnalysis() {
                             <Badge
                               key={`${tagName}-${idx}`}
                               variant="outline"
-                              className={`text-xs px-1.5 py-0.5 flex items-center space-x-1 cursor-pointer transition-all ${
-                                isHovered 
+                              className={`text-xs px-1.5 py-0.5 flex items-center space-x-1 transition-all ${
+                                isLocked
+                                  ? getCategoryColor(category)
+                                  : `cursor-pointer ${isHovered 
                                   ? 'bg-red-500/20 text-red-400 border-red-500/30' 
-                                  : getCategoryColor(category)
+                                  : getCategoryColor(category)}`
                               }`}
-                              onMouseEnter={() => setHoveredTag(tagName)}
-                              onMouseLeave={() => setHoveredTag(null)}
-                              onClick={() => !isRemoving && removeTagMutation.mutate(tagName)}
-                              title={isHovered ? "Click to remove tag" : undefined}
+                              onMouseEnter={() => !isLocked && setHoveredTag(tagName)}
+                              onMouseLeave={() => !isLocked && setHoveredTag(null)}
+                              onClick={() => !isLocked && !isRemoving && removeTagMutation.mutate(tagName)}
+                              title={!isLocked && isHovered ? "Click to remove tag" : undefined}
                             >
                               {isHovered ? (
                                 <>
@@ -1821,24 +1995,25 @@ export default function DayAnalysis() {
 
                   <div className="mt-4">
                     <h5 className="mb-2 text-sm font-semibold text-foreground">Topics</h5>
-                    {dayData.analysis.topicCategories && dayData.analysis.topicCategories.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {dayData.analysis.topicCategories.map((topic, idx) => (
-                          <Badge
-                            key={`${topic}-${idx}`}
-                            variant="outline"
-                            className="border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-xs text-sky-200"
-                          >
-                            {topic}
-                          </Badge>
-                        ))}
-                      </div>
+                    {dayData.analysis.id ? (
+                      isLocked ? (
+                        <Badge variant="outline" className="text-xs font-normal">
+                          {dayData.analysis.topicCategories?.[0]?.trim() || "No topic"}
+                        </Badge>
+                      ) : (
+                        <TopicBadgeEditor
+                          topic={dayData.analysis.topicCategories?.[0] ?? null}
+                          onTopicChange={(nextTopic) => updateTopicMutation.mutate(nextTopic)}
+                          disabled={updateTopicMutation.isPending}
+                        />
+                      )
                     ) : (
-                      <p className="text-sm text-muted-foreground">No topics assigned</p>
+                      <p className="text-sm text-muted-foreground">No analysis row yet</p>
                     )}
                   </div>
                   
                   {/* More */}
+                  {!isLocked && (
                   <div className="mt-6 space-y-2">
                     <h5 className="text-sm font-semibold text-foreground">More</h5>
                     <div className="flex items-center gap-3 flex-wrap">
@@ -1974,6 +2149,7 @@ export default function DayAnalysis() {
                       </Badge>
                     </div>
                   </div>
+                  )}
                 </div>
               </div>
           </CardContent>
@@ -2392,6 +2568,18 @@ export default function DayAnalysis() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {date ? (
+        <SingleDayAgentDialog
+          open={showSingleDayAgentDialog}
+          onOpenChange={setShowSingleDayAgentDialog}
+          date={date}
+          onRunFinished={() => {
+            queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+            queryClient.invalidateQueries({ queryKey: ["supabase-tags-analyses"] });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

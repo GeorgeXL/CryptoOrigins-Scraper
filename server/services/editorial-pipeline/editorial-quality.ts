@@ -114,12 +114,25 @@ export function coerceEditorialSummaryLength(summary: string): string | null {
 }
 
 /** Mirrors Events Manager quality rules — timeline summaries are one clause, one event. */
+const SUMMARY_DISALLOWED_SYMBOL_CHECKS: ReadonlyArray<{ id: string; test: (summary: string) => boolean }> = [
+  { id: "semicolon", test: (s) => s.includes(";") },
+  { id: "colon", test: (s) => s.includes(":") },
+  { id: "question mark", test: (s) => s.includes("?") },
+  { id: "space-hyphen", test: (s) => / - /.test(s) },
+  { id: "pipe", test: (s) => s.includes("|") },
+  { id: "em-dash", test: (s) => s.includes("—") },
+  { id: "en-dash", test: (s) => s.includes("–") },
+  { id: "slash", test: (s) => s.includes(" / ") },
+  { id: "ampersand", test: (s) => s.includes("&") },
+  { id: "quote", test: (s) => s.includes('"') || s.includes("\u201C") || s.includes("\u201D") },
+];
+
+export function findSummaryDisallowedSymbols(summary: string): string[] {
+  return SUMMARY_DISALLOWED_SYMBOL_CHECKS.filter(({ test }) => test(summary)).map(({ id }) => id);
+}
+
 export function summaryDisallowedSymbol(summary: string): string | null {
-  if (summary.includes(";")) return "semicolon";
-  if (summary.includes(":")) return "colon";
-  if (summary.includes("?")) return "question mark";
-  if (/ - /.test(summary)) return "space-hyphen";
-  return null;
+  return findSummaryDisallowedSymbols(summary)[0] ?? null;
 }
 
 /** Semicolon chains or multi-headline compression — weekly roundups, not one calendar event. */
@@ -209,9 +222,13 @@ export function evaluateSummaryQuality(summary: string | null | undefined): Summ
   }
   const symbol = summaryDisallowedSymbol(t);
   if (symbol) {
+    const symbols = findSummaryDisallowedSymbols(t);
     return {
       code: "disallowed_symbols",
-      message: `Summary contains disallowed symbol: ${symbol}.`,
+      message:
+        symbols.length > 1
+          ? `Summary contains disallowed symbols: ${symbols.join(", ")}.`
+          : `Summary contains disallowed symbol: ${symbol}.`,
     };
   }
   if (summaryHasTrailingPunctuation(t)) {

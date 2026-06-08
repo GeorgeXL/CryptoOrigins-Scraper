@@ -959,6 +959,14 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
       (CALENDAR_DECISIONS as string[]).includes(req.body.calendarDecision)
         ? (req.body.calendarDecision as CalendarDecisionInput)
         : undefined;
+    const calendarKeepDate =
+      typeof req.body?.calendarKeepDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.calendarKeepDate)
+        ? (req.body.calendarKeepDate as string)
+        : undefined;
+    const calendarRerunDate =
+      typeof req.body?.calendarRerunDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.calendarRerunDate)
+        ? (req.body.calendarRerunDate as string)
+        : undefined;
     const duplicateDecision =
       typeof req.body?.duplicateDecision === "string" &&
       (DUPLICATE_DECISIONS as string[]).includes(req.body.duplicateDecision)
@@ -1099,9 +1107,14 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
         (req as any)._sanityOverrideNote = override;
       }
     }
-    if (isCalendarDecisionPackage(existing.package) && !calendarDecision) {
+    if (
+      isCalendarDecisionPackage(existing.package) &&
+      !calendarDecision &&
+      !(calendarKeepDate && calendarRerunDate)
+    ) {
       return res.status(400).json({
-        error: "calendarDecision is required (move_to_canonical | keep_as_is | delete)",
+        error:
+          "calendarDecision (move_to_canonical | keep_as_is | delete) or calendarKeepDate+calendarRerunDate is required",
       });
     }
     if (isDuplicateDecisionPackage(existing.package) && !duplicateDecision) {
@@ -1150,6 +1163,8 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
       proposalTagSelections,
       proposalTopicSelections,
       calendarDecision,
+      calendarKeepDate,
+      calendarRerunDate,
       duplicateDecision,
       duplicateNeighborDate,
       editedSummary,

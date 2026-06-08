@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { AnalysesTable } from "@/components/AnalysesTable";
+import { parseIsLocked } from "@/lib/parseIsLocked";
 import {
   Select,
   SelectContent,
@@ -62,6 +63,7 @@ import {
   Loader2,
   RefreshCw,
   FileText,
+  FileSpreadsheet,
   Tags
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -82,10 +84,14 @@ import { serializePageState, deserializePageState, type HomePageState } from "@/
 import {
   buildTopicCatalogData,
   parseTopicIdsFromSelection,
+  resolveTopicLabelFromSelection,
   selectionUsesTopicKeys,
+  type AnalysisTopicRow,
   type PageTopicRow,
   type TopicRow,
 } from "@/lib/topicCatalog";
+import { fetchAllSupabaseRows } from "@/lib/supabaseBatch";
+import { downloadSummariesExcel } from "@/lib/exportSummariesExcel";
 
 // Main category type definition
 export type MainCategory = 
@@ -239,6 +245,7 @@ export default function HomePage() {
   // New state for the copy dialog
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [textToCopy, setTextToCopy] = useState("");
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
 
   // State for edit/delete tag dialogs
   const [showRenameDialog, setShowRenameDialog] = useState(false);
@@ -471,23 +478,25 @@ export default function HomePage() {
 
   const { data: pageTopicRows = [] } = useQuery({
     queryKey: ["supabase-page-topics-rows"],
-    queryFn: async (): Promise<PageTopicRow[]> => {
-      if (!supabase) return [];
-      const { data, error } = await supabase
-        .from("page_topics")
-        .select("analysis_id, topic_id");
-      if (error) {
-        console.warn("[HomePage] page_topics:", error.message);
-        return [];
-      }
-      return (data ?? []) as PageTopicRow[];
-    },
+    queryFn: async (): Promise<PageTopicRow[]> =>
+      fetchAllSupabaseRows<PageTopicRow>("page_topics", "analysis_id, topic_id", {
+        orderBy: { column: "analysis_id", ascending: true },
+      }),
+    staleTime: 60_000,
+  });
+
+  const { data: analysisTopicRows = [] } = useQuery({
+    queryKey: ["supabase-analysis-topic-categories"],
+    queryFn: async (): Promise<AnalysisTopicRow[]> =>
+      fetchAllSupabaseRows<AnalysisTopicRow>("historical_news_analyses", "id, topic_categories", {
+        orderBy: { column: "date", ascending: true },
+      }),
     staleTime: 60_000,
   });
 
   const topicCatalogData = useMemo(
-    () => buildTopicCatalogData(topicRows, pageTopicRows),
-    [topicRows, pageTopicRows]
+    () => buildTopicCatalogData(topicRows, pageTopicRows, analysisTopicRows),
+    [topicRows, pageTopicRows, analysisTopicRows],
   );
 
   const sidebarCatalogData = sidebarMenu === "topics" ? topicCatalogData : catalogData;
@@ -510,8 +519,8 @@ export default function HomePage() {
       currentPage,
       pageSize,
     ],
-    refetchOnMount: true,
-    refetchOnWindowFocus: false,
+    refetchOnMount: "always",
+    staleTime: 0,
     queryFn: async () => {
       if (!supabase) throw new Error("Supabase not configured");
 
@@ -519,7 +528,7 @@ export default function HomePage() {
       let query = supabase
         .from("historical_news_analyses")
         .select(
-          "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged",
+          "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked",
           { count: "exact" }
         );
 
@@ -637,6 +646,7 @@ export default function HomePage() {
       const paginatedAnalyses = filteredAnalyses.slice(startIndex, endIndex).map((a: any) => ({
         ...a,
         isFlagged: a.is_flagged || false,
+        isLocked: parseIsLocked(a.is_locked),
       }));
       
       // If we did client-side filtering, use the filtered count
@@ -715,6 +725,9 @@ export default function HomePage() {
   const paginatedAnalyses = analysesData?.analyses || [];
   const totalPages = analysesData?.pagination.totalPages || 1;
   const totalCount = analysesData?.pagination.totalCount || 0;
+  const selectedTopicLabel = resolveTopicLabelFromSelection(selectedEntities, topicCatalogData);
+  const canExportTopicExcel =
+    sidebarMenu === "topics" && selectedEntities.size === 1 && !!selectedTopicLabel && totalCount > 0;
 
   // Helper function to get tag category from tag name using catalogData
   const getTagCategory = (tagName: string): string => {
@@ -778,35 +791,57 @@ export default function HomePage() {
     });
   };
 
-  // Helper to fetch all matching dates based on current filters
-  const fetchAllMatchingDates = async (): Promise<string[]> => {
+  // Helper to fetch all analyses matching current filters (ignores pagination)
+  const fetchAllFilteredAnalyses = async (): Promise<
+    Array<{
+      id?: string;
+      date: string;
+      summary: string;
+      tags_version2?: string[] | null;
+      topic_categories?: unknown;
+    }>
+  > => {
     if (!supabase) throw new Error("Supabase not configured");
 
     let query = supabase
       .from("historical_news_analyses")
-      .select("id, date, tags_version2, summary");
-
-    // Note: For untagged filtering, we'll do it client-side since Supabase doesn't handle empty arrays well
-    // if (showUntagged) {
-    //   query = query.or("tags_version2.is.null,tags_version2.eq.[]");
-    // }
+      .select("id, date, summary, tags_version2, topic_categories");
 
     if (debouncedSearchQuery) {
       query = query.ilike("summary", `%${debouncedSearchQuery}%`);
     }
 
-    const { data: analyses, error } = await query;
-    if (error) throw error;
+    query = query.order("date", { ascending: false });
 
-    // Client-side filtering for untagged and entity selection - use tags_version2
-    let filteredAnalyses = analyses || [];
-    
+    let analyses: Array<{
+      id?: string;
+      date: string;
+      summary: string;
+      tags_version2?: string[] | null;
+      topic_categories?: unknown;
+    }> = [];
+
+    let batchStart = 0;
+    const batchSize = 1000;
+
+    while (true) {
+      const { data: batch, error } = await query.range(batchStart, batchStart + batchSize - 1);
+      if (error) throw error;
+      if (!batch || batch.length === 0) break;
+
+      analyses = analyses.concat(batch);
+      if (batch.length < batchSize) break;
+      batchStart += batchSize;
+    }
+
+    let filteredAnalyses = analyses;
+
     if (showUntagged) {
-      filteredAnalyses = filteredAnalyses.filter(analysis => 
-        !analysis.tags_version2 || analysis.tags_version2.length === 0
+      filteredAnalyses = filteredAnalyses.filter(
+        (analysis) => !analysis.tags_version2 || analysis.tags_version2.length === 0,
       );
     }
-    
+
     if (selectedEntities.size > 0 && !showUntagged) {
       let analysisIdFilter: Set<string> | null = null;
       if (sidebarMenu === "topics" && selectionUsesTopicKeys(selectedEntities)) {
@@ -835,7 +870,12 @@ export default function HomePage() {
       });
     }
 
-    return filteredAnalyses.map(a => a.date);
+    return filteredAnalyses;
+  };
+
+  const fetchAllMatchingDates = async (): Promise<string[]> => {
+    const rows = await fetchAllFilteredAnalyses();
+    return rows.map((row) => row.date);
   };
 
   // Bulk add tags mutation
@@ -1146,6 +1186,54 @@ export default function HomePage() {
   };
 
   // Copy all filtered results to clipboard as TXT
+  const handleDownloadExcel = async () => {
+    if (!canExportTopicExcel || !selectedTopicLabel) {
+      toast({
+        title: "Select one topic",
+        description: "Switch to Topics in the sidebar and choose a single storyline to export.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsExportingExcel(true);
+    try {
+      const analyses = await fetchAllFilteredAnalyses();
+      if (analyses.length === 0) {
+        toast({
+          title: "Nothing to export",
+          description: "No analyses match the current topic filter.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      downloadSummariesExcel(
+        analyses.map((analysis) => ({
+          date: analysis.date,
+          summary: analysis.summary ?? "",
+          tags: Array.isArray(analysis.tags_version2) ? analysis.tags_version2.join(", ") : "",
+          topic: selectedTopicLabel,
+        })),
+        selectedTopicLabel,
+      );
+
+      toast({
+        title: "Download started",
+        description: `Exported ${analyses.length.toLocaleString()} summaries to ${selectedTopicLabel}.xlsx`,
+      });
+    } catch (error) {
+      console.error("Excel export error:", error);
+      toast({
+        title: "Export failed",
+        description: error instanceof Error ? error.message : "Failed to export summaries",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
   const handleCopyToClipboard = async () => {
     try {
       // If selecting all matching (potentially huge), don't allow copy or warn
@@ -1325,11 +1413,16 @@ export default function HomePage() {
               mode="inline"
               showOverview={sidebarMenu === "tags"}
               onEntitySelect={(entityKey) => {
-                const newSelected = new Set(selectedEntities);
-                if (newSelected.has(entityKey)) {
-                  newSelected.delete(entityKey);
+                let newSelected: Set<string>;
+                if (sidebarMenu === "topics") {
+                  newSelected = selectedEntities.has(entityKey) ? new Set<string>() : new Set([entityKey]);
                 } else {
-                  newSelected.add(entityKey);
+                  newSelected = new Set(selectedEntities);
+                  if (newSelected.has(entityKey)) {
+                    newSelected.delete(entityKey);
+                  } else {
+                    newSelected.add(entityKey);
+                  }
                 }
                 setSelectedEntities(newSelected);
                 setShowUntagged(false);
@@ -1366,17 +1459,39 @@ export default function HomePage() {
                 </Badge>
               </div>
               {totalCount > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCopyToClipboard}
-                  disabled={selectAllMatching || selectedDates.size > 50}
-                  className="flex items-center space-x-2"
-                  data-testid="button-copy-txt"
-                >
-                  <Copy className="w-4 h-4" />
-                  <span>Copy TXT</span>
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDownloadExcel}
+                    disabled={!canExportTopicExcel || isExportingExcel}
+                    className="flex items-center space-x-2"
+                    data-testid="button-download-excel"
+                    title={
+                      canExportTopicExcel
+                        ? `Download all ${totalCount.toLocaleString()} summaries for ${selectedTopicLabel}`
+                        : "Select one topic in the Topics sidebar to export"
+                    }
+                  >
+                    {isExportingExcel ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <FileSpreadsheet className="w-4 h-4" />
+                    )}
+                    <span>Download Excel</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCopyToClipboard}
+                    disabled={selectAllMatching || selectedDates.size > 50}
+                    className="flex items-center space-x-2"
+                    data-testid="button-copy-txt"
+                  >
+                    <Copy className="w-4 h-4" />
+                    <span>Copy TXT</span>
+                  </Button>
+                </div>
               )}
             </div>
 

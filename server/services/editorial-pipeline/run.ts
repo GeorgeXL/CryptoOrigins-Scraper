@@ -1766,6 +1766,31 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
 
   let stepIndex = 1;
   for (const item of triage) {
+    const [lockRow] = await db
+      .select({ isLocked: historicalNewsAnalyses.isLocked })
+      .from(historicalNewsAnalyses)
+      .where(eq(historicalNewsAnalyses.date, item.date))
+      .limit(1);
+    if (lockRow?.isLocked) {
+      const skipStepId = await createStep({
+        runId,
+        stepIndex,
+        agentName: "NewsManager",
+        status: "skipped",
+        confidence: 100,
+        input: { date: item.date, analysisId: item.analysisId },
+        output: buildStepOutput({
+          summary: `Skipped ${item.date} — operator locked this day`,
+          findings: ["Day is locked; pipeline will not modify this record."],
+        }),
+        evidence: { reason: "operator_locked" },
+      });
+      await recordConfidence(runId, skipStepId, "NewsManager", 100, "Operator locked");
+      stepIndex += 1;
+      effectiveTriageForStats.push(item);
+      continue;
+    }
+
     const baseAgentsForDay =
       opts.partialRun && opts.partialRun.date === item.date ? opts.partialRun.agents : item.requiredAgents;
     const agentsForDay = baseAgentsForDay.filter((agent) => agentMatchesCheckScopes(agent, checkScopes));

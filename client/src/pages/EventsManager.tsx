@@ -73,12 +73,13 @@ import { EditTagDialog } from "@/components/TagsManager/EditTagDialog";
 import { DeleteDialog } from "@/components/TagsManager/DeleteDialog";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { getCategoryDisplayMeta } from "@shared/taxonomy";
-import { TagsSidebar, QualityCheckItem } from "@/components/TagsSidebar";
+import { TagsSidebar, QualityCheckItem, type LockStatsItem } from "@/components/TagsSidebar";
 import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor } from "@/utils/tagHelpers";
 import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
+import { extractTopicLabelsFromCategories } from "@/lib/topicCatalog";
 
 // Quality violation types for filtering
 const VIOLATION_TYPES = [
@@ -87,7 +88,7 @@ const VIOLATION_TYPES = [
   { id: 'too-short', label: 'Too short (< 100 chars)', filterFn: (v: QualityViolation) => v.length > 0 && v.length < 100 },
   { id: 'too-long', label: 'Too long (> 110 chars)', filterFn: (v: QualityViolation) => v.length > 110 },
   { id: 'ends-period', label: 'Ends with period', filterFn: (v: QualityViolation) => v.summary?.trim().endsWith('.') || v.violations.some(x => x.toLowerCase().includes('period')) },
-  { id: 'has-hyphen', label: 'Contains unusual symbols', filterFn: (v: QualityViolation) => v.violations.some(x => x.includes('unusual symbols') || x.includes('hyphen') || x.includes('semicolon') || x.includes('colon') || x.includes('question mark')) },
+  { id: 'has-hyphen', label: 'Contains unusual symbols', filterFn: (v: QualityViolation) => v.violations.some(x => /unusual symbols|disallowed symbol/i.test(x)) },
   { id: 'truncated', label: 'Truncated ending', filterFn: (v: QualityViolation) => v.violations.some(x => x.includes('Ends with') || x.includes('Truncated')) },
   { id: 'excessive-dots', label: 'Excessive dots', filterFn: (v: QualityViolation) => v.violations.some(x => x.toLowerCase().includes('excessive dots')) },
   { id: 'generic-fallback', label: 'Generic fallback', filterFn: (v: QualityViolation) => v.violations.some(x => x.toLowerCase().includes('generic') || x.toLowerCase().includes('fallback')) },
@@ -166,6 +167,7 @@ export default function EventsManager() {
   // Quality check state
   const [selectedQualityCheck, setSelectedQualityCheck] = useState<string | null>(null);
   const [selectedVeriBadge, setSelectedVeriBadge] = useState<string | null>(null);
+  const [selectedLocked, setSelectedLocked] = useState(false);
   const [qualityCheckPage, setQualityCheckPage] = useState(1);
 
   // Track previous search string to detect URL changes (start empty so we restore on first mount)
@@ -406,6 +408,134 @@ export default function EventsManager() {
       return {
         entries: data || [],
         totalCount: data?.length || 0,
+      };
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  // Fetch topic assignment quality (no topic / multiple topics)
+  const { data: topicQualityData, isLoading: topicQualityLoading } = useQuery<{
+    noTopic: { entries: { date: string; summary: string; topic_categories: unknown }[]; totalCount: number };
+    multiTopic: { entries: { date: string; summary: string; topic_categories: unknown; topics: string[] }[]; totalCount: number };
+  }>({
+    queryKey: ["events-manager-topic-quality"],
+    queryFn: async () => {
+      if (!supabase) {
+        console.warn("Supabase not configured for topic quality check");
+        return {
+          noTopic: { entries: [], totalCount: 0 },
+          multiTopic: { entries: [], totalCount: 0 },
+        };
+      }
+
+      let allData: { date: string; summary: string | null; topic_categories: unknown }[] = [];
+      let from = 0;
+      const batchSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data: batchData, error: batchError } = await supabase
+          .from("historical_news_analyses")
+          .select("date, summary, topic_categories")
+          .range(from, from + batchSize - 1);
+
+        if (batchError) {
+          console.error("Error fetching topic quality analyses:", batchError);
+          throw batchError;
+        }
+
+        if (batchData && batchData.length > 0) {
+          allData = allData.concat(batchData);
+          from += batchSize;
+          hasMore = batchData.length === batchSize;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      const noTopicEntries: { date: string; summary: string; topic_categories: unknown }[] = [];
+      const multiTopicEntries: {
+        date: string;
+        summary: string;
+        topic_categories: unknown;
+        topics: string[];
+      }[] = [];
+
+      for (const entry of allData) {
+        const topics = extractTopicLabelsFromCategories(entry.topic_categories);
+        const summary = entry.summary || "";
+        if (topics.length === 0) {
+          noTopicEntries.push({
+            date: entry.date,
+            summary,
+            topic_categories: entry.topic_categories,
+          });
+        } else if (topics.length >= 2) {
+          multiTopicEntries.push({
+            date: entry.date,
+            summary,
+            topic_categories: entry.topic_categories,
+            topics,
+          });
+        }
+      }
+
+      return {
+        noTopic: { entries: noTopicEntries, totalCount: noTopicEntries.length },
+        multiTopic: { entries: multiTopicEntries, totalCount: multiTopicEntries.length },
+      };
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  // Locked days count + entries for sidebar stats / filter view
+  const { data: lockedDaysData, isLoading: lockedDaysLoading } = useQuery<{
+    entries: { date: string; summary: string }[];
+    lockedCount: number;
+    totalCount: number;
+  }>({
+    queryKey: ["events-manager-locked-days"],
+    queryFn: async () => {
+      if (!supabase) {
+        return { entries: [], lockedCount: 0, totalCount: 0 };
+      }
+
+      const { count: totalCount, error: totalError } = await supabase
+        .from("historical_news_analyses")
+        .select("*", { count: "exact", head: true });
+
+      if (totalError) throw totalError;
+
+      let entries: { date: string; summary: string }[] = [];
+      let from = 0;
+      const batchSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data: batchData, error: batchError } = await supabase
+          .from("historical_news_analyses")
+          .select("date, summary")
+          .eq("is_locked", true)
+          .order("date", { ascending: false })
+          .range(from, from + batchSize - 1);
+
+        if (batchError) throw batchError;
+        if (!batchData || batchData.length === 0) break;
+
+        entries = entries.concat(
+          batchData.map((row) => ({
+            date: row.date,
+            summary: row.summary || "",
+          })),
+        );
+        from += batchSize;
+        hasMore = batchData.length === batchSize;
+      }
+
+      return {
+        entries,
+        lockedCount: entries.length,
+        totalCount: totalCount ?? 0,
       };
     },
     staleTime: 1000 * 60 * 5,
@@ -732,10 +862,13 @@ export default function EventsManager() {
     const untaggedCount = untaggedData?.totalCount || 0;
     const missingMonthsCount = missingMonthsData?.totalCount || 0;
     const flaggedCount = flaggedData?.totalCount || 0;
+    const noTopicCount = topicQualityData?.noTopic.totalCount || 0;
+    const multiTopicCount = topicQualityData?.multiTopic.totalCount || 0;
     const isEmptyLoading = emptySummaryLoading;
     const isUntaggedLoading = untaggedLoading;
     const isMissingMonthsLoading = missingMonthsLoading;
     const isFlaggedLoading = flaggedLoading;
+    const isTopicQualityLoading = topicQualityLoading;
     const isViolationsLoading = !qualityViolationsData && qualityLoading;
 
     // Empty summary
@@ -765,6 +898,24 @@ export default function EventsManager() {
       isLoading: isFlaggedLoading,
     });
 
+    // No topic assigned
+    items.push({
+      id: 'no-topic',
+      label: 'No topic',
+      count: noTopicCount,
+      hasIssues: noTopicCount > 0,
+      isLoading: isTopicQualityLoading,
+    });
+
+    // Multiple topics (should be exactly one leaf)
+    items.push({
+      id: 'multi-topic',
+      label: '2+ topics',
+      count: multiTopicCount,
+      hasIssues: multiTopicCount > 0,
+      isLoading: isTopicQualityLoading,
+    });
+
     // Missing months
     items.push({
       id: 'missing-months',
@@ -788,7 +939,7 @@ export default function EventsManager() {
     }
 
     return items;
-  }, [qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, qualityLoading, emptySummaryLoading, untaggedLoading, missingMonthsLoading, flaggedLoading]);
+  }, [qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, qualityLoading, emptySummaryLoading, untaggedLoading, missingMonthsLoading, flaggedLoading, topicQualityLoading]);
 
   // Build VeriBadge items for sidebar
   const veriBadgeItems = useMemo<QualityCheckItem[]>(() => {
@@ -831,8 +982,27 @@ export default function EventsManager() {
     ];
   }, [manualData, orphanData, verifiedData, notAvailableData, emptyVeriBadgeData, manualLoading, orphanLoading, verifiedLoading, notAvailableLoading, emptyVeriBadgeLoading]);
 
+  const lockStats = useMemo<LockStatsItem>(
+    () => ({
+      lockedCount: lockedDaysData?.lockedCount ?? 0,
+      totalCount: lockedDaysData?.totalCount ?? 0,
+      isLoading: lockedDaysLoading,
+    }),
+    [lockedDaysData, lockedDaysLoading],
+  );
+
   // Get filtered violations based on selected quality check or veriBadge
   const filteredQualityViolations = useMemo(() => {
+    if (selectedLocked) {
+      return (lockedDaysData?.entries || []).map((entry) => ({
+        date: entry.date,
+        summary: entry.summary || "",
+        violations: ["Locked"],
+        length: entry.summary?.length || 0,
+        tags_version2: null,
+      }));
+    }
+
     // Handle VeriBadge selections
     if (selectedVeriBadge) {
       if (selectedVeriBadge === 'manual') {
@@ -914,6 +1084,26 @@ export default function EventsManager() {
       }));
     }
 
+    if (selectedQualityCheck === 'no-topic') {
+      return (topicQualityData?.noTopic.entries || []).map((entry) => ({
+        date: entry.date,
+        summary: entry.summary || '',
+        violations: ['No topic assigned'],
+        length: entry.summary?.length || 0,
+        tags_version2: null,
+      }));
+    }
+
+    if (selectedQualityCheck === 'multi-topic') {
+      return (topicQualityData?.multiTopic.entries || []).map((entry) => ({
+        date: entry.date,
+        summary: entry.summary || '',
+        violations: [`${entry.topics.length} topics: ${entry.topics.join(", ")}`],
+        length: entry.summary?.length || 0,
+        tags_version2: null,
+      }));
+    }
+
     if (selectedQualityCheck === 'missing-months') {
       return (missingMonthsData?.entries || []).map((entry: any) => ({
         date: entry.date,
@@ -935,7 +1125,7 @@ export default function EventsManager() {
     if (!type) return violations;
     
     return violations.filter(type.filterFn);
-  }, [selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, manualData, orphanData, verifiedData, notAvailableData, emptyVeriBadgeData]);
+  }, [selectedLocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, lockedDaysData, manualData, orphanData, verifiedData, notAvailableData, emptyVeriBadgeData]);
 
   // Paginated quality violations
   const paginatedQualityViolations = useMemo(() => {
@@ -1912,10 +2102,23 @@ export default function EventsManager() {
                 const newQualityCheck = selectedQualityCheck === id ? null : id;
                 setSelectedQualityCheck(newQualityCheck);
                 setSelectedVeriBadge(null); // Clear VeriBadge selection
+                setSelectedLocked(false);
                 setQualityCheckPage(1);
                 setShowUntagged(false);
                 setSelectedEntities(new Set());
                 updateUrl({ selectedQualityCheck: newQualityCheck, selectedVeriBadge: null, qualityCheckPage: 1, selectedEntities: new Set() });
+              }}
+              lockStats={lockStats}
+              selectedLocked={selectedLocked}
+              onLockedSelect={() => {
+                const next = !selectedLocked;
+                setSelectedLocked(next);
+                setSelectedQualityCheck(null);
+                setSelectedVeriBadge(null);
+                setQualityCheckPage(1);
+                setShowUntagged(false);
+                setSelectedEntities(new Set());
+                updateUrl({ selectedQualityCheck: null, selectedVeriBadge: null, qualityCheckPage: 1, selectedEntities: new Set() });
               }}
               veriBadgeItems={veriBadgeItems}
               selectedVeriBadge={selectedVeriBadge}
@@ -1923,6 +2126,7 @@ export default function EventsManager() {
                 const newVeriBadge = selectedVeriBadge === id ? null : id;
                 setSelectedVeriBadge(newVeriBadge);
                 setSelectedQualityCheck(null); // Clear quality check selection
+                setSelectedLocked(false);
                 setQualityCheckPage(1);
                 setShowUntagged(false);
                 setSelectedEntities(new Set());
@@ -1939,6 +2143,7 @@ export default function EventsManager() {
                 setShowUntagged(false);
                 setSelectedQualityCheck(null);
                 setSelectedVeriBadge(null);
+                setSelectedLocked(false);
                 setCurrentPage(1);
                 updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1, selectedQualityCheck: null, selectedVeriBadge: null });
               }}
@@ -1948,6 +2153,7 @@ export default function EventsManager() {
                 setSelectedEntities(new Set());
                 setSelectedQualityCheck(null);
                 setSelectedVeriBadge(null);
+                setSelectedLocked(false);
                 setCurrentPage(1);
                 updateUrl({ showUntagged: newShowUntagged, selectedEntities: new Set(), currentPage: 1, selectedQualityCheck: null, selectedVeriBadge: null });
               }}
@@ -1963,20 +2169,24 @@ export default function EventsManager() {
             {/* Main Content Area */}
             <div className="space-y-6">
               <Card className="pt-0 px-6 pb-6 border-0">
-            {(selectedQualityCheck || selectedVeriBadge) ? (
+            {(selectedQualityCheck || selectedVeriBadge || selectedLocked) ? (
               <>
-                {/* Quality Check or VeriBadge View */}
+                {/* Quality Check, Locked, or VeriBadge View */}
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center space-x-3">
                     <h2 className="text-lg font-semibold text-foreground">
-                      {selectedVeriBadge 
+                      {selectedLocked
+                        ? "Locked"
+                        : selectedVeriBadge 
                         ? veriBadgeItems.find(t => t.id === selectedVeriBadge)?.label || 'VeriBadge'
-                        : VIOLATION_TYPES.find(t => t.id === selectedQualityCheck)?.label || 'Quality Check'}
+                        : qualityCheckItems.find(t => t.id === selectedQualityCheck)?.label || 'Quality Check'}
                     </h2>
                     <Badge variant="secondary" className="font-normal">
-                      {filteredQualityViolations.length.toLocaleString()} {selectedVeriBadge 
+                      {selectedLocked
+                        ? `${lockStats.lockedCount.toLocaleString()} / ${lockStats.totalCount.toLocaleString()} locked`
+                        : `${filteredQualityViolations.length.toLocaleString()} ${selectedVeriBadge 
                         ? `entr${filteredQualityViolations.length !== 1 ? 'ies' : 'y'}`
-                        : `issue${filteredQualityViolations.length !== 1 ? 's' : ''}`}
+                        : `issue${filteredQualityViolations.length !== 1 ? 's' : ''}`}`}
                     </Badge>
                   </div>
                   {/* Action buttons based on quality check type */}
@@ -1994,9 +2204,12 @@ export default function EventsManager() {
                     url: undefined,
                     source_url: undefined,
                     isManualOverride: false,
+                    isLocked: selectedLocked,
                   }))}
                   isLoading={
-                    selectedVeriBadge === 'manual'
+                    selectedLocked
+                      ? lockedDaysLoading
+                      : selectedVeriBadge === 'manual'
                       ? manualLoading
                       : selectedVeriBadge === 'orphan'
                       ? orphanLoading
@@ -2010,6 +2223,10 @@ export default function EventsManager() {
                       ? emptySummaryLoading 
                       : selectedQualityCheck === 'untagged'
                       ? untaggedLoading
+                      : selectedQualityCheck === 'no-topic' || selectedQualityCheck === 'multi-topic'
+                      ? topicQualityLoading
+                      : selectedQualityCheck === 'flagged'
+                      ? flaggedLoading
                       : selectedQualityCheck === 'missing-months'
                       ? missingMonthsLoading
                       : qualityLoading
@@ -2148,7 +2365,7 @@ export default function EventsManager() {
               <>
                 {/* Show placeholder when no selection is made */}
                 {selectedEntities.size === 0 && !showUntagged && !debouncedSearchQuery ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <div className="flex min-h-[calc(100vh-14rem)] w-full flex-col items-center justify-center text-center">
                     <Filter className="w-12 h-12 text-muted-foreground mb-4" />
                     <h3 className="text-lg font-semibold text-foreground mb-2">
                       Select tags to view analyses

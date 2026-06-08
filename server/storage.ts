@@ -217,6 +217,7 @@ export class DatabaseStorage implements IStorage {
     if (analysis.reasoning !== undefined) updateData.reasoning = analysis.reasoning;
     if (analysis.topArticleId !== undefined) updateData.topArticleId = analysis.topArticleId;
     if (analysis.isManualOverride !== undefined) updateData.isManualOverride = analysis.isManualOverride;
+    if (analysis.isLocked !== undefined) updateData.isLocked = analysis.isLocked;
     if (analysis.isOrphan !== undefined) updateData.isOrphan = analysis.isOrphan;
     if (analysis.tierUsed !== undefined) updateData.tierUsed = analysis.tierUsed;
     if (analysis.winningTier !== undefined) updateData.winningTier = analysis.winningTier;

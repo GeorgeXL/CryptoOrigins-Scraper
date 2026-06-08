@@ -1,8 +1,20 @@
+import type { ReactNode } from "react";
+import { Link } from "wouter";
+
 import { Button } from "@/components/ui/button";
 import type { EditorialReviewItem } from "@/lib/editorial-pipeline";
 import { cn } from "@/lib/utils";
 
 type CalendarDecision = NonNullable<EditorialReviewItem["calendarDecision"]>;
+
+export function CalendarFlagReason({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border/40 bg-muted/25 px-3.5 py-3">
+      <p className="text-xs font-medium text-muted-foreground/75">Why this was flagged</p>
+      <div className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{children}</div>
+    </div>
+  );
+}
 
 type CalendarMismatchReviewProps = {
   decision: CalendarDecision;
@@ -11,34 +23,32 @@ type CalendarMismatchReviewProps = {
   currentTopics?: string[] | null;
   busy?: boolean;
   compact?: boolean;
-  onKeep: () => void;
-  onMove: () => void;
-  onDelete?: () => void;
+  onKeepDateRerunOther: (keepDate: string, rerunDate: string) => void;
+  onKeepBoth: () => void;
 };
 
-function SummaryBlock({
-  label,
+function DateCard({
   date,
   summary,
   tags,
   topics,
-  tone,
+  otherDate,
+  busy,
+  canKeep,
+  onKeepThisRerunOther,
 }: {
-  label: string;
   date: string;
   summary: string | null | undefined;
   tags?: string[] | null;
   topics?: string[] | null;
-  tone: "current" | "suggested";
+  otherDate: string;
+  busy?: boolean;
+  canKeep: boolean;
+  onKeepThisRerunOther: () => void;
 }) {
-  const border =
-    tone === "current" ? "border-red-500/35 bg-red-500/[0.04]" : "border-emerald-500/35 bg-emerald-500/[0.04]";
-  const labelColor = tone === "current" ? "text-red-300" : "text-emerald-300";
-
   return (
-    <div className={cn("rounded-md border p-3", border)}>
-      <p className={cn("text-[11px] uppercase tracking-[0.14em]", labelColor)}>{label}</p>
-      <p className="mt-1 text-sm font-medium">{date}</p>
+    <div className="rounded-md border border-border/70 bg-muted/10 p-3">
+      <p className="font-mono text-sm font-semibold">{date}</p>
       {summary?.trim() ? (
         <p className="mt-2 text-sm leading-relaxed text-foreground">{summary.trim()}</p>
       ) : (
@@ -50,39 +60,25 @@ function SummaryBlock({
           {topics?.length ? <p>Topics: {topics.join(", ")}</p> : null}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function ActionCard({
-  title,
-  outcome,
-  buttonLabel,
-  onClick,
-  disabled,
-  variant = "default",
-}: {
-  title: string;
-  outcome: string;
-  buttonLabel: string;
-  onClick: () => void;
-  disabled?: boolean;
-  variant?: "default" | "outline" | "destructive";
-}) {
-  return (
-    <div className="rounded-md border border-border/70 bg-muted/10 p-3">
-      <p className="text-sm font-medium">{title}</p>
-      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{outcome}</p>
-      <Button
-        type="button"
-        size="sm"
-        variant={variant}
-        className="mt-3 w-full sm:w-auto"
-        disabled={disabled}
-        onClick={onClick}
-      >
-        {buttonLabel}
-      </Button>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Button
+          type="button"
+          size="sm"
+          className="w-full"
+          disabled={busy || !canKeep}
+          onClick={onKeepThisRerunOther}
+        >
+          Keep this
+        </Button>
+        <Button type="button" size="sm" variant="outline" className="w-full" asChild>
+          <Link href={`/day/${date}`} target="_blank" rel="noopener noreferrer">
+            Open day
+          </Link>
+        </Button>
+      </div>
+      <p className="mt-1.5 text-[11px] text-muted-foreground">
+        Keep this · reruns {otherDate}
+      </p>
     </div>
   );
 }
@@ -94,83 +90,52 @@ export function CalendarMismatchReview({
   currentTopics,
   busy,
   compact,
-  onKeep,
-  onMove,
-  onDelete,
+  onKeepDateRerunOther,
+  onKeepBoth,
 }: CalendarMismatchReviewProps) {
   const current = currentSummary?.trim() || null;
   const suggested = p.expectedDateSummary?.trim() || null;
+  const flagReason =
+    p.reason ||
+    (p.chronologyHint && !p.chronologyHint.reciprocalConflict ? p.chronologyHint.rationale : null);
 
   return (
     <div className="space-y-3">
-      {p.reason ? (
-        <div className="rounded-md border border-amber-500/35 bg-amber-500/[0.06] p-3">
-          <p className="text-[11px] uppercase tracking-[0.14em] text-amber-300">Why this was flagged</p>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{p.reason}</p>
-        </div>
-      ) : null}
+      {flagReason ? <CalendarFlagReason>{flagReason}</CalendarFlagReason> : null}
 
       <div className={cn("grid gap-3", compact ? "grid-cols-1" : "md:grid-cols-2")}>
-        <SummaryBlock
-          label="Summary on current date"
+        <DateCard
           date={p.currentDate}
           summary={current}
           tags={currentTags}
           topics={currentTopics}
-          tone="current"
+          otherDate={p.expectedDate}
+          busy={busy}
+          canKeep={Boolean(current)}
+          onKeepThisRerunOther={() => onKeepDateRerunOther(p.currentDate, p.expectedDate)}
         />
-        <SummaryBlock
-          label="Summary on suggested date"
+        <DateCard
           date={p.expectedDate}
           summary={suggested}
           tags={p.expectedDateTags}
           topics={p.expectedDateTopics}
-          tone="suggested"
+          otherDate={p.currentDate}
+          busy={busy}
+          canKeep={Boolean(suggested)}
+          onKeepThisRerunOther={() => onKeepDateRerunOther(p.expectedDate, p.currentDate)}
         />
       </div>
 
-      {p.canonicalDateOccupied ? (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-xs leading-relaxed text-amber-100">
-          {p.expectedDate} already has its own row — move is disabled. Compare the two summaries above. If both
-          dates are valid distinct events, choose Keep. If this row is wrong, fix or delete it from Manager.
-        </p>
-      ) : null}
-
-      {p.chronologyHint && !p.chronologyHint.reciprocalConflict ? (
-        <div className="rounded-md border border-emerald-500/35 bg-emerald-500/[0.06] p-3">
-          <p className="text-[11px] uppercase tracking-[0.14em] text-emerald-300">Agent chronology read</p>
-          <p className="mt-1 text-sm leading-relaxed text-foreground">{p.chronologyHint.rationale}</p>
-        </div>
-      ) : null}
-
-      <div className={cn("grid gap-3", compact ? "grid-cols-1" : "md:grid-cols-2")}>
-        <ActionCard
-          title={`Keep on ${p.currentDate}`}
-          outcome={`Nothing is deleted and no new summary is generated. This text stays on ${p.currentDate}. We mark the day as manually verified so the calendar check will not ask again.`}
-          buttonLabel={`Keep on ${p.currentDate}`}
-          disabled={busy}
-          onClick={onKeep}
-        />
-        <ActionCard
-          title={`Move to ${p.expectedDate}`}
-          outcome={`The same summary, tags, and article move to ${p.expectedDate}. Slot ${p.currentDate} becomes empty — no row left behind. Nothing is regenerated automatically.`}
-          buttonLabel={`Move to ${p.expectedDate}`}
-          disabled={busy || p.canonicalDateOccupied}
-          variant="outline"
-          onClick={onMove}
-        />
-      </div>
-
-      {onDelete ? (
-        <ActionCard
-          title={`Delete ${p.currentDate} and pick a new story`}
-          outcome={`Removes this analysis row entirely and starts a fresh article-pick run for ${p.currentDate}. Use when this date should cover a different event.`}
-          buttonLabel={`Delete ${p.currentDate} & rerun`}
-          disabled={busy}
-          variant="destructive"
-          onClick={onDelete}
-        />
-      ) : null}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="w-full sm:w-auto"
+        disabled={busy}
+        onClick={onKeepBoth}
+      >
+        Keep both
+      </Button>
     </div>
   );
 }
