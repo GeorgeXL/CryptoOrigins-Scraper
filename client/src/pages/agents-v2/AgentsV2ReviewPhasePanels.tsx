@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { GoogleGIcon } from "@/components/GoogleGIcon";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import type { ApproveReviewOpts, EditorialReviewItem, ArticleCandidate } from "@/lib/editorial-pipeline";
+import {
+  checkArticlePickWithGoogle,
+  type ApproveReviewOpts,
+  type EditorialReviewItem,
+  type ArticleCandidate,
+} from "@/lib/editorial-pipeline";
 import {
   buildCorrectionApprovePayload,
   formatCorrectionChangeLines,
@@ -14,8 +21,13 @@ import {
   CorrectionSummarySourcePanel,
   type SummarySourceAction,
 } from "@/pages/agents-v2/CorrectionSummarySourcePanel";
-import { CalendarMismatchReview } from "@/pages/agents-v2/CalendarMismatchReview";
-import { effectiveReviewItemPhase } from "@/pages/agents-v2/map-review-queue";
+import { CalendarDatesReview } from "@/pages/agents-v2/CalendarDatesReview";
+import { RemovedDayArticlePickBanner } from "@/pages/agents-v2/RemovedDayArticlePickBanner";
+import {
+  calendarFlagReasonFromRows,
+  collectCalendarDateEntries,
+} from "@/pages/agents-v2/calendar-date-entries";
+import { effectiveReviewItemPhase, mapReviewItemToQueueRow } from "@/pages/agents-v2/map-review-queue";
 import { TOPIC_HIERARCHY, formatTopicLeafWithGroup } from "@shared/topic-hierarchy";
 
 type PanelProps = {
@@ -147,27 +159,39 @@ function ArticlePickPanel({ item, onApprove, busy }: PanelProps) {
   const recommended = candidates.find((c) => c.recommended) ?? candidates[0] ?? null;
   const betterStoryline = item.scenario === "better_storyline";
   const [selected, setSelected] = useState<string | null>(recommended?.id ?? null);
+  const [checkingGoogle, setCheckingGoogle] = useState(false);
+  const [googleNote, setGoogleNote] = useState<string | null>(null);
+  const [googleError, setGoogleError] = useState<string | null>(null);
   const selectedCandidate = candidates.find((c) => c.id === selected) ?? null;
   const selectedBlocked = selectedCandidate?.calendarSanityOk === false;
+  const pickDate = item.eventDate ?? "";
+  const actionsBusy = busy || checkingGoogle;
 
   useEffect(() => {
     setSelected((prev) => prev ?? recommended?.id ?? null);
-  }, [recommended?.id]);
+    setGoogleNote(null);
+    setGoogleError(null);
+  }, [recommended?.id, item.id]);
 
   if (!candidates.length) {
     return (
-      <div className="space-y-2 rounded-lg border border-border/70 p-2.5 text-xs">
-        <p className="font-medium">Recommended action</p>
-        <p className="leading-relaxed text-muted-foreground">
-          Confirm empty only if this date has no Bitcoin, crypto/Web3, regulatory, market, or macro event worth keeping.
-          Otherwise reject and rerun candidate search.
-        </p>
+      <div className="space-y-2">
+        {item.removedDayContext ? <RemovedDayArticlePickBanner context={item.removedDayContext} /> : null}
+        <div className="rounded-lg border border-border/70 p-2.5 text-xs">
+          <p className="font-medium">Recommended action</p>
+          <p className="leading-relaxed text-muted-foreground">
+            Confirm empty only if this date has no Bitcoin, crypto/Web3, regulatory, market, or macro event worth keeping.
+            Otherwise reject and rerun candidate search.
+          </p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="max-h-[min(60vh,20rem)] space-y-2 overflow-y-auto pr-1 sm:max-h-52">
+    <div className="space-y-2">
+      {item.removedDayContext ? <RemovedDayArticlePickBanner context={item.removedDayContext} /> : null}
+      <div className="max-h-[min(60vh,20rem)] space-y-2 overflow-y-auto pr-1 sm:max-h-52">
       {recommended ? (
         <div className="rounded-lg border border-primary/30 bg-primary/5 p-2.5 text-xs">
           <p className="font-medium">Recommended action</p>
@@ -191,7 +215,11 @@ function ArticlePickPanel({ item, onApprove, busy }: PanelProps) {
             key={c.id}
             type="button"
             disabled={!isPending || busy}
-            onClick={() => setSelected(c.id)}
+            onClick={() => {
+              setGoogleNote(null);
+              setGoogleError(null);
+              setSelected(c.id);
+            }}
             className={cn(
               "w-full rounded-lg border p-2.5 text-left text-xs transition-colors",
               blocked && "border-red-500/35 bg-red-500/[0.04]",
@@ -221,16 +249,76 @@ function ArticlePickPanel({ item, onApprove, busy }: PanelProps) {
         );
       })}
       {isPending ? (
-        <Button
-          type="button"
-          size="sm"
-          className="w-full"
-          disabled={!selected || selectedBlocked || busy}
-          onClick={() => selected && onApprove(item.id, { selectedArticleId: selected })}
-        >
-          Approve pick
-        </Button>
+        <div className="space-y-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="w-full"
+            disabled={actionsBusy || !pickDate || candidates.length === 0}
+            onClick={() => {
+              void (async () => {
+                setCheckingGoogle(true);
+                setGoogleNote(null);
+                setGoogleError(null);
+                try {
+                  const { pickId } = await checkArticlePickWithGoogle({
+                    date: pickDate,
+                    scenario: item.scenario ?? undefined,
+                    currentSummary: betterStoryline ? item.daySummary?.trim() || undefined : undefined,
+                    candidates: candidates.map((candidate) => ({
+                      id: candidate.id,
+                      title: candidate.title,
+                      publishedDate: candidate.publishedDate ?? null,
+                      tier: candidate.tier,
+                      summary: candidate.summary,
+                    })),
+                  });
+                  if (pickId) {
+                    setSelected(pickId);
+                    const picked = candidates.find((candidate) => candidate.id === pickId);
+                    setGoogleNote(
+                      picked
+                        ? `Google picked: ${picked.title}`
+                        : "Google returned a pick. Review and approve when ready.",
+                    );
+                  } else {
+                    setGoogleNote("Google found no reliable match — pick manually or reject.");
+                  }
+                } catch (error) {
+                  setGoogleError(error instanceof Error ? error.message : "Google check failed");
+                } finally {
+                  setCheckingGoogle(false);
+                }
+              })();
+            }}
+          >
+            {checkingGoogle ? (
+              <>
+                <Loader2 className="animate-spin" />
+                Checking…
+              </>
+            ) : (
+              <>
+                <GoogleGIcon className="size-4 shrink-0" />
+                Check with Google
+              </>
+            )}
+          </Button>
+          {googleNote ? <p className="text-xs leading-relaxed text-muted-foreground">{googleNote}</p> : null}
+          {googleError ? <p className="text-xs leading-relaxed text-destructive">{googleError}</p> : null}
+          <Button
+            type="button"
+            size="sm"
+            className="w-full"
+            disabled={!selected || selectedBlocked || actionsBusy}
+            onClick={() => selected && onApprove(item.id, { selectedArticleId: selected })}
+          >
+            Approve pick
+          </Button>
+        </div>
       ) : null}
+      </div>
     </div>
   );
 }
@@ -754,23 +842,23 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
 }
 
 function CalendarPanel({ item, onApprove, busy }: PanelProps) {
-  const p = item.calendarDecision;
   const isPending = item.status === "pending";
-  if (!p) return null;
+  if (!item.calendarDecision && !item.calendarReciprocalPair) return null;
   if (!isPending) {
     return <p className="text-[11px] text-muted-foreground">Calendar decision already resolved.</p>;
   }
+  const row = mapReviewItemToQueueRow(item);
+  const entries = collectCalendarDateEntries([row]);
   return (
-    <CalendarMismatchReview
-      decision={p}
-      currentSummary={item.daySummary}
-      currentTags={item.dayTags}
-      currentTopics={item.dayTopicCategories}
+    <CalendarDatesReview
+      entries={entries}
+      flagReason={calendarFlagReasonFromRows([row])}
       busy={busy}
-      compact
-      onKeepBoth={() => onApprove(item.id, { calendarDecision: "keep_as_is" })}
-      onKeepDateRerunOther={(keepDate, rerunDate) =>
-        onApprove(item.id, { calendarKeepDate: keepDate, calendarRerunDate: rerunDate })
+      onApply={(removeDates) =>
+        onApprove(item.id, {
+          calendarGroupDates: entries.map((entry) => entry.date),
+          calendarRemoveDates: removeDates,
+        })
       }
     />
   );

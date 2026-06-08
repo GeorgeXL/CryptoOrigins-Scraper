@@ -2487,19 +2487,23 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
 
   router.post("/api/quality-check/bulk-remove-periods", async (req, res) => {
     try {
-      const { testDate } = req.body; // Optional: for testing with a single date
+      const { testDate, dates } = req.body ?? {};
       
       let analysesToProcess;
-      if (testDate) {
-        // Test mode: process only one date
+      if (testDate && typeof testDate === "string") {
         const analysis = await storage.getAnalysisByDate(testDate);
         if (!analysis) {
           return res.status(404).json({ error: `Analysis not found for date: ${testDate}` });
         }
         analysesToProcess = [analysis];
         console.log(`🧪 TEST MODE: Processing only ${testDate}`);
+      } else if (Array.isArray(dates) && dates.length > 0) {
+        const uniqueDates = [...new Set(dates.filter((d: unknown) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)))];
+        analysesToProcess = (
+          await Promise.all(uniqueDates.map((date: string) => storage.getAnalysisByDate(date)))
+        ).filter(Boolean);
+        console.log(`🔧 Processing ${analysesToProcess.length} selected date(s) for period removal`);
       } else {
-        // Normal mode: process all analyses
         analysesToProcess = await storage.getAllAnalyses();
       }
 
@@ -2542,7 +2546,8 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
         updated,
         total: analysesToProcess.length,
         errors: errors.length > 0 ? errors : undefined,
-        testMode: !!testDate
+        testMode: !!testDate,
+        selectedDates: Array.isArray(dates) ? dates.length : undefined,
       });
     } catch (error) {
       console.error('💥 Error in bulk remove periods:', error);

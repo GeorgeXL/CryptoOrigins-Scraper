@@ -2,13 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Link } from "wouter";
 
-import { CalendarMismatchReview } from "@/pages/agents-v2/CalendarMismatchReview";
-import { CalendarConflictPairReview } from "@/pages/agents-v2/CalendarConflictPairReview";
+import { CalendarDatesReview } from "@/pages/agents-v2/CalendarDatesReview";
+import { RemovedDayArticlePickBanner } from "@/pages/agents-v2/RemovedDayArticlePickBanner";
+import {
+  calendarFlagReasonFromRows,
+  capCalendarRemoveDates,
+  collectCalendarDateEntries,
+} from "@/pages/agents-v2/calendar-date-entries";
 import { AgentsV2ResumeSlicePanel } from "@/pages/agents-v2/AgentsV2ResumeSlicePanel";
 import { AgentsV2ReviewPhasePanel } from "@/pages/agents-v2/AgentsV2ReviewPhasePanels";
 import { formatCorrectionChangeLines, summarizeCorrectionProposals } from "@/lib/correction-proposal-view";
 import {
-  calendarDatesInRow,
   consolidateQueueRows,
   duplicatePairKey,
   expectedFirstOperatorExperienceV3,
@@ -18,6 +22,8 @@ import {
 } from "@/pages/agents-v2/map-review-queue";
 import {
   approveReviewItem,
+  checkArticlePickWithGoogle,
+  checkCalendarDatesWithGoogle,
   clearPipelineArtifacts,
   deleteReviewQueueItem,
   fetchReviewQueue,
@@ -27,6 +33,7 @@ import {
   type ApproveReviewOpts,
   type DayVerificationResult,
 } from "@/lib/editorial-pipeline";
+import type { LogLine } from "@/lib/pipelineActivityLog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,10 +47,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { GoogleGIcon } from "@/components/GoogleGIcon";
+import { Label } from "@/components/ui/label";
+import { PipelineActivityLog } from "@/components/PipelineActivityLog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Info, Link2, Loader2, RefreshCw, ShieldCheck, Trash2, X, XCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Info, Link2, Loader2, RefreshCw, ShieldCheck, StopCircle, Trash2, X, XCircle } from "lucide-react";
 
 type QueueStatus = "pending" | "approved" | "rejected";
 type FilterTab = QueueStatus | "all";
@@ -418,6 +428,46 @@ function orderArticlePickCandidates<T extends { id: string; recommended?: boolea
   return { ordered, recommended };
 }
 
+function CalendarReviewPanel({
+  rows,
+  busy,
+  readOnly,
+  resolutionNote,
+  onApprove,
+}: {
+  rows: QueueRow[];
+  busy: boolean;
+  readOnly?: boolean;
+  resolutionNote?: string | null;
+  onApprove: (id: string, opts?: ApproveReviewOpts) => void;
+}) {
+  const pendingRows = rows.filter(
+    (row) => row.status === "pending" && row.pipelinePhase === "awaiting_calendar_decision",
+  );
+  const sourceRows = pendingRows.length > 0 ? pendingRows : rows;
+  const entries = collectCalendarDateEntries(sourceRows);
+  if (entries.length === 0) return null;
+
+  const anchor = pendingRows[0] ?? rows[0];
+  if (!anchor) return null;
+
+  return (
+    <CalendarDatesReview
+      entries={entries}
+      flagReason={calendarFlagReasonFromRows(sourceRows)}
+      busy={busy}
+      readOnly={readOnly}
+      resolutionNote={resolutionNote}
+      onApply={(removeDates) =>
+        onApprove(anchor.id, {
+          calendarGroupDates: entries.map((entry) => entry.date),
+          calendarRemoveDates: removeDates,
+        })
+      }
+    />
+  );
+}
+
 function TailoredLiveReviewCard({
   row,
   busy,
@@ -431,6 +481,9 @@ function TailoredLiveReviewCard({
 }) {
   const [duplicatePick, setDuplicatePick] = useState<"keep" | "replace" | "delete_focal" | null>(null);
   const [articlePickId, setArticlePickId] = useState<string | null>(null);
+  const [checkingArticlePickGoogle, setCheckingArticlePickGoogle] = useState(false);
+  const [articlePickGoogleNote, setArticlePickGoogleNote] = useState<string | null>(null);
+  const [articlePickGoogleError, setArticlePickGoogleError] = useState<string | null>(null);
   const candidatesListRef = useRef<HTMLDivElement>(null);
   const phase = row.pipelinePhase;
   const item = row.item;
@@ -457,6 +510,8 @@ function TailoredLiveReviewCard({
 
   useEffect(() => {
     setArticlePickId(null);
+    setArticlePickGoogleNote(null);
+    setArticlePickGoogleError(null);
   }, [row.id]);
 
   useEffect(() => {
@@ -545,8 +600,51 @@ function TailoredLiveReviewCard({
     const currentSummary = item.daySummary?.trim() ?? "";
     const currentTags = (item.dayTags ?? []).filter(Boolean);
     const currentTopics = (item.dayTopicCategories ?? []).filter(Boolean);
+    const articlePickActionsBusy = busy || checkingArticlePickGoogle;
+
+    const handleCheckArticlePickWithGoogle = async () => {
+      setCheckingArticlePickGoogle(true);
+      setArticlePickGoogleNote(null);
+      setArticlePickGoogleError(null);
+      try {
+        const { pickId } = await checkArticlePickWithGoogle({
+          date: row.date,
+          scenario: item.scenario ?? undefined,
+          currentSummary: betterStoryline ? currentSummary : undefined,
+          candidates: articleCandidates.map((candidate) => ({
+            id: candidate.id,
+            title: candidate.title,
+            publishedDate: candidate.publishedDate ?? null,
+            tier: candidate.tier,
+            summary: candidate.summary,
+          })),
+        });
+        if (pickId) {
+          setArticlePickId(pickId);
+          const picked = articleCandidates.find((candidate) => candidate.id === pickId);
+          setArticlePickGoogleNote(
+            picked
+              ? `Google picked: ${picked.title}. Review and approve when ready.`
+              : "Google returned a pick. Review and approve when ready.",
+          );
+          queueMicrotask(() => {
+            candidatesListRef.current
+              ?.querySelector(`[data-candidate-id="${CSS.escape(pickId)}"]`)
+              ?.scrollIntoView({ block: "nearest" });
+          });
+        } else {
+          setArticlePickGoogleNote("Google found no reliable match — pick manually or reject.");
+        }
+      } catch (error) {
+        setArticlePickGoogleError(error instanceof Error ? error.message : "Google check failed");
+      } finally {
+        setCheckingArticlePickGoogle(false);
+      }
+    };
+
     return (
       <div className="space-y-3">
+        {item.removedDayContext ? <RemovedDayArticlePickBanner context={item.removedDayContext} /> : null}
         {betterStoryline ? (
           <section className="rounded-lg border border-amber-500/30 bg-amber-500/[0.04] p-3">
             <div className="grid gap-3 md:grid-cols-[1fr_14rem]">
@@ -611,6 +709,8 @@ function TailoredLiveReviewCard({
                     aria-pressed={selectedId === c.id}
                     onClick={() => {
                       if (busy) return;
+                      setArticlePickGoogleNote(null);
+                      setArticlePickGoogleError(null);
                       setArticlePickId(c.id);
                     }}
                     onKeyDown={(e) => {
@@ -676,8 +776,33 @@ function TailoredLiveReviewCard({
             <div className="mt-3 space-y-2">
               <Button
                 size="sm"
+                variant="outline"
                 className="w-full"
-                disabled={busy || !selectedId || selectedBlocked}
+                disabled={articlePickActionsBusy || articleCandidates.length === 0}
+                onClick={() => void handleCheckArticlePickWithGoogle()}
+              >
+                {checkingArticlePickGoogle ? (
+                  <>
+                    <Loader2 className="animate-spin" />
+                    Checking…
+                  </>
+                ) : (
+                  <>
+                    <GoogleGIcon className="size-4 shrink-0" />
+                    Check with Google
+                  </>
+                )}
+              </Button>
+              {articlePickGoogleNote ? (
+                <p className="text-xs leading-relaxed text-muted-foreground">{articlePickGoogleNote}</p>
+              ) : null}
+              {articlePickGoogleError ? (
+                <p className="text-xs leading-relaxed text-destructive">{articlePickGoogleError}</p>
+              ) : null}
+              <Button
+                size="sm"
+                className="w-full"
+                disabled={articlePickActionsBusy || !selectedId || selectedBlocked}
                 onClick={() => selectedId && onApprove(item.id, { selectedArticleId: selectedId })}
                 title="Approve selected pick (A)"
               >
@@ -687,7 +812,7 @@ function TailoredLiveReviewCard({
                 size="sm"
                 variant="outline"
                 className="w-full"
-                disabled={busy}
+                disabled={articlePickActionsBusy}
                 onClick={() =>
                   betterStoryline
                     ? onApprove(item.id, { keepCurrentSummary: true })
@@ -710,33 +835,9 @@ function TailoredLiveReviewCard({
     );
   }
 
-  if (phase === "awaiting_calendar_decision" && item.calendarReciprocalPair) {
-    const pair = item.calendarReciprocalPair;
+  if (phase === "awaiting_calendar_decision") {
     return (
-      <CalendarConflictPairReview
-        pair={pair}
-        busy={busy}
-        onKeepDateRerunOther={(keepDate, rerunDate) =>
-          onApprove(item.id, { calendarKeepDate: keepDate, calendarRerunDate: rerunDate })
-        }
-        onKeepBoth={() => onApprove(item.id, { calendarPairResolution: "keep_both" })}
-      />
-    );
-  }
-
-  if (phase === "awaiting_calendar_decision" && item.calendarDecision) {
-    return (
-      <CalendarMismatchReview
-        decision={item.calendarDecision}
-        currentSummary={item.daySummary}
-        currentTags={dayTags}
-        currentTopics={dayTopics}
-        busy={busy}
-        onKeepBoth={() => onApprove(item.id, { calendarDecision: "keep_as_is" })}
-        onKeepDateRerunOther={(keepDate, rerunDate) =>
-          onApprove(item.id, { calendarKeepDate: keepDate, calendarRerunDate: rerunDate })
-        }
-      />
+      <CalendarReviewPanel rows={[row]} busy={busy} onApprove={(id, opts) => onApprove(id, opts)} />
     );
   }
 
@@ -944,21 +1045,25 @@ type QueueListProps = {
   onRemove: (id: string) => Promise<void>;
 };
 
-function calendarRowLabel(row: QueueRow): string {
-  if (row.calendarGroup) return row.calendarGroup.dates.join(" · ");
-  if (row.item.calendarReciprocalPair) {
-    const pair = row.item.calendarReciprocalPair;
-    return `${pair.sideA.date} ↔ ${pair.sideB.date}`;
-  }
-  const cd = row.item.calendarDecision;
-  if (cd) return `${cd.currentDate} ↔ ${cd.expectedDate}`;
-  return row.date;
-}
-
 function rowIsBusy(row: QueueRow, busyId: string | null): boolean {
   if (!busyId) return false;
   if (busyId === row.id) return true;
   return row.calendarGroup?.rows.some((member) => member.id === busyId) ?? false;
+}
+
+function ResolvedReviewBody({ row }: { row: QueueRow }) {
+  if (row.pipelinePhase === "awaiting_calendar_decision") {
+    return (
+      <CalendarReviewPanel
+        rows={[row]}
+        busy={false}
+        readOnly
+        resolutionNote={row.item.reviewNotes}
+        onApprove={() => {}}
+      />
+    );
+  }
+  return <ReviewerBriefCard row={row} />;
 }
 
 function QueueList({
@@ -1032,6 +1137,12 @@ function QueueList({
           const group = row.calendarGroup;
           const reviewRows = group?.rows ?? [row];
           const busy = rowIsBusy(row, busyId);
+          const calendarGroupRows =
+            group?.rows.filter((member) => member.pipelinePhase === "awaiting_calendar_decision") ?? [];
+          const showUnifiedCalendarPicker =
+            Boolean(group && group.rows.length > 1) && calendarGroupRows.length > 0;
+          const actionRowId =
+            calendarGroupRows.find((member) => member.status === "pending")?.id ?? row.id;
           return (
             <li key={row.id} className="bg-card/20">
               <button
@@ -1061,7 +1172,7 @@ function QueueList({
                     {group && group.rows.length > 1 ? (
                       <Badge variant="secondary" className="h-5 gap-1 px-1.5 text-[10px] font-normal">
                         <Link2 className="size-3" aria-hidden />
-                        {group.rows.length} conflicts
+                        {group.dates.length} dates
                       </Badge>
                     ) : null}
                     {group && group.sharedDates.length > 0 ? (
@@ -1090,71 +1201,28 @@ function QueueList({
                   >
                     <div className="px-4 pb-4 pt-3 sm:px-5">
                       <div className="space-y-4">
-                        {group && group.rows.length > 1 ? (
-                          <div className="rounded-lg border border-border/40 bg-muted/25 px-3.5 py-3">
-                            <div className="flex items-start gap-2">
-                              <Link2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
-                              <div className="space-y-1">
-                                <p className="text-sm font-medium text-foreground">Linked calendar conflicts</p>
-                                <p className="text-xs leading-relaxed text-muted-foreground">
-                                  These flags share{" "}
-                                  {group.sharedDates.length > 0 ? group.sharedDates.join(", ") : "related dates"}.
-                                  Resolving one may affect another — review each conflict below.
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-                        {reviewRows.map((reviewRow, index) => (
-                          <div
-                            key={reviewRow.id}
-                            className={cn(
-                              "space-y-4",
-                              group && group.rows.length > 1 && "rounded-xl border border-border/60 bg-background/35 p-4",
-                            )}
-                          >
-                            {group && group.rows.length > 1 ? (
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                  Conflict {index + 1} of {group.rows.length}
-                                </p>
-                                <p className="font-mono text-xs text-muted-foreground">
-                                  {calendarDatesInRow(reviewRow).join(" · ")}
-                                </p>
-                              </div>
-                            ) : null}
-                            {reviewRow.status === "pending" ? (
-                              <TailoredLiveReviewCard
-                                row={reviewRow}
-                                busy={busyId === reviewRow.id}
+                        {showUnifiedCalendarPicker ? (
+                          row.status === "pending" ? (
+                            <>
+                              <CalendarReviewPanel
+                                rows={calendarGroupRows}
+                                busy={busy}
                                 onApprove={(id, opts) => void onApprove(id, opts)}
-                                onReject={(id) => void onReject(id)}
                               />
-                            ) : (
-                              <ReviewerBriefCard row={reviewRow} />
-                            )}
-                            {reviewRow.status === "pending" ? (
                               <div className="rounded-xl border border-border/70 bg-background/45 p-4">
-                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                                  Actions
-                                </p>
-                                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                                <div className="mt-0 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                                   <Button
                                     type="button"
                                     variant="outline"
                                     size="sm"
                                     className="w-full sm:w-auto"
                                     disabled={busy}
-                                    title="Reject (R)"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      void onReject(reviewRow.id);
+                                      void onReject(actionRowId);
                                     }}
                                   >
-                                    Reject{" "}
-                                    <kbd className="ml-1 hidden rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground sm:inline">
-                                      R
-                                    </kbd>
+                                    Reject
                                   </Button>
                                   <Button
                                     type="button"
@@ -1171,38 +1239,83 @@ function QueueList({
                                       ) {
                                         return;
                                       }
-                                      void onRemove(reviewRow.id);
+                                      void onRemove(actionRowId);
                                     }}
                                   >
                                     <Trash2 className="mr-2 size-4 shrink-0" aria-hidden />
                                     Remove from queue
                                   </Button>
-                                  {/^\d{4}-\d{2}-\d{2}$/.test(reviewRow.date) ? (
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            calendarGroupRows.map((reviewRow) => (
+                              <ResolvedReviewBody key={reviewRow.id} row={reviewRow} />
+                            ))
+                          )
+                        ) : (
+                          reviewRows.map((reviewRow) => (
+                            <div key={reviewRow.id} className="space-y-4">
+                              {reviewRow.status === "pending" ? (
+                                <TailoredLiveReviewCard
+                                  row={reviewRow}
+                                  busy={busyId === reviewRow.id}
+                                  onApprove={(id, opts) => void onApprove(id, opts)}
+                                  onReject={(id) => void onReject(id)}
+                                />
+                              ) : (
+                                <ResolvedReviewBody row={reviewRow} />
+                              )}
+                              {reviewRow.status === "pending" ? (
+                                <div className="rounded-xl border border-border/70 bg-background/45 p-4">
+                                  <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                                     <Button
                                       type="button"
                                       variant="outline"
                                       size="sm"
                                       className="w-full sm:w-auto"
-                                      asChild
-                                      title="Open day (O)"
+                                      disabled={busy}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void onReject(reviewRow.id);
+                                      }}
                                     >
-                                      <Link
-                                        href={`/day/${reviewRow.date}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                      >
-                                        Open day{" "}
-                                        <kbd className="ml-1 hidden rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground sm:inline">
-                                          O
-                                        </kbd>
-                                      </Link>
+                                      Reject
                                     </Button>
-                                  ) : null}
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="w-full border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
+                                      disabled={busy}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (
+                                          !window.confirm(
+                                            "Remove this pending review from the queue? This cannot be undone.",
+                                          )
+                                        ) {
+                                          return;
+                                        }
+                                        void onRemove(reviewRow.id);
+                                      }}
+                                    >
+                                      <Trash2 className="mr-2 size-4 shrink-0" aria-hidden />
+                                      Remove from queue
+                                    </Button>
+                                    {/^\d{4}-\d{2}-\d{2}$/.test(reviewRow.date) ? (
+                                      <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" asChild>
+                                        <Link href={`/day/${reviewRow.date}`} target="_blank" rel="noopener noreferrer">
+                                          Open day
+                                        </Link>
+                                      </Button>
+                                    ) : null}
+                                  </div>
                                 </div>
-                              </div>
-                            ) : null}
-                          </div>
-                        ))}
+                              ) : null}
+                            </div>
+                          ))
+                        )}
                         {row.status === "pending" &&
                         row.pipelinePhase === "triage" &&
                         !group &&
@@ -1349,6 +1462,96 @@ function QueueList({
 
 const QUEUE_PAGE_SIZE = 50;
 
+function calendarRowLabel(row: QueueRow): string {
+  if (row.calendarGroup) return row.calendarGroup.dates.join(" · ");
+  if (row.item.calendarReciprocalPair) {
+    const pair = row.item.calendarReciprocalPair;
+    return `${pair.sideA.date} ↔ ${pair.sideB.date}`;
+  }
+  const cd = row.item.calendarDecision;
+  if (cd) return `${cd.currentDate} ↔ ${cd.expectedDate}`;
+  return row.date;
+}
+
+type CalendarAutoProgress = {
+  current: number;
+  total: number;
+  label: string;
+};
+
+function buildCalendarAutoWorkItems(rows: QueueRow[]): Array<{
+  anchorId: string;
+  label: string;
+  entries: ReturnType<typeof collectCalendarDateEntries>;
+}> {
+  const seenAnchors = new Set<string>();
+  const items: Array<{
+    anchorId: string;
+    label: string;
+    entries: ReturnType<typeof collectCalendarDateEntries>;
+  }> = [];
+
+  for (const row of rows) {
+    if (row.status !== "pending" || row.pipelinePhase !== "awaiting_calendar_decision") continue;
+
+    const sourceRows = row.calendarGroup?.rows ?? [row];
+    const pendingRows = sourceRows.filter(
+      (member) => member.status === "pending" && member.pipelinePhase === "awaiting_calendar_decision",
+    );
+    if (pendingRows.length === 0) continue;
+
+    const anchor = pendingRows[0];
+    if (!anchor || seenAnchors.has(anchor.id)) continue;
+
+    const entries = collectCalendarDateEntries(pendingRows);
+    if (entries.length < 2) continue;
+
+    seenAnchors.add(anchor.id);
+    items.push({
+      anchorId: anchor.id,
+      label: calendarRowLabel(row),
+      entries,
+    });
+  }
+
+  return items;
+}
+
+type ArticlePickAutoWorkItem = {
+  id: string;
+  label: string;
+  date: string;
+  scenario?: "empty_day" | "missing_day" | "better_storyline";
+  currentSummary?: string;
+  candidates: NonNullable<QueueRow["item"]["candidates"]>;
+};
+
+function buildArticlePickAutoWorkItems(rows: QueueRow[]): ArticlePickAutoWorkItem[] {
+  const seen = new Set<string>();
+  const items: ArticlePickAutoWorkItem[] = [];
+
+  for (const row of rows) {
+    if (row.status !== "pending" || row.pipelinePhase !== "awaiting_article_pick") continue;
+    if (seen.has(row.id)) continue;
+
+    const candidates = row.item.candidates ?? [];
+    if (candidates.length === 0) continue;
+
+    seen.add(row.id);
+    items.push({
+      id: row.id,
+      label: row.date,
+      date: row.date,
+      scenario: row.item.scenario ?? undefined,
+      currentSummary:
+        row.item.scenario === "better_storyline" ? row.item.daySummary?.trim() || undefined : undefined,
+      candidates,
+    });
+  }
+
+  return items;
+}
+
 export default function AgentsV2HomePanel() {
   const [filter, setFilter] = useState<FilterTab>("pending");
   const [scenarioFilter, setScenarioFilter] = useState<ScenarioFilter>("all");
@@ -1361,14 +1564,64 @@ export default function AgentsV2HomePanel() {
   const [page, setPage] = useState(0);
   const [queueTotal, setQueueTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [calendarAutoRunning, setCalendarAutoRunning] = useState(false);
+  const [calendarAutoProgress, setCalendarAutoProgress] = useState<CalendarAutoProgress | null>(null);
+  const [calendarAutoLogLines, setCalendarAutoLogLines] = useState<LogLine[]>([]);
+  const calendarAutoStopRef = useRef(false);
+  const calendarAutoLogScrollRef = useRef<HTMLDivElement | null>(null);
+  const [articlePickAutoRunning, setArticlePickAutoRunning] = useState(false);
+  const [articlePickAutoProgress, setArticlePickAutoProgress] = useState<CalendarAutoProgress | null>(null);
+  const [articlePickAutoLogLines, setArticlePickAutoLogLines] = useState<LogLine[]>([]);
+  const articlePickAutoStopRef = useRef(false);
+  const articlePickAutoLogScrollRef = useRef<HTMLDivElement | null>(null);
+  const autoRunBusy = calendarAutoRunning || articlePickAutoRunning;
+
+  useEffect(() => {
+    if (calendarAutoLogLines.length === 0) return;
+    let cancelled = false;
+    let innerRaf = 0;
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(() => {
+        if (cancelled) return;
+        const root = calendarAutoLogScrollRef.current;
+        const viewport = root?.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
+        if (!viewport) return;
+        viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(outerRaf);
+      cancelAnimationFrame(innerRaf);
+    };
+  }, [calendarAutoLogLines]);
+
+  useEffect(() => {
+    if (articlePickAutoLogLines.length === 0) return;
+    let cancelled = false;
+    let innerRaf = 0;
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(() => {
+        if (cancelled) return;
+        const root = articlePickAutoLogScrollRef.current;
+        const viewport = root?.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
+        if (!viewport) return;
+        viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(outerRaf);
+      cancelAnimationFrame(innerRaf);
+    };
+  }, [articlePickAutoLogLines]);
 
   const loadQueue = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     try {
       const status = filter === "all" ? "all" : filter;
       const offset = page * QUEUE_PAGE_SIZE;
-      const phase =
-        filter === "pending" && scenarioFilter !== "all" ? scenarioFilter : undefined;
+      const phase = scenarioFilter !== "all" ? scenarioFilter : undefined;
       const result = await fetchReviewQueue(status, { limit: QUEUE_PAGE_SIZE, offset, phase });
       setRows(result.items.map(mapReviewItemToQueueRow));
       setQueueTotal(result.total);
@@ -1394,7 +1647,12 @@ export default function AgentsV2HomePanel() {
       const source = rows.find((r) => r.id === id);
       const pair = source?.item.calendarReciprocalPair;
 
-      if (opts?.calendarKeepDate && opts?.calendarRerunDate) {
+      if (opts?.calendarGroupDates && opts?.calendarRemoveDates !== undefined) {
+        await approveReviewItem(id, {
+          calendarGroupDates: opts.calendarGroupDates,
+          calendarRemoveDates: opts.calendarRemoveDates,
+        });
+      } else if (opts?.calendarKeepDate && opts?.calendarRerunDate) {
         await approveReviewItem(id, {
           calendarKeepDate: opts.calendarKeepDate,
           calendarRerunDate: opts.calendarRerunDate,
@@ -1494,10 +1752,343 @@ export default function AgentsV2HomePanel() {
     }
   };
 
-  const statusFiltered = filter === "all" ? rows : rows.filter((r) => r.status === filter);
-  const scenarioFilteredRows = filter === "pending" ? consolidateQueueRows(statusFiltered) : statusFiltered;
+  const stopCalendarAutoRun = () => {
+    calendarAutoStopRef.current = true;
+  };
+
+  const stopArticlePickAutoRun = () => {
+    articlePickAutoStopRef.current = true;
+  };
+
+  const runCalendarAutoWithGoogle = async () => {
+    calendarAutoStopRef.current = false;
+    setCalendarAutoRunning(true);
+    setCalendarAutoProgress(null);
+    setCalendarAutoLogLines([]);
+
+    let processed = 0;
+    let approved = 0;
+    let failed = 0;
+
+    const pushLog = (line: LogLine) => {
+      setCalendarAutoLogLines((prev) => [...prev, line]);
+    };
+
+    const patchLog = (id: string, patch: Partial<LogLine>) => {
+      setCalendarAutoLogLines((prev) => prev.map((line) => (line.id === id ? { ...line, ...patch } : line)));
+    };
+
+    try {
+      pushLog({
+        id: "calendar-auto-load",
+        text: "Loading pending calendar items…",
+        status: "pending",
+      });
+
+      const rawRows: QueueRow[] = [];
+      let offset = 0;
+      let total = 0;
+
+      while (true) {
+        const result = await fetchReviewQueue("pending", {
+          limit: QUEUE_PAGE_SIZE,
+          offset,
+          phase: "awaiting_calendar_decision",
+        });
+        rawRows.push(...result.items.map(mapReviewItemToQueueRow));
+        total = result.total;
+        if (!result.hasMore) break;
+        offset += QUEUE_PAGE_SIZE;
+      }
+
+      const workItems = buildCalendarAutoWorkItems(consolidateQueueRows(rawRows));
+      if (workItems.length === 0) {
+        patchLog("calendar-auto-load", {
+          status: "rejected",
+          text: "No pending calendar items found.",
+        });
+        toast({ title: "Nothing to run", description: "No pending calendar items found." });
+        return;
+      }
+
+      patchLog("calendar-auto-load", {
+        status: "approved",
+        text: `Loaded ${workItems.length} calendar item${workItems.length === 1 ? "" : "s"} (${total.toLocaleString()} in queue).`,
+      });
+
+      for (let index = 0; index < workItems.length; index += 1) {
+        if (calendarAutoStopRef.current) break;
+
+        const item = workItems[index];
+        const allDates = item.entries.map((entry) => entry.date);
+        const logId = `calendar-auto-${item.anchorId}-${index}`;
+        setCalendarAutoProgress({
+          current: index + 1,
+          total: workItems.length,
+          label: item.label,
+        });
+        setBusyId(item.anchorId);
+        processed += 1;
+
+        pushLog({
+          id: logId,
+          text: `${item.label} · Google check…`,
+          status: "pending",
+        });
+
+        try {
+          const { removeDates } = await checkCalendarDatesWithGoogle(
+            item.entries.map((entry) => ({ date: entry.date, summary: entry.summary })),
+          );
+          const cappedRemoveDates = capCalendarRemoveDates(allDates, removeDates);
+          await approveReviewItem(item.anchorId, {
+            calendarGroupDates: allDates,
+            calendarRemoveDates: cappedRemoveDates,
+          });
+          approved += 1;
+          patchLog(logId, {
+            status: "approved",
+            text:
+              cappedRemoveDates.length === 0
+                ? `${item.label} · kept all dates`
+                : `${item.label} · removed ${cappedRemoveDates.join(", ")}`,
+          });
+        } catch (e) {
+          failed += 1;
+          const message = e instanceof Error ? e.message : "Error";
+          patchLog(logId, {
+            status: "rejected",
+            text: `${item.label} · ${message}`,
+          });
+          console.error("Calendar auto-run failed for", item.label, e);
+        }
+      }
+
+      await loadQueue({ silent: true });
+
+      if (calendarAutoStopRef.current) {
+        pushLog({
+          id: `calendar-auto-stop-${Date.now()}`,
+          text: `Stopped after ${processed} item${processed === 1 ? "" : "s"} · approved ${approved}, failed ${failed}.`,
+          status: "review",
+        });
+        toast({
+          title: "Auto-run stopped",
+          description: `Processed ${processed} of ${workItems.length}. Approved ${approved}, failed ${failed}.`,
+        });
+      } else {
+        pushLog({
+          id: `calendar-auto-done-${Date.now()}`,
+          text: `Complete · approved ${approved} of ${workItems.length}${failed ? ` · ${failed} failed` : ""}.`,
+          status: failed > 0 ? "review" : "approved",
+        });
+        toast({
+          title: "Calendar auto-run complete",
+          description: `Approved ${approved} of ${workItems.length} item${workItems.length === 1 ? "" : "s"}${failed ? ` · ${failed} failed` : ""}. Queue total was ${total.toLocaleString()}.`,
+        });
+      }
+    } catch (e) {
+      pushLog({
+        id: `calendar-auto-error-${Date.now()}`,
+        text: e instanceof Error ? e.message : "Auto-run failed",
+        status: "rejected",
+      });
+      toast({
+        title: "Auto-run failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
+    } finally {
+      setBusyId(null);
+      setCalendarAutoRunning(false);
+      setCalendarAutoProgress(null);
+      calendarAutoStopRef.current = false;
+    }
+  };
+
+  const runArticlePickAutoWithGoogle = async () => {
+    articlePickAutoStopRef.current = false;
+    setArticlePickAutoRunning(true);
+    setArticlePickAutoProgress(null);
+    setArticlePickAutoLogLines([]);
+
+    let processed = 0;
+    let approved = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    const pushLog = (line: LogLine) => {
+      setArticlePickAutoLogLines((prev) => [...prev, line]);
+    };
+
+    const patchLog = (id: string, patch: Partial<LogLine>) => {
+      setArticlePickAutoLogLines((prev) => prev.map((line) => (line.id === id ? { ...line, ...patch } : line)));
+    };
+
+    try {
+      pushLog({
+        id: "article-pick-auto-load",
+        text: "Loading pending article-pick items…",
+        status: "pending",
+      });
+
+      const rawRows: QueueRow[] = [];
+      let offset = 0;
+      let total = 0;
+
+      while (true) {
+        const result = await fetchReviewQueue("pending", {
+          limit: QUEUE_PAGE_SIZE,
+          offset,
+          phase: "awaiting_article_pick",
+        });
+        rawRows.push(...result.items.map(mapReviewItemToQueueRow));
+        total = result.total;
+        if (!result.hasMore) break;
+        offset += QUEUE_PAGE_SIZE;
+      }
+
+      const workItems = buildArticlePickAutoWorkItems(rawRows);
+      if (workItems.length === 0) {
+        patchLog("article-pick-auto-load", {
+          status: "rejected",
+          text: "No pending article-pick items with candidates found.",
+        });
+        toast({
+          title: "Nothing to run",
+          description: "No pending article-pick items with candidates found.",
+        });
+        return;
+      }
+
+      patchLog("article-pick-auto-load", {
+        status: "approved",
+        text: `Loaded ${workItems.length} article-pick item${workItems.length === 1 ? "" : "s"} (${total.toLocaleString()} in queue).`,
+      });
+
+      for (let index = 0; index < workItems.length; index += 1) {
+        if (articlePickAutoStopRef.current) break;
+
+        const item = workItems[index]!;
+        const logId = `article-pick-auto-${item.id}-${index}`;
+        setArticlePickAutoProgress({
+          current: index + 1,
+          total: workItems.length,
+          label: item.label,
+        });
+        setBusyId(item.id);
+        processed += 1;
+
+        pushLog({
+          id: logId,
+          text: `${item.label} · Google check…`,
+          status: "pending",
+        });
+
+        try {
+          const { pickId } = await checkArticlePickWithGoogle({
+            date: item.date,
+            scenario: item.scenario,
+            currentSummary: item.currentSummary,
+            candidates: item.candidates.map((candidate) => ({
+              id: candidate.id,
+              title: candidate.title,
+              publishedDate: candidate.publishedDate ?? null,
+              tier: candidate.tier,
+              summary: candidate.summary,
+            })),
+          });
+
+          if (!pickId) {
+            skipped += 1;
+            patchLog(logId, {
+              status: "review",
+              text: `${item.label} · no reliable match — left in queue`,
+            });
+            continue;
+          }
+
+          const picked = item.candidates.find((candidate) => candidate.id === pickId);
+          if (!picked) {
+            skipped += 1;
+            patchLog(logId, {
+              status: "review",
+              text: `${item.label} · unknown pick id — left in queue`,
+            });
+            continue;
+          }
+
+          if (picked.calendarSanityOk === false) {
+            skipped += 1;
+            patchLog(logId, {
+              status: "review",
+              text: `${item.label} · "${picked.title.slice(0, 60)}" blocked by date sanity — left in queue`,
+            });
+            continue;
+          }
+
+          await approveReviewItem(item.id, { selectedArticleId: pickId });
+          approved += 1;
+          patchLog(logId, {
+            status: "approved",
+            text: `${item.label} · picked "${picked.title.slice(0, 80)}"`,
+          });
+        } catch (e) {
+          failed += 1;
+          const message = e instanceof Error ? e.message : "Error";
+          patchLog(logId, {
+            status: "rejected",
+            text: `${item.label} · ${message}`,
+          });
+          console.error("Article pick auto-run failed for", item.label, e);
+        }
+      }
+
+      await loadQueue({ silent: true });
+
+      if (articlePickAutoStopRef.current) {
+        pushLog({
+          id: `article-pick-auto-stop-${Date.now()}`,
+          text: `Stopped after ${processed} item${processed === 1 ? "" : "s"} · approved ${approved}, skipped ${skipped}, failed ${failed}.`,
+          status: "review",
+        });
+        toast({
+          title: "Auto-run stopped",
+          description: `Processed ${processed} of ${workItems.length}. Approved ${approved}, skipped ${skipped}, failed ${failed}.`,
+        });
+      } else {
+        pushLog({
+          id: `article-pick-auto-done-${Date.now()}`,
+          text: `Complete · approved ${approved} of ${workItems.length}${skipped ? ` · skipped ${skipped}` : ""}${failed ? ` · ${failed} failed` : ""}.`,
+          status: failed > 0 ? "review" : "approved",
+        });
+        toast({
+          title: "Article pick auto-run complete",
+          description: `Approved ${approved} of ${workItems.length} item${workItems.length === 1 ? "" : "s"}${skipped ? ` · skipped ${skipped}` : ""}${failed ? ` · ${failed} failed` : ""}. Queue total was ${total.toLocaleString()}.`,
+        });
+      }
+    } catch (e) {
+      pushLog({
+        id: `article-pick-auto-error-${Date.now()}`,
+        text: e instanceof Error ? e.message : "Auto-run failed",
+        status: "rejected",
+      });
+      toast({
+        title: "Auto-run failed",
+        description: e instanceof Error ? e.message : "Error",
+        variant: "destructive",
+      });
+    } finally {
+      setBusyId(null);
+      setArticlePickAutoRunning(false);
+      setArticlePickAutoProgress(null);
+      articlePickAutoStopRef.current = false;
+    }
+  };
+
+  const listRows = filter === "pending" ? consolidateQueueRows(rows) : rows;
   const listProps = {
-    rows: scenarioFilteredRows,
+    rows: listRows,
     busyId,
     advanceSignal,
     expandedId,
@@ -1565,9 +2156,6 @@ export default function AgentsV2HomePanel() {
             setFilter(v);
             setPage(0);
             setExpandedId(null);
-            if (v !== "pending" && scenarioFilter !== "all") {
-              setScenarioFilter("all");
-            }
           }
         }}
         className="w-full"
@@ -1579,17 +2167,17 @@ export default function AgentsV2HomePanel() {
           <TabsTrigger value="all" className="rounded-lg px-2 text-xs text-muted-foreground data-[state=active]:bg-foreground data-[state=active]:text-background data-[state=active]:shadow-sm sm:text-sm">All</TabsTrigger>
         </TabsList>
 
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
           <label className="inline-flex w-full flex-col gap-1.5 text-xs text-muted-foreground sm:w-auto sm:flex-row sm:items-center sm:gap-2">
             Scenario
             <select
               value={scenarioFilter}
-              disabled={filter !== "pending"}
               onChange={(e) => {
                 setScenarioFilter(e.target.value as ScenarioFilter);
                 setPage(0);
                 setExpandedId(null);
               }}
+              disabled={autoRunBusy}
               className="h-9 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-auto sm:min-w-[11rem]"
             >
               <option value="all">All scenarios</option>
@@ -1601,7 +2189,134 @@ export default function AgentsV2HomePanel() {
               <option value="triage">Triage</option>
             </select>
           </label>
+
+          {scenarioFilter === "awaiting_calendar_decision" && filter === "pending" ? (
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+              {calendarAutoRunning ? (
+                <Button type="button" variant="destructive" size="sm" onClick={stopCalendarAutoRun}>
+                  <StopCircle className="size-4" />
+                  Stop
+                </Button>
+              ) : (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button type="button" size="sm" disabled={loading || clearing || autoRunBusy}>
+                      <GoogleGIcon className="size-4 shrink-0" />
+                      Auto-run with Google
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Auto-run all calendar decisions with Google?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This checks every pending calendar item one by one with Google Search grounding, then
+                        auto-approves each using Google&apos;s remove-date suggestions. Removed dates are cleared and
+                        re-run. This cannot be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction asChild>
+                        <Button type="button" onClick={() => void runCalendarAutoWithGoogle()}>
+                          Run all
+                        </Button>
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
+            </div>
+          ) : null}
+
+          {scenarioFilter === "awaiting_article_pick" && filter === "pending" ? (
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+              {articlePickAutoRunning ? (
+                <Button type="button" variant="destructive" size="sm" onClick={stopArticlePickAutoRun}>
+                  <StopCircle className="size-4" />
+                  Stop
+                </Button>
+              ) : (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button type="button" size="sm" disabled={loading || clearing || autoRunBusy}>
+                      <GoogleGIcon className="size-4 shrink-0" />
+                      Auto-run with Google
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Auto-run all article picks with Google?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This checks every pending article-pick item with Google Search grounding, then auto-approves
+                        each when Google returns a reliable pick. Items with no match or a date-sanity block stay in the
+                        queue for manual review. This cannot be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction asChild>
+                        <Button type="button" onClick={() => void runArticlePickAutoWithGoogle()}>
+                          Run all
+                        </Button>
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
+            </div>
+          ) : null}
         </div>
+
+        {calendarAutoProgress || calendarAutoRunning || calendarAutoLogLines.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {calendarAutoProgress ? (
+              <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                <p className="flex items-center gap-2">
+                  {calendarAutoRunning ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  Processing {calendarAutoProgress.current} of {calendarAutoProgress.total}: {calendarAutoProgress.label}
+                </p>
+              </div>
+            ) : null}
+            {calendarAutoLogLines.length > 0 ? (
+              <section className="space-y-2">
+                <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Activity log
+                </Label>
+                <PipelineActivityLog
+                  lines={calendarAutoLogLines}
+                  scrollRef={calendarAutoLogScrollRef}
+                  scrollClassName="h-[200px]"
+                />
+              </section>
+            ) : null}
+          </div>
+        ) : null}
+
+        {articlePickAutoProgress || articlePickAutoRunning || articlePickAutoLogLines.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {articlePickAutoProgress ? (
+              <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                <p className="flex items-center gap-2">
+                  {articlePickAutoRunning ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  Processing {articlePickAutoProgress.current} of {articlePickAutoProgress.total}:{" "}
+                  {articlePickAutoProgress.label}
+                </p>
+              </div>
+            ) : null}
+            {articlePickAutoLogLines.length > 0 ? (
+              <section className="space-y-2">
+                <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Activity log
+                </Label>
+                <PipelineActivityLog
+                  lines={articlePickAutoLogLines}
+                  scrollRef={articlePickAutoLogScrollRef}
+                  scrollClassName="h-[200px]"
+                />
+              </section>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="mt-4 space-y-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

@@ -25,7 +25,7 @@ function isSuccessfulTerminal(status: string): boolean {
   return status === "completed" || status === "skipped" || status === "approved";
 }
 
-function humanReviewQueuedCount(stats: Record<string, unknown> | undefined): number {
+export function humanReviewQueuedCount(stats: Record<string, unknown> | undefined): number {
   const raw = stats?.humanReviewQueued;
   const n = typeof raw === "number" ? raw : Number(raw);
   return Number.isFinite(n) ? n : 0;

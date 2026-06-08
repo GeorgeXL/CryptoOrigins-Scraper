@@ -53,6 +53,7 @@ import {
   inferCalendarChronologyHint,
   isReciprocalCalendarConflict,
 } from "../services/editorial-pipeline/calendar-conflict";
+import { aiService } from "../services/ai";
 
 const CALENDAR_DECISIONS: CalendarDecisionInput[] = ["move_to_canonical", "keep_as_is", "delete"];
 const DUPLICATE_DECISIONS: DuplicateDecisionInput[] = [
@@ -860,6 +861,7 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
         scenario: articlePick ? articlePick.scenario : null,
         candidates: refreshedCandidates,
         hasCandidates: articlePick ? articlePick.hasCandidates : null,
+        removedDayContext: articlePick?.removedDayContext ?? null,
         // Correction proposals (each carries current + proposed values).
         proposals: correctionPkg ? correctionPkg.proposals : null,
         // Summary approval second-gate payload.
@@ -967,6 +969,16 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
       typeof req.body?.calendarRerunDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.calendarRerunDate)
         ? (req.body.calendarRerunDate as string)
         : undefined;
+    const calendarGroupDates = Array.isArray(req.body?.calendarGroupDates)
+      ? (req.body.calendarGroupDates as unknown[]).filter(
+          (value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value),
+        )
+      : undefined;
+    const calendarRemoveDates = Array.isArray(req.body?.calendarRemoveDates)
+      ? (req.body.calendarRemoveDates as unknown[]).filter(
+          (value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value),
+        )
+      : undefined;
     const duplicateDecision =
       typeof req.body?.duplicateDecision === "string" &&
       (DUPLICATE_DECISIONS as string[]).includes(req.body.duplicateDecision)
@@ -1110,11 +1122,12 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
     if (
       isCalendarDecisionPackage(existing.package) &&
       !calendarDecision &&
-      !(calendarKeepDate && calendarRerunDate)
+      !(calendarKeepDate && calendarRerunDate) &&
+      !(calendarGroupDates?.length && calendarRemoveDates !== undefined)
     ) {
       return res.status(400).json({
         error:
-          "calendarDecision (move_to_canonical | keep_as_is | delete) or calendarKeepDate+calendarRerunDate is required",
+          "calendarDecision (move_to_canonical | keep_as_is | delete), calendarKeepDate+calendarRerunDate, or calendarGroupDates+calendarRemoveDates is required",
       });
     }
     if (isDuplicateDecisionPackage(existing.package) && !duplicateDecision) {
@@ -1165,6 +1178,8 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
       calendarDecision,
       calendarKeepDate,
       calendarRerunDate,
+      calendarGroupDates,
+      calendarRemoveDates,
       duplicateDecision,
       duplicateNeighborDate,
       editedSummary,
@@ -1324,6 +1339,101 @@ router.post("/api/agent/pipeline/verify-day", async (req, res) => {
     res.json(result);
   } catch (e: any) {
     res.status(e.status || 500).json({ error: e.message || "Day verification failed" });
+  }
+});
+
+router.post("/api/agent/pipeline/calendar-check-google", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const raw = req.body?.entries;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return res.status(400).json({ error: "entries is required (non-empty array of { date, summary })" });
+    }
+
+    const entries: Array<{ date: string; summary: string }> = [];
+    for (const item of raw) {
+      const date = typeof item?.date === "string" ? item.date.trim() : "";
+      const summary = typeof item?.summary === "string" ? item.summary.trim() : "";
+      if (!isIsoDate(date)) {
+        return res.status(400).json({ error: `Invalid date: ${date || "(missing)"}` });
+      }
+      entries.push({ date, summary });
+    }
+
+    const gemini = aiService.getProvider("gemini");
+    if (!gemini.verifyCalendarDates) {
+      return res.status(503).json({ error: "Gemini calendar check is not available" });
+    }
+
+    const result = await gemini.verifyCalendarDates(entries);
+    res.json(result);
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Google calendar check failed" });
+  }
+});
+
+router.post("/api/agent/pipeline/article-pick-check-google", async (req, res) => {
+  try {
+    requireAgentSecret(req);
+    const date = typeof req.body?.date === "string" ? req.body.date.trim() : "";
+    if (!isIsoDate(date)) {
+      return res.status(400).json({ error: "date is required (YYYY-MM-DD)" });
+    }
+
+    const rawCandidates = req.body?.candidates;
+    if (!Array.isArray(rawCandidates) || rawCandidates.length === 0) {
+      return res.status(400).json({ error: "candidates is required (non-empty array)" });
+    }
+
+    const scenarioRaw = typeof req.body?.scenario === "string" ? req.body.scenario.trim() : "";
+    const scenario =
+      scenarioRaw === "empty_day" || scenarioRaw === "missing_day" || scenarioRaw === "better_storyline"
+        ? scenarioRaw
+        : undefined;
+    const currentSummary =
+      typeof req.body?.currentSummary === "string" ? req.body.currentSummary.trim() : undefined;
+
+    const candidates: Array<{
+      id: string;
+      title: string;
+      publishedDate?: string | null;
+      tier: string;
+      summary?: string;
+    }> = [];
+
+    for (const item of rawCandidates) {
+      const id = typeof item?.id === "string" ? item.id.trim() : "";
+      const title = typeof item?.title === "string" ? item.title.trim() : "";
+      const tier = typeof item?.tier === "string" ? item.tier.trim() : "";
+      if (!id || !title || !tier) {
+        return res.status(400).json({ error: "Each candidate needs id, title, and tier" });
+      }
+      candidates.push({
+        id,
+        title,
+        tier,
+        publishedDate:
+          typeof item?.publishedDate === "string" || item?.publishedDate === null
+            ? item.publishedDate
+            : undefined,
+        summary: typeof item?.summary === "string" ? item.summary.trim() : undefined,
+      });
+    }
+
+    const gemini = aiService.getProvider("gemini");
+    if (!gemini.verifyArticlePick) {
+      return res.status(503).json({ error: "Gemini article pick check is not available" });
+    }
+
+    const result = await gemini.verifyArticlePick({
+      date,
+      scenario,
+      currentSummary,
+      candidates,
+    });
+    res.json(result);
+  } catch (e: any) {
+    res.status(e.status || 500).json({ error: e.message || "Google article pick check failed" });
   }
 });
 

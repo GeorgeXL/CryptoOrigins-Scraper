@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildCalendarReciprocalPair,
   inferCalendarChronologyHint,
+  inferReciprocalDuplicateChronology,
   isReciprocalCalendarConflict,
   summaryConflatesMultipleLegislativeTopics,
 } from "../services/editorial-pipeline/calendar-conflict";
@@ -64,4 +65,31 @@ test("buildCalendarReciprocalPair for NH bill queue items", () => {
   assert.ok(pair);
   assert.equal(pair.pairKey, "2017-03-07::2017-03-11");
   assert.equal(pair.chronology.keepDate, "2017-03-07");
+});
+
+test("buildCalendarReciprocalPair for reciprocal duplicate stories (Zug Bitcoin)", () => {
+  const pair = buildCalendarReciprocalPair({
+    itemA: {
+      id: "a",
+      currentDate: "2016-07-01",
+      expectedDate: "2016-07-02",
+      summary:
+        "Zug becomes the first city to allow Bitcoin payments for public services up to 200 Swiss francs starting July",
+      tags: ["Bitcoin"],
+      topics: ["adoption"],
+    },
+    itemB: {
+      id: "b",
+      currentDate: "2016-07-02",
+      expectedDate: "2016-07-01",
+      summary:
+        "Zug, Switzerland, accepts Bitcoin for public service payments, leading the way in crypto for local government.",
+      tags: ["Bitcoin", "Switzerland"],
+      topics: ["adoption", "cryptocurrency"],
+    },
+  });
+  assert.ok(pair);
+  assert.equal(pair.pairKey, "2016-07-01::2016-07-02");
+  assert.equal(pair.chronology.keepDate, "2016-07-01");
+  assert.equal(pair.chronology.reciprocalConflict, true);
 });

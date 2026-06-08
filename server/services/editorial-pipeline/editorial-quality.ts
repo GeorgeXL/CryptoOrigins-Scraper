@@ -125,6 +125,10 @@ const SUMMARY_DISALLOWED_SYMBOL_CHECKS: ReadonlyArray<{ id: string; test: (summa
   { id: "slash", test: (s) => s.includes(" / ") },
   { id: "ampersand", test: (s) => s.includes("&") },
   { id: "quote", test: (s) => s.includes('"') || s.includes("\u201C") || s.includes("\u201D") },
+  {
+    id: "comma and",
+    test: (s) => s.includes(", and"),
+  },
 ];
 
 export function findSummaryDisallowedSymbols(summary: string): string[] {

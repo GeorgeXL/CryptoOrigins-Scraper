@@ -54,6 +54,23 @@ export const articleCandidateSchema = z.object({
 
 export type ArticleCandidate = z.infer<typeof articleCandidateSchema>;
 
+export const removedDayContextSchema = z.object({
+  reason: z.string(),
+  removedAt: z.string(),
+  source: z.enum(["calendar_group_remove", "calendar_keep_rerun", "calendar_delete"]).optional(),
+  previousSummary: z.string().optional(),
+  previousArticle: z
+    .object({
+      id: z.string(),
+      title: z.string(),
+      url: z.string(),
+      tier: z.enum(["bitcoin", "crypto", "macro"]).optional(),
+    })
+    .optional(),
+});
+
+export type RemovedDayContext = z.infer<typeof removedDayContextSchema>;
+
 export const articlePickPackageSchema = z.object({
   phase: z.literal("awaiting_article_pick"),
   scenario: z.enum(["empty_day", "missing_day", "better_storyline"]),
@@ -63,6 +80,8 @@ export const articlePickPackageSchema = z.object({
   hasCandidates: z.boolean(),
   /** Optional operator-facing note. */
   note: z.string().optional(),
+  /** Set when this day was cleared by calendar review and sent back to article pick. */
+  removedDayContext: removedDayContextSchema.optional(),
 });
 
 export type ArticlePickPackage = z.infer<typeof articlePickPackageSchema>;
@@ -280,6 +299,18 @@ export function isSummaryApprovalPackage(pkg: unknown): pkg is SummaryApprovalPa
 }
 export function isCalendarDecisionPackage(pkg: unknown): pkg is CalendarDecisionPackage {
   return hasPhase(pkg, "awaiting_calendar_decision");
+}
+
+/** True when a calendar flag involves exactly these two dates (either direction). */
+export function calendarDecisionMatchesDatePair(
+  pkg: CalendarDecisionPackage,
+  dateA: string,
+  dateB: string,
+): boolean {
+  return (
+    (pkg.currentDate === dateA && pkg.expectedDate === dateB) ||
+    (pkg.currentDate === dateB && pkg.expectedDate === dateA)
+  );
 }
 export function isDuplicateDecisionPackage(pkg: unknown): pkg is DuplicateDecisionPackage {
   return hasPhase(pkg, "awaiting_duplicate_decision");

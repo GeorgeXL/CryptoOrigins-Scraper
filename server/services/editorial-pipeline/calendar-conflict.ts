@@ -115,6 +115,32 @@ export function inferCalendarChronologyHint(input: {
   };
 }
 
+/** Fallback when two queue rows point at each other but are not a legislative bill pair. */
+export function inferReciprocalDuplicateChronology(input: {
+  dateA: string;
+  summaryA: string;
+  dateB: string;
+  summaryB: string;
+}): CalendarChronologyHint {
+  const summaryA = normalizeSummary(input.summaryA);
+  const summaryB = normalizeSummary(input.summaryB);
+  const earlier = input.dateA < input.dateB ? input.dateA : input.dateB;
+  const later = input.dateA < input.dateB ? input.dateB : input.dateA;
+
+  return {
+    likelyEventDate: earlier,
+    duplicateDate: later,
+    confidence: "medium",
+    rationale:
+      summaryA && summaryB
+        ? `Both ${input.dateA} and ${input.dateB} flag each other for the same story. Review both summaries and keep the date the narrative anchors on — often the earlier slot (${earlier}) when the later row reads like duplicate follow-up coverage.`
+        : `Both ${input.dateA} and ${input.dateB} flag each other as the wrong slot for the same story. Pick one date to keep and rerun the other.`,
+    reciprocalConflict: true,
+    keepDate: earlier,
+    removeDate: later,
+  };
+}
+
 export function buildCalendarReciprocalPair(input: {
   itemA: {
     id: string;
@@ -143,14 +169,20 @@ export function buildCalendarReciprocalPair(input: {
   };
   if (!isReciprocalCalendarConflict(a, b)) return null;
 
-  const chronology = inferCalendarChronologyHint({
-    dateA: input.itemA.currentDate,
-    summaryA: input.itemA.summary,
-    dateB: input.itemB.currentDate,
-    summaryB: input.itemB.summary,
-    reciprocalConflict: true,
-  });
-  if (!chronology) return null;
+  const chronology =
+    inferCalendarChronologyHint({
+      dateA: input.itemA.currentDate,
+      summaryA: input.itemA.summary,
+      dateB: input.itemB.currentDate,
+      summaryB: input.itemB.summary,
+      reciprocalConflict: true,
+    }) ??
+    inferReciprocalDuplicateChronology({
+      dateA: input.itemA.currentDate,
+      summaryA: input.itemA.summary,
+      dateB: input.itemB.currentDate,
+      summaryB: input.itemB.summary,
+    });
 
   const sideA: CalendarPairSide = {
     queueItemId: input.itemA.id,

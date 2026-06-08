@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   reviewPackageSchema,
+  calendarDecisionMatchesDatePair,
   isCorrectionApprovalPackage,
   isSummaryApprovalPackage,
   isCalendarDecisionPackage,
@@ -160,4 +161,20 @@ test("duplicate decision package parses + dispatches", () => {
   assert.ok(isDuplicateDecisionPackage(pkg));
   const out = determineApprovedAction(pkg);
   assert.equal(out.action?.kind, "apply_duplicate_decision");
+});
+
+test("calendarDecisionMatchesDatePair checks both directions", () => {
+  const pkg = {
+    phase: "awaiting_calendar_decision" as const,
+    triage,
+    currentDate: "2017-03-07",
+    expectedDate: "2017-03-11",
+    ruleId: "test",
+    reason: "test",
+    canonicalDateOccupied: false,
+  };
+  assert.ok(calendarDecisionMatchesDatePair(pkg, "2017-03-07", "2017-03-11"));
+  assert.ok(calendarDecisionMatchesDatePair(pkg, "2017-03-11", "2017-03-07"));
+  assert.equal(calendarDecisionMatchesDatePair(pkg, "2017-03-07", "2017-03-06"), false);
+  assert.equal(calendarDecisionMatchesDatePair(pkg, "2017-03-11", "2017-03-06"), false);
 });

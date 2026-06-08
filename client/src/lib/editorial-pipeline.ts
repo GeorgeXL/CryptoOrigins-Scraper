@@ -150,6 +150,18 @@ export type EditorialReviewItem = {
       tokenJaccard: number;
     }>;
   } | null;
+  removedDayContext?: {
+    reason: string;
+    removedAt: string;
+    source?: "calendar_group_remove" | "calendar_keep_rerun" | "calendar_delete";
+    previousSummary?: string;
+    previousArticle?: {
+      id: string;
+      title: string;
+      url: string;
+      tier?: "bitcoin" | "crypto" | "macro";
+    };
+  } | null;
   actionPlan?: OperatorActionPlan | null;
   knownEventContext?: {
     isKnownEvent: boolean;
@@ -185,6 +197,8 @@ export type ApproveReviewOpts = {
   calendarPairResolution?: "accept_chronology" | "keep_both";
   calendarKeepDate?: string;
   calendarRerunDate?: string;
+  calendarGroupDates?: string[];
+  calendarRemoveDates?: string[];
   duplicateDecision?: "keep_both" | "delete_focal" | "delete_neighbor" | "differentiate" | "find_another_event";
   duplicateNeighborDate?: string;
   editedSummary?: string;
@@ -526,4 +540,39 @@ export async function verifyEditorialDay(date: string, mode: "quick" | "full" = 
   });
   if (!res.ok) throw new Error(await parseError(res));
   return (await res.json()) as DayVerificationResult;
+}
+
+export async function checkCalendarDatesWithGoogle(
+  entries: Array<{ date: string; summary: string }>,
+): Promise<{ removeDates: string[] }> {
+  const res = await fetch("/api/agent/pipeline/calendar-check-google", {
+    method: "POST",
+    headers: jsonHeaders,
+    credentials: "include",
+    body: JSON.stringify({ entries }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as { removeDates: string[] };
+}
+
+export async function checkArticlePickWithGoogle(body: {
+  date: string;
+  scenario?: "empty_day" | "missing_day" | "better_storyline";
+  currentSummary?: string;
+  candidates: Array<{
+    id: string;
+    title: string;
+    publishedDate?: string | null;
+    tier: string;
+    summary?: string;
+  }>;
+}): Promise<{ pickId: string | null }> {
+  const res = await fetch("/api/agent/pipeline/article-pick-check-google", {
+    method: "POST",
+    headers: jsonHeaders,
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return (await res.json()) as { pickId: string | null };
 }

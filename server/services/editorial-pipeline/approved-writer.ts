@@ -22,12 +22,14 @@ import { isDayLocked } from "../day-lock";
 import { runExistingSearchAndSummaryForDate } from "./tools";
 import {
   isArticlePickPackage,
+  calendarDecisionMatchesDatePair,
   isCalendarDecisionPackage,
   isCorrectionApprovalPackage,
   isDuplicateDecisionPackage,
   isSummaryApprovalPackage,
   type ArticleCandidate,
   type CorrectionProposal,
+  type RemovedDayContext,
   type SummaryApprovalPackage,
 } from "./review-package";
 import { computeOperatorActionPlan, type OperatorAutoFix } from "./operator-action";
@@ -694,6 +696,16 @@ function normalizeUserTopicList(raw: unknown): string[] {
 
 export type CalendarDecisionInput = "move_to_canonical" | "keep_as_is" | "delete";
 
+async function snapshotRemovedDayContext(
+  analysis: Awaited<ReturnType<typeof storage.getAnalysisByDate>>,
+  reason: string,
+  source: NonNullable<RemovedDayContext["source"]>,
+): Promise<RemovedDayContext | undefined> {
+  if (!analysis) return undefined;
+  const { buildRemovedDayContext } = await import("./run");
+  return buildRemovedDayContext(analysis, reason, source);
+}
+
 async function applyCalendarKeepRerun(opts: {
   keepDate: string;
   rerunDate: string;
@@ -711,6 +723,11 @@ async function applyCalendarKeepRerun(opts: {
   await storage.updateAnalysis(opts.keepDate, { isManualOverride: true });
 
   const rerunAnalysis = await storage.getAnalysisByDate(opts.rerunDate);
+  const removedDayContext = await snapshotRemovedDayContext(
+    rerunAnalysis,
+    `Removed in favor of ${opts.keepDate} during calendar review.`,
+    "calendar_keep_rerun",
+  );
   if (rerunAnalysis) {
     await storage.deleteAnalysis(opts.rerunDate);
   }
@@ -719,9 +736,14 @@ async function applyCalendarKeepRerun(opts: {
     date: opts.rerunDate,
     reason: "calendar-keep-rerun-other",
     reviewer: opts.reviewer ?? null,
+    removedDayContext,
   });
 
-  await dismissPendingCalendarReviewItemsForDates([opts.keepDate, opts.rerunDate], opts.reviewer ?? null);
+  await dismissPendingCalendarReviewItemsForPair(
+    opts.keepDate,
+    opts.rerunDate,
+    opts.reviewer ?? null,
+  );
 
   return {
     ok: true,
@@ -731,17 +753,19 @@ async function applyCalendarKeepRerun(opts: {
   };
 }
 
-async function dismissPendingCalendarReviewItemsForDates(dates: string[], reviewer: string | null) {
+async function dismissPendingCalendarReviewItemsForPair(
+  keepDate: string,
+  rerunDate: string,
+  reviewer: string | null,
+) {
   const pending = await db
-    .select({ id: humanReviewQueue.id, eventDate: humanReviewQueue.eventDate, package: humanReviewQueue.package })
+    .select({ id: humanReviewQueue.id, package: humanReviewQueue.package })
     .from(humanReviewQueue)
     .where(eq(humanReviewQueue.status, "pending"));
 
-  const dateSet = new Set(dates);
   for (const item of pending) {
     if (!isCalendarDecisionPackage(item.package)) continue;
-    const eventDate = item.eventDate?.slice(0, 10);
-    if (!eventDate || !dateSet.has(eventDate)) continue;
+    if (!calendarDecisionMatchesDatePair(item.package, keepDate, rerunDate)) continue;
     await db
       .update(humanReviewQueue)
       .set({
@@ -752,6 +776,98 @@ async function dismissPendingCalendarReviewItemsForDates(dates: string[], review
       })
       .where(eq(humanReviewQueue.id, item.id));
   }
+}
+
+async function dismissPendingCalendarReviewItemsForDateSet(dates: string[], reviewer: string | null) {
+  const dateSet = new Set(dates);
+  const pending = await db
+    .select({ id: humanReviewQueue.id, package: humanReviewQueue.package })
+    .from(humanReviewQueue)
+    .where(eq(humanReviewQueue.status, "pending"));
+
+  for (const item of pending) {
+    if (!isCalendarDecisionPackage(item.package)) continue;
+    const pkg = item.package;
+    if (!dateSet.has(pkg.currentDate) && !dateSet.has(pkg.expectedDate)) continue;
+    await db
+      .update(humanReviewQueue)
+      .set({
+        status: "approved",
+        reviewer,
+        reviewNotes: "Auto-resolved via calendar date picker",
+        reviewedAt: new Date(),
+      })
+      .where(eq(humanReviewQueue.id, item.id));
+  }
+}
+
+async function applyCalendarGroupResolution(opts: {
+  dates: string[];
+  removeDates: string[];
+  reviewer?: string | null;
+}): Promise<{ ok: boolean; message: string }> {
+  const dateSet = new Set(opts.dates);
+  const removeSet = new Set(opts.removeDates);
+
+  if (opts.dates.length < 2) {
+    return { ok: false, message: "Calendar group resolution requires at least two dates." };
+  }
+  for (const date of opts.dates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return { ok: false, message: `Invalid date in group: ${date}` };
+    }
+  }
+  for (const date of opts.removeDates) {
+    if (!dateSet.has(date)) {
+      return { ok: false, message: `${date} is not part of this linked conflict.` };
+    }
+  }
+  if (removeSet.size >= dateSet.size) {
+    return { ok: false, message: "Keep at least one date on the timeline." };
+  }
+
+  const keepDates = opts.dates.filter((date) => !removeSet.has(date));
+
+  for (const date of keepDates) {
+    const keepAnalysis = await storage.getAnalysisByDate(date);
+    if (keepAnalysis) {
+      await storage.updateAnalysis(date, { isManualOverride: true });
+    }
+  }
+
+  const rerunNotes: string[] = [];
+  for (const date of opts.removeDates) {
+    const existing = await storage.getAnalysisByDate(date);
+    const removedDayContext = await snapshotRemovedDayContext(
+      existing,
+      "Removed during linked calendar conflict review.",
+      "calendar_group_remove",
+    );
+    if (existing) {
+      await storage.deleteAnalysis(date);
+    }
+    const rerun = await rerunDateAfterDestructiveEdit({
+      date,
+      reason: "calendar-group-remove",
+      reviewer: opts.reviewer ?? null,
+      removedDayContext,
+    });
+    rerunNotes.push(rerun.ok ? `${date} cleared` : `${date}: ${rerun.message}`);
+  }
+
+  await dismissPendingCalendarReviewItemsForDateSet(opts.dates, opts.reviewer ?? null);
+
+  if (opts.removeDates.length === 0) {
+    return {
+      ok: true,
+      message: `Kept all dates (${keepDates.join(", ")}).`,
+    };
+  }
+
+  return {
+    ok: true,
+    message: `Kept ${keepDates.join(", ")}. Removed ${opts.removeDates.join(", ")} (${rerunNotes.join("; ")}).`,
+  };
 }
 
 async function applyCalendarDecision(opts: {
@@ -782,14 +898,20 @@ async function applyCalendarDecision(opts: {
       return { ok: true, message: `Kept ${opts.date} as-is; marked manual override so future runs won't re-flag.` };
     }
     case "delete": {
-      await storage.deleteAnalysis(opts.date);
-      // After deleting the bad day, we still need an analysis for this date
-      // unless the operator declared it truly empty. Enqueue a fresh v3 run
-      // so the operator's next review item is "pick an article for ${date}".
+      const existing = await storage.getAnalysisByDate(opts.date);
+      const removedDayContext = await snapshotRemovedDayContext(
+        existing,
+        "Removed during calendar review.",
+        "calendar_delete",
+      );
+      if (existing) {
+        await storage.deleteAnalysis(opts.date);
+      }
       const rerun = await rerunDateAfterDestructiveEdit({
         date: opts.date,
         reason: "post-calendar-delete",
         reviewer: opts.reviewer ?? null,
+        removedDayContext,
       });
       return {
         ok: true,
@@ -810,6 +932,7 @@ async function rerunDateAfterDestructiveEdit(opts: {
   date: string;
   reason: string;
   reviewer?: string | null;
+  removedDayContext?: RemovedDayContext;
 }): Promise<{ ok: boolean; runId?: string; message?: string }> {
   if (await isDayLocked(opts.date)) {
     return { ok: false, message: `Day ${opts.date} is locked by operator — pipeline rerun blocked.` };
@@ -822,6 +945,7 @@ async function rerunDateAfterDestructiveEdit(opts: {
       dateTo: opts.date,
       maxDaysToConsider: 1,
       requestedBy: `editorial-writer:${opts.reason}:${opts.reviewer ?? "anon"}`,
+      removedDayContext: opts.removedDayContext,
     });
     return { ok: true, runId: out.runId };
   } catch (err) {
@@ -923,6 +1047,8 @@ export type ApprovalOptions = {
   calendarDecision?: CalendarDecisionInput;
   calendarKeepDate?: string;
   calendarRerunDate?: string;
+  calendarGroupDates?: string[];
+  calendarRemoveDates?: string[];
   duplicateDecision?: DuplicateDecisionInput;
   replaceArticleId?: string;
   /** Operator-edited summary text (overrides package proposedSummary on summary-approval). */
@@ -1023,6 +1149,13 @@ export async function executeApprovedReviewItem(
   if (decision.action.kind === "apply_calendar_decision") {
     if (!isCalendarDecisionPackage(item.package)) {
       return { ok: false, message: "Calendar-decision package shape is invalid" };
+    }
+    if (opts?.calendarGroupDates?.length && opts.calendarRemoveDates !== undefined) {
+      return applyCalendarGroupResolution({
+        dates: opts.calendarGroupDates,
+        removeDates: opts.calendarRemoveDates,
+        reviewer: opts?.reviewer ?? null,
+      });
     }
     if (opts?.calendarKeepDate && opts?.calendarRerunDate) {
       return applyCalendarKeepRerun({

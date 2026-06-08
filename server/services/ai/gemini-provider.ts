@@ -6,7 +6,7 @@ import { z } from "zod";
 
 export class GeminiProvider implements IAiProvider {
   private client: GoogleGenAI;
-  private defaultModel = "gemini-2.0-flash";
+  private defaultModel = "gemini-3.5-flash";
 
   constructor(apiKey?: string) {
     const key = apiKey || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
@@ -18,6 +18,35 @@ export class GeminiProvider implements IAiProvider {
 
   getName(): string {
     return "gemini";
+  }
+
+  private extractResponseText(response: unknown): string {
+    if (typeof response === "string") {
+      const trimmed = response.trim();
+      if (trimmed) return trimmed;
+      throw new Error("Gemini returned an empty string response");
+    }
+
+    const r = response as {
+      text?: string;
+      candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string }> } }>;
+    };
+
+    if (typeof r.text === "string" && r.text.trim()) {
+      return r.text.trim();
+    }
+
+    const parts = r.candidates?.[0]?.content?.parts;
+    if (Array.isArray(parts)) {
+      const text = parts
+        .map((part) => (typeof part?.text === "string" ? part.text : ""))
+        .join("")
+        .trim();
+      if (text) return text;
+    }
+
+    const finishReason = r.candidates?.[0]?.finishReason ?? "unknown";
+    throw new Error(`Gemini returned no text (finishReason: ${finishReason})`);
   }
 
   async complete(prompt: string, options?: Partial<CompletionOptions>): Promise<string> {
@@ -73,20 +102,7 @@ export class GeminiProvider implements IAiProvider {
         },
       });
 
-      // Extract text from response - handle different response formats
-      let text = "";
-      if (typeof response === 'string') {
-        text = response;
-      } else if (response?.text && typeof response.text === 'string') {
-        text = response.text;
-      } else if (response?.candidates?.[0]?.content?.parts?.[0]?.text) {
-        text = response.candidates[0].content.parts[0].text;
-      } else {
-        // Fallback: try to stringify and extract
-        const responseStr = JSON.stringify(response);
-        console.warn('Unexpected Gemini response format:', responseStr.substring(0, 200));
-        text = responseStr;
-      }
+      const text = this.extractResponseText(response);
       
       apiMonitor.updateRequest(requestId, {
         status: 'success',
@@ -140,26 +156,14 @@ export class GeminiProvider implements IAiProvider {
         contents: promptText,
         config: {
           temperature: options.temperature,
-          maxOutputTokens: options.maxTokens,
+          maxOutputTokens: options.maxTokens ?? 512,
           responseMimeType: "application/json", // Force JSON mode
           tools: [{ googleSearch: {} }], // Enable Google Search grounding
+          thinkingConfig: { thinkingBudget: 0 },
         },
       });
 
-      // Extract text from response - handle different response formats
-      let text = "{}";
-      if (typeof response === 'string') {
-        text = response;
-      } else if (response?.text && typeof response.text === 'string') {
-        text = response.text;
-      } else if (response?.candidates?.[0]?.content?.parts?.[0]?.text) {
-        text = response.candidates[0].content.parts[0].text;
-      } else {
-        // Fallback: try to stringify and extract
-        const responseStr = JSON.stringify(response);
-        console.warn('Unexpected Gemini response format:', responseStr.substring(0, 200));
-        text = responseStr;
-      }
+      const text = this.extractResponseText(response);
       // Clean up any potential markdown
       let cleanContent = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       
@@ -286,8 +290,7 @@ Return JSON: {"approved": boolean, "reasoning": string}`;
         reasoning: z.string(),
       });
 
-      // For verification, we don't need Google Search grounding - it can cause additional API calls
-      // Use generateJson but override the tools config to disable grounding
+      // Uses generateJson with Google Search grounding enabled
       const result = await this.generateJson<{ approved: boolean; reasoning: string }>({
         prompt,
         systemPrompt,
@@ -295,8 +298,6 @@ Return JSON: {"approved": boolean, "reasoning": string}`;
         schema: schema as any, // Type assertion needed due to Zod's type inference
         maxTokens: 500,
         temperature: 0.2,
-        // Note: generateJson uses tools: [{ googleSearch: {} }] by default
-        // For verification, we want faster responses without search grounding
       });
 
       apiMonitor.updateRequest(requestId, {
@@ -320,6 +321,118 @@ Return JSON: {"approved": boolean, "reasoning": string}`;
       });
       throw error;
     }
+  }
+
+  async verifyCalendarDates(
+    entries: Array<{ date: string; summary: string }>,
+  ): Promise<{ removeDates: string[] }> {
+    if (entries.length === 0) return { removeDates: [] };
+
+    const validDates = new Set(entries.map((entry) => entry.date));
+    const lines = entries.map((entry) => {
+      const summary = (entry.summary || "").trim().slice(0, 280);
+      return `${entry.date}|${summary || "(no summary)"}`;
+    });
+
+    const prompt = `These dates were flagged as possibly the same story on consecutive or close days. Use Google Search to verify the exact history.
+
+Rules:
+1. SAME EXACT EVENT/PRESS RELEASE: Keep ONLY the primary date the event explicitly happened or was officially announced. Add the duplicate/media-echo dates to the remove array.
+2. DISTINCT EVENTS OR PROGRESSIVE MARKET ACTIONS: If the dates represent different milestones, consecutive market records (e.g., crossing $600 one day, crossing $700 the next), or sequential updates of an evolving story (e.g., hack happens Day 1, market crashes/exchange responds Day 3), KEEP BOTH. Do not delete progressive history.
+3. WRONG DATES: Add any date to the remove array if that specific event did NOT occur on or near (within 2 days of) that day.
+
+DATE|SUMMARY:
+${lines.join("\n")}
+
+Return JSON only: {"remove":["YYYY-MM-DD",...]}
+If all dates are accurate, distinct, or show a chronological progression of an event, return an empty array: {"remove":[]}`;
+
+    const schema = z.object({
+      remove: z.array(z.string()).default([]),
+    });
+
+    const result = await this.generateJson<{ remove: string[] }>({
+      prompt,
+      systemPrompt:
+        "Calendar conflict fact-checker. Deduplicate exact same events; preserve progressive milestones. JSON only.",
+      model: this.defaultModel,
+      schema: schema as any,
+      maxTokens: 512,
+      temperature: 0.1,
+      context: "calendar-date-google-check",
+      purpose: `Verify ${entries.length} calendar dates`,
+    });
+
+    const removeDates = [...new Set(result.remove.filter((date) => validDates.has(date)))].sort();
+    return { removeDates };
+  }
+
+  async verifyArticlePick(input: {
+    date: string;
+    scenario?: "empty_day" | "missing_day" | "better_storyline";
+    currentSummary?: string;
+    candidates: Array<{
+      id: string;
+      title: string;
+      publishedDate?: string | null;
+      tier: string;
+      summary?: string;
+    }>;
+  }): Promise<{ pickId: string | null }> {
+    if (input.candidates.length === 0) return { pickId: null };
+
+    const validIds = new Set(input.candidates.map((candidate) => candidate.id));
+    const scenario = input.scenario ?? "empty_day";
+    const currentSummary = (input.currentSummary ?? "").trim().slice(0, 280);
+    const betterStorylineBlock =
+      scenario === "better_storyline" && currentSummary
+        ? `\nCurrent vague summary on this day: "${currentSummary}"\n`
+        : "";
+
+    const lines = input.candidates.map((candidate) => {
+      const published = (candidate.publishedDate ?? "").trim().slice(0, 10) || "unknown";
+      const title = (candidate.title || "").trim().slice(0, 180);
+      const summary = (candidate.summary || "").trim().slice(0, 220) || "(no summary)";
+      return `${candidate.id}|${candidate.tier}|${published}|${title}|${summary}`;
+    });
+
+    const prompt = `Pick the single best article for calendar day ${input.date}. Use Google Search to verify what actually happened on or near that day.
+
+Context: ${scenario}
+${betterStorylineBlock}
+Rules:
+1. DATE FIT: The article must describe an event that occurred on ${input.date} or within 2 days. Reject articles about famous events on wrong dates, evergreen guides, listicles, or multi-story roundups.
+2. SIGNIFICANCE: Prefer the most historically notable Bitcoin/crypto/macro event for that day — not a minor blog post or marketing page.
+3. TIER: Prefer bitcoin-tier when Bitcoin is the main story; crypto-tier for exchange/DeFi/altcoin news; macro-tier when macro/politics is the day's story. Do not pick off-topic sports/celebrity content.
+4. BETTER STORYLINE: When replacing a vague summary, pick a candidate only if it names a concrete dated event; otherwise return null.
+5. NO GOOD MATCH: If none of the candidates are a reliable fit for ${input.date}, return null — do not guess.
+
+Candidates (ID|TIER|PUBLISHED|TITLE|SUMMARY):
+${lines.join("\n")}
+
+Return JSON only: {"pick":"exact-candidate-id"}
+If no candidate fits, return: {"pick":null}
+Use only IDs from the list above.`;
+
+    const schema = z.object({
+      pick: z.string().nullable(),
+    });
+
+    const result = await this.generateJson<{ pick: string | null }>({
+      prompt,
+      systemPrompt:
+        "Bitcoin/crypto/macro timeline article picker. Use Google Search to verify dated events. JSON only.",
+      model: this.defaultModel,
+      schema: schema as any,
+      maxTokens: 256,
+      temperature: 0.1,
+      context: "article-pick-google-check",
+      purpose: `Pick article for ${input.date} (${input.candidates.length} candidates)`,
+    });
+
+    const pickId =
+      typeof result.pick === "string" && validIds.has(result.pick) ? result.pick : null;
+    return { pickId };
   }
 
   /**
@@ -378,7 +491,7 @@ Format: ["id1", "id2", ...]`;
           temperature: 0.2,
           maxOutputTokens: 500,
           responseMimeType: "application/json",
-          tools: [], // Disable Google Search grounding for faster responses
+          tools: [{ googleSearch: {} }],
         },
       });
 

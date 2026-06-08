@@ -88,6 +88,27 @@ test("summaryDisallowedSymbol flags pipe, dash, slash, ampersand, and quotes", (
   assert.equal(summaryDisallowedSymbol('"Bitcoin" hits new highs as markets rally worldwide today with strong momentum from traders pushing prices higher'), "quote");
 });
 
+test("summaryDisallowedSymbol flags comma-and list phrasing", () => {
+  assert.deepEqual(
+    findSummaryDisallowedSymbols(
+      "Bitcoin rises above $1,000, and Ethereum follows on strong Asian demand across markets today",
+    ),
+    ["comma and"],
+  );
+  assert.equal(
+    summaryDisallowedSymbol("Bitcoin rises above $1,000 on strong demand across Asian markets today with momentum"),
+    null,
+  );
+  assert.equal(
+    summaryDisallowedSymbol("Bitcoin hits $7,000 and $8,000 as markets rally worldwide today with strong momentum"),
+    null,
+  );
+  assert.equal(
+    summaryDisallowedSymbol("Bitcoin rises, reaching $1,021 driven by yuan devaluation and strong Asian demand today"),
+    null,
+  );
+});
+
 test("relevance rules path triggers article pick for 2019-08-18 roundup summary", async () => {
   const summary =
     "NZ legalizes crypto salaries; China builds two-layer digital currency; AWS expands blockchain tools, fast";

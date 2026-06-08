@@ -25,9 +25,10 @@ type PipelineActivityLogProps = {
   lines: LogLine[];
   className?: string;
   scrollRef?: RefObject<HTMLDivElement | null>;
+  scrollClassName?: string;
 };
 
-export function PipelineActivityLog({ lines, className, scrollRef }: PipelineActivityLogProps) {
+export function PipelineActivityLog({ lines, className, scrollRef, scrollClassName }: PipelineActivityLogProps) {
   return (
     <div
       className={cn(
@@ -36,7 +37,7 @@ export function PipelineActivityLog({ lines, className, scrollRef }: PipelineAct
         className,
       )}
     >
-      <ScrollArea ref={scrollRef} className="h-[280px]">
+      <ScrollArea ref={scrollRef} className={cn("h-[280px]", scrollClassName)}>
         <ul className="space-y-1.5 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
           {lines.length === 0 ? (
             <li className="text-muted-foreground/80">Starting editorial agent…</li>

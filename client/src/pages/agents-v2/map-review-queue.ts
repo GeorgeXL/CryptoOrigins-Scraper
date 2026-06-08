@@ -220,8 +220,8 @@ export function expectedFirstOperatorExperienceV3(row: AgentsV2QueueRow): Expect
 
   if (phase === "awaiting_calendar_decision") {
     return {
-      headline: item.calendarReciprocalPair ? "Unified calendar pair conflict" : "Calendar mismatch decision",
-      bullets: item.calendarReciprocalPair
+      headline: row.item.calendarReciprocalPair ? "Unified calendar pair conflict" : "Calendar mismatch decision",
+      bullets: row.item.calendarReciprocalPair
         ? [
             "Both dates flagged each other — resolve them in one view instead of two separate queue items.",
             "When the agent detects the same legislative passage, it prefers the earlier vote date.",
@@ -345,25 +345,48 @@ export function calendarDatesInRow(row: AgentsV2QueueRow): string[] {
   return [row.date];
 }
 
+function calendarDecisionPairKey(row: AgentsV2QueueRow): string | null {
+  const cd = row.item.calendarDecision;
+  if (!cd) return null;
+  return [cd.currentDate, cd.expectedDate].sort().join("::");
+}
+
+function isReciprocalCalendarRowPair(rowA: AgentsV2QueueRow, rowB: AgentsV2QueueRow): boolean {
+  const cdA = rowA.item.calendarDecision;
+  const cdB = rowB.item.calendarDecision;
+  if (!cdA || !cdB) return false;
+  return cdA.currentDate === cdB.expectedDate && cdA.expectedDate === cdB.currentDate;
+}
+
 function dedupeReciprocalCalendarRows(rows: AgentsV2QueueRow[]): AgentsV2QueueRow[] {
   const seen = new Set<string>();
   const out: AgentsV2QueueRow[] = [];
   for (const row of rows) {
-    const key = row.item.calendarReciprocalPair?.pairKey;
-    if (!key) {
-      out.push(row);
+    const explicitKey = row.item.calendarReciprocalPair?.pairKey;
+    const pairKey = explicitKey ?? calendarDecisionPairKey(row);
+    const reciprocal =
+      Boolean(explicitKey) ||
+      (pairKey != null && rows.some((other) => other.id !== row.id && isReciprocalCalendarRowPair(row, other)));
+
+    if (pairKey && reciprocal) {
+      if (seen.has(pairKey)) continue;
+      seen.add(pairKey);
+      const pair = row.item.calendarReciprocalPair;
+      const primary =
+        pair != null
+          ? rows.find(
+              (candidate) =>
+                candidate.item.calendarReciprocalPair?.pairKey === pair.pairKey &&
+                candidate.date === pair.chronology.keepDate,
+            ) ?? row
+          : rows
+              .filter((candidate) => calendarDecisionPairKey(candidate) === pairKey)
+              .sort((a, b) => a.date.localeCompare(b.date))[0] ?? row;
+      out.push(primary);
       continue;
     }
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const pair = row.item.calendarReciprocalPair!;
-    const primary =
-      rows.find(
-        (candidate) =>
-          candidate.item.calendarReciprocalPair?.pairKey === key &&
-          candidate.date === pair.chronology.keepDate,
-      ) ?? row;
-    out.push(primary);
+
+    out.push(row);
   }
   return out;
 }
@@ -385,14 +408,14 @@ function buildCalendarGroupDisplayRow(groupRows: AgentsV2QueueRow[]): AgentsV2Qu
 
   const subtitle =
     sharedDates.length > 0
-      ? `${sharedDates.join(", ")} ${sharedDates.length === 1 ? "is" : "are"} in multiple calendar flags`
-      : `${groupRows.length} related calendar flags — review together`;
+      ? `${sharedDates.join(", ")} shared · pick dates to remove`
+      : `${dates.length} related dates · pick dates to remove`;
 
   return {
     ...primary,
     id: key,
     date: sharedDates[0] ?? dates[0] ?? primary.date,
-    title: "Linked calendar conflicts",
+    title: "Linked calendar dates",
     subtitle,
     calendarGroup: {
       key,
@@ -428,12 +451,14 @@ export function groupCalendarQueueRows(rows: AgentsV2QueueRow[]): AgentsV2QueueR
     for (const date of dates) {
       if (!parent.has(date)) parent.set(date, date);
     }
+    // Link both sides of each conflict (current + expected, or reciprocal pair).
     for (let i = 1; i < dates.length; i += 1) union(dates[0], dates[i]);
   }
 
   const components = new Map<string, AgentsV2QueueRow[]>();
   for (const row of deduped) {
-    const root = find(calendarDatesInRow(row)[0]);
+    const dates = calendarDatesInRow(row);
+    const root = find(dates[0] ?? row.date);
     const list = components.get(root) ?? [];
     list.push(row);
     components.set(root, list);
@@ -450,9 +475,15 @@ export function groupCalendarQueueRows(rows: AgentsV2QueueRow[]): AgentsV2QueueR
       memberToDisplay.set(row.id, display);
     }
     for (const row of calendarRows) {
-      const pairKey = row.item.calendarReciprocalPair?.pairKey;
+      const pairKey =
+        row.item.calendarReciprocalPair?.pairKey ?? calendarDecisionPairKey(row);
       if (!pairKey) continue;
-      if (groupRows.some((member) => member.item.calendarReciprocalPair?.pairKey === pairKey)) {
+      if (
+        groupRows.some(
+          (member) =>
+            (member.item.calendarReciprocalPair?.pairKey ?? calendarDecisionPairKey(member)) === pairKey,
+        )
+      ) {
         memberToDisplay.set(row.id, display);
       }
     }

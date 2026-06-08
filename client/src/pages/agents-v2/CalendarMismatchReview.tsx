@@ -23,6 +23,8 @@ type CalendarMismatchReviewProps = {
   currentTopics?: string[] | null;
   busy?: boolean;
   compact?: boolean;
+  readOnly?: boolean;
+  resolutionNote?: string | null;
   onKeepDateRerunOther: (keepDate: string, rerunDate: string) => void;
   onKeepBoth: () => void;
 };
@@ -35,6 +37,7 @@ function DateCard({
   otherDate,
   busy,
   canKeep,
+  readOnly,
   onKeepThisRerunOther,
 }: {
   date: string;
@@ -44,6 +47,7 @@ function DateCard({
   otherDate: string;
   busy?: boolean;
   canKeep: boolean;
+  readOnly?: boolean;
   onKeepThisRerunOther: () => void;
 }) {
   return (
@@ -60,25 +64,35 @@ function DateCard({
           {topics?.length ? <p>Topics: {topics.join(", ")}</p> : null}
         </div>
       ) : null}
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <Button
-          type="button"
-          size="sm"
-          className="w-full"
-          disabled={busy || !canKeep}
-          onClick={onKeepThisRerunOther}
-        >
-          Keep this
-        </Button>
-        <Button type="button" size="sm" variant="outline" className="w-full" asChild>
+      {readOnly ? (
+        <Button type="button" size="sm" variant="outline" className="mt-3 w-full" asChild>
           <Link href={`/day/${date}`} target="_blank" rel="noopener noreferrer">
             Open day
           </Link>
         </Button>
-      </div>
-      <p className="mt-1.5 text-[11px] text-muted-foreground">
-        Keep this · reruns {otherDate}
-      </p>
+      ) : (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Button
+              type="button"
+              size="sm"
+              className="w-full"
+              disabled={busy || !canKeep}
+              onClick={onKeepThisRerunOther}
+            >
+              Keep this
+            </Button>
+            <Button type="button" size="sm" variant="outline" className="w-full" asChild>
+              <Link href={`/day/${date}`} target="_blank" rel="noopener noreferrer">
+                Open day
+              </Link>
+            </Button>
+          </div>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Keep this · reruns {otherDate}
+          </p>
+        </>
+      )}
     </div>
   );
 }
@@ -90,6 +104,8 @@ export function CalendarMismatchReview({
   currentTopics,
   busy,
   compact,
+  readOnly,
+  resolutionNote,
   onKeepDateRerunOther,
   onKeepBoth,
 }: CalendarMismatchReviewProps) {
@@ -112,6 +128,7 @@ export function CalendarMismatchReview({
           otherDate={p.expectedDate}
           busy={busy}
           canKeep={Boolean(current)}
+          readOnly={readOnly}
           onKeepThisRerunOther={() => onKeepDateRerunOther(p.currentDate, p.expectedDate)}
         />
         <DateCard
@@ -122,20 +139,31 @@ export function CalendarMismatchReview({
           otherDate={p.currentDate}
           busy={busy}
           canKeep={Boolean(suggested)}
+          readOnly={readOnly}
           onKeepThisRerunOther={() => onKeepDateRerunOther(p.expectedDate, p.currentDate)}
         />
       </div>
 
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        className="w-full sm:w-auto"
-        disabled={busy}
-        onClick={onKeepBoth}
-      >
-        Keep both
-      </Button>
+      {readOnly ? (
+        resolutionNote ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Resolution note: {resolutionNote}
+          </p>
+        ) : null
+      ) : (
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="w-full sm:w-auto"
+            disabled={busy}
+            onClick={onKeepBoth}
+          >
+            Keep both
+          </Button>
+        </>
+      )}
     </div>
   );
 }

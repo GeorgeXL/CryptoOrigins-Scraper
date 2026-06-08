@@ -33,6 +33,7 @@ import type {
   CorrectionApprovalPackage,
   CorrectionProposal,
   DuplicateDecisionPackage,
+  RemovedDayContext,
 } from "./review-package";
 import {
   detectCanonicalDateMismatch,
@@ -124,6 +125,8 @@ type StartOpts = {
   resumedFromRunId?: string;
   /** Re-run only a suffix of agents for one calendar date (must match `dateFrom`/`dateTo` for that day). */
   partialRun?: { date: string; agents: PipelineAgentName[] };
+  /** When a day was cleared before this run (e.g. calendar conflict removal). */
+  removedDayContext?: RemovedDayContext;
 };
 
 function normalizeCheckScopes(scopes: PipelineCheckScope[] | undefined): Set<PipelineCheckScope> {
@@ -728,6 +731,48 @@ export function resolveStoredWinningArticle(row: {
   }
 
   return null;
+}
+
+export function buildRemovedDayContext(
+  analysis: {
+    summary: string | null;
+    topArticleId: string | null;
+    tieredArticles: unknown;
+    analyzedArticles: unknown;
+    winningTier?: string | null;
+  },
+  reason: string,
+  source: NonNullable<RemovedDayContext["source"]>,
+): RemovedDayContext {
+  const winning = resolveStoredWinningArticle({
+    topArticleId: analysis.topArticleId,
+    tieredArticles: analysis.tieredArticles,
+    analyzedArticles: analysis.analyzedArticles,
+    winningTier: analysis.winningTier ?? null,
+  });
+
+  return {
+    reason,
+    removedAt: new Date().toISOString(),
+    source,
+    previousSummary: analysis.summary?.trim() || undefined,
+    previousArticle: winning
+      ? {
+          id: String(winning.article.id ?? winning.article.url ?? "").trim(),
+          title: String(winning.article.title ?? "Previous article").trim(),
+          url: String(winning.article.url ?? "").trim(),
+          tier: winning.tier,
+        }
+      : undefined,
+  };
+}
+
+export function removedDayArticlePickNote(ctx: RemovedDayContext, hasCandidates: boolean): string {
+  const base = "This day was cleared during calendar review. Pick a new article for this date.";
+  if (!hasCandidates) {
+    return `${base} No Exa candidates were found yet — confirm empty or reject to widen search.`;
+  }
+  return `${base} Previous coverage is shown below for reference.`;
 }
 
 export function buildStoredArticleCandidates(row: {
@@ -1860,16 +1905,20 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
       );
       stepIndex += 1;
 
+      const removedCtx =
+        opts.removedDayContext && item.date === opts.dateFrom ? opts.removedDayContext : undefined;
       const pickPackage: ArticlePickPackage = {
         phase: "awaiting_article_pick",
         scenario: item.route === "empty_day" ? "empty_day" : "missing_day",
         triage: item,
         candidates: pool.candidates,
         hasCandidates: pool.hasCandidates,
-        note:
-          pool.hasCandidates ?
-            "Exa returned candidates for this day. Pick the winning article (or reject as empty). Summary, tags, and topics will be generated after your pick."
-          : "Exa returned zero candidates across all three tiers. If this day really has no significant news, confirm as empty. Otherwise reject and we'll widen the search.",
+        removedDayContext: removedCtx,
+        note: removedCtx
+          ? removedDayArticlePickNote(removedCtx, pool.hasCandidates)
+          : pool.hasCandidates
+            ? "Exa returned candidates for this day. Pick the winning article (or reject as empty). Summary, tags, and topics will be generated after your pick."
+            : "Exa returned zero candidates across all three tiers. If this day really has no significant news, confirm as empty. Otherwise reject and we'll widen the search.",
       };
 
       await db.insert(humanReviewQueue).values({

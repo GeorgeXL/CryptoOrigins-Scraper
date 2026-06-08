@@ -42,6 +42,25 @@ export interface IAiProvider {
   
   // Final Analysis verification (Gemini and Perplexity)
   verifyEventDate?(summary: string, date: string): Promise<{ approved: boolean; reasoning: string }>;
+
+  /** Batch calendar check — returns dates where the event did not occur on/near that day. */
+  verifyCalendarDates?(
+    entries: Array<{ date: string; summary: string }>,
+  ): Promise<{ removeDates: string[] }>;
+
+  /** Article pick — returns the best candidate id for a calendar day, or null. */
+  verifyArticlePick?(input: {
+    date: string;
+    scenario?: "empty_day" | "missing_day" | "better_storyline";
+    currentSummary?: string;
+    candidates: Array<{
+      id: string;
+      title: string;
+      publishedDate?: string | null;
+      tier: string;
+      summary?: string;
+    }>;
+  }): Promise<{ pickId: string | null }>;
   
   // Battle feature: Select relevant article IDs from a list of articles
   // Returns object with articleIds array and status to distinguish errors from "no matches"

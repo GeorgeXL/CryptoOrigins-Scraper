@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveStoredWinningArticle } from "../services/editorial-pipeline/run";
+import { buildRemovedDayContext, resolveStoredWinningArticle } from "../services/editorial-pipeline/run";
 
 const sampleArticle = {
   id: "abc-123",
@@ -39,4 +39,21 @@ test("resolveStoredWinningArticle returns null when winning article is orphaned"
     analyzedArticles: [],
   });
   assert.equal(out, null);
+});
+
+test("buildRemovedDayContext captures previous summary and article", () => {
+  const ctx = buildRemovedDayContext(
+    {
+      summary: "Bitcoin falls after Bitfinex breach",
+      topArticleId: "abc-123",
+      tieredArticles: { crypto: [sampleArticle] },
+      analyzedArticles: null,
+      winningTier: "crypto",
+    },
+    "Removed during linked calendar conflict review.",
+    "calendar_group_remove",
+  );
+  assert.equal(ctx.previousSummary, "Bitcoin falls after Bitfinex breach");
+  assert.equal(ctx.previousArticle?.title, sampleArticle.title);
+  assert.equal(ctx.source, "calendar_group_remove");
 });

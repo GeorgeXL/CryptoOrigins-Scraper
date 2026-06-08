@@ -268,7 +268,7 @@ Return ONLY a JSON object in this exact format:
 }`;
 
   // Determine model name based on provider
-  const modelName = providerName === 'gemini' ? 'gemini-2.0-flash' : 'gpt-4o-mini';
+  const modelName = providerName === 'gemini' ? 'gemini-3.5-flash' : 'gpt-4o-mini';
   const endpoint = providerName === 'gemini' ? '/models/generateContent' : '/chat/completions';
   
   // Log to API monitor
@@ -451,7 +451,7 @@ Return ONLY a JSON object in this exact format:
   "reasoning": "Brief explanation of why this subcategory path fits"
 }`;
 
-  const modelName = providerName === 'gemini' ? 'gemini-2.0-flash' : 'gpt-4o-mini';
+  const modelName = providerName === 'gemini' ? 'gemini-3.5-flash' : 'gpt-4o-mini';
   const endpoint = providerName === 'gemini' ? '/models/generateContent' : '/chat/completions';
   
   const monitorId = apiMonitor.logRequest({

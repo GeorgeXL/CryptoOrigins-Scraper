@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
+import { useQualityCheckAgentRun } from "@/hooks/useQualityCheckAgentRun";
 import { useToggleFlag } from "@/hooks/useToggleFlag";
 import { TaggingDropdown } from "@/components/TaggingDropdown";
+import { QualityCheckAgentToolbar } from "@/components/QualityCheckAgentToolbar";
 import { 
   Dialog,
   DialogContent,
@@ -80,6 +82,8 @@ import {
 import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor } from "@/utils/tagHelpers";
 import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
 import { extractTopicLabelsFromCategories } from "@/lib/topicCatalog";
+import type { QualityCheckDateInput } from "@shared/quality-check-agent-actions";
+import { getQualityCheckAgentAction } from "@shared/quality-check-agent-actions";
 
 // Quality violation types for filtering
 const VIOLATION_TYPES = [
@@ -95,7 +99,7 @@ const VIOLATION_TYPES = [
   { id: 'repeated-words', label: 'Repeated words', filterFn: (v: QualityViolation) => v.violations.some(x => x.toLowerCase().includes('repeated')) },
   { id: 'placeholder-text', label: 'Placeholder text', filterFn: (v: QualityViolation) => v.violations.some(x => x.toLowerCase().includes('placeholder')) },
   { id: 'duplicate-summary', label: 'Duplicate summary', filterFn: (v: QualityViolation) => v.violations.some(x => x.toLowerCase().includes('duplicate')) },
-  { id: 'missing-months', label: 'Missing months', filterFn: (v: QualityViolation) => v.violations.some(x => x.includes('Missing month')) },
+  { id: 'missing-months', label: 'Incomplete months', filterFn: (v: QualityViolation) => v.violations.some(x => x.includes('Missing month')) },
 ] as const;
 
 interface QualityViolation {
@@ -309,6 +313,16 @@ export default function EventsManager() {
     confirmSelection,
     progress
   } = useBulkReanalyze();
+
+  const {
+    running: qualityAgentRunning,
+    logLines: qualityAgentLogLines,
+    progressLabel: qualityAgentProgressLabel,
+    logScrollRef: qualityAgentLogScrollRef,
+    runQualityCheckAgent,
+    stopRun: stopQualityCheckAgent,
+    clearLog: clearQualityAgentLog,
+  } = useQualityCheckAgentRun();
 
   // Fetch quality violations data
   const { data: qualityViolationsData, isLoading: qualityLoading } = useQuery<QualityViolation[]>({
@@ -916,10 +930,10 @@ export default function EventsManager() {
       isLoading: isTopicQualityLoading,
     });
 
-    // Missing months
+    // Incomplete months
     items.push({
       id: 'missing-months',
-      label: 'Missing months',
+      label: 'Incomplete months',
       count: missingMonthsCount,
       hasIssues: missingMonthsCount > 0,
       isLoading: isMissingMonthsLoading,
@@ -1126,6 +1140,18 @@ export default function EventsManager() {
     
     return violations.filter(type.filterFn);
   }, [selectedLocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, lockedDaysData, manualData, orphanData, verifiedData, notAvailableData, emptyVeriBadgeData]);
+
+  const qualityCheckAgentRows = useMemo<QualityCheckDateInput[]>(() => {
+    return filteredQualityViolations.map((violation) => ({
+      date: violation.date,
+      year: (violation as { year?: number }).year,
+      month: (violation as { month?: number }).month,
+    }));
+  }, [filteredQualityViolations]);
+
+  useEffect(() => {
+    clearQualityAgentLog();
+  }, [selectedQualityCheck, clearQualityAgentLog]);
 
   // Paginated quality violations
   const paginatedQualityViolations = useMemo(() => {
@@ -2172,7 +2198,7 @@ export default function EventsManager() {
             {(selectedQualityCheck || selectedVeriBadge || selectedLocked) ? (
               <>
                 {/* Quality Check, Locked, or VeriBadge View */}
-                <div className="flex items-center justify-between mb-3">
+                <div className="mb-3 flex items-start justify-between gap-4">
                   <div className="flex items-center space-x-3">
                     <h2 className="text-lg font-semibold text-foreground">
                       {selectedLocked
@@ -2189,10 +2215,50 @@ export default function EventsManager() {
                         : `issue${filteredQualityViolations.length !== 1 ? 's' : ''}`}`}
                     </Badge>
                   </div>
-                  {/* Action buttons based on quality check type */}
-                  <div className="flex items-center gap-2">
-                  </div>
+                  {selectedQualityCheck && getQualityCheckAgentAction(selectedQualityCheck) ? (
+                    <div className="shrink-0">
+                      <QualityCheckAgentToolbar
+                        checkId={selectedQualityCheck}
+                        selectedCount={selectedDates.size}
+                        totalCount={filteredQualityViolations.length}
+                        running={qualityAgentRunning}
+                        progressLabel={qualityAgentProgressLabel}
+                        logLines={qualityAgentLogLines}
+                        logScrollRef={qualityAgentLogScrollRef}
+                        onRun={() =>
+                          void runQualityCheckAgent({
+                            checkId: selectedQualityCheck,
+                            rows: qualityCheckAgentRows,
+                            selectedDates,
+                          })
+                        }
+                        onStop={() => void stopQualityCheckAgent()}
+                        compact
+                      />
+                    </div>
+                  ) : null}
                 </div>
+
+                {selectedQualityCheck && getQualityCheckAgentAction(selectedQualityCheck) ? (
+                  <QualityCheckAgentToolbar
+                    checkId={selectedQualityCheck}
+                    selectedCount={selectedDates.size}
+                    totalCount={filteredQualityViolations.length}
+                    running={qualityAgentRunning}
+                    progressLabel={qualityAgentProgressLabel}
+                    logLines={qualityAgentLogLines}
+                    logScrollRef={qualityAgentLogScrollRef}
+                    onRun={() =>
+                      void runQualityCheckAgent({
+                        checkId: selectedQualityCheck,
+                        rows: qualityCheckAgentRows,
+                        selectedDates,
+                      })
+                    }
+                    onStop={() => void stopQualityCheckAgent()}
+                    logOnly
+                  />
+                ) : null}
 
                 {/* Quality violations table - using AnalysesTable */}
                 <AnalysesTable
