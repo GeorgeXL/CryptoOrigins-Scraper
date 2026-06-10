@@ -3085,4 +3085,204 @@ router.post("/api/tags/delete-unused", async (req, res) => {
   }
 });
 
+// Allocate unmatched tags to categories based on similarity
+router.post("/api/tags/allocate-unmatched", async (req, res) => {
+  try {
+    console.log("🚀 Starting unmatched tag allocation via API...");
+    const { historicalNewsAnalyses } = await import("@shared/schema");
+    const { findSimilarTags, normalizeTagName } = await import("../services/tag-similarity");
+    const { sql } = await import("drizzle-orm");
+    
+    // Get all tags from analyses
+    console.log("📊 Fetching all tags from analyses...");
+    const allAnalyses = await db
+      .select({ tags: historicalNewsAnalyses.tags })
+      .from(historicalNewsAnalyses);
+    
+    const analysisTagMap = new Map<string, { name: string; category?: string; count: number }>();
+    
+    for (const analysis of allAnalyses) {
+      if (analysis.tags && Array.isArray(analysis.tags)) {
+        for (const tag of analysis.tags as any[]) {
+          if (tag.name) {
+            const key = tag.name.toLowerCase().trim();
+            if (!analysisTagMap.has(key)) {
+              analysisTagMap.set(key, {
+                name: tag.name,
+                category: tag.category,
+                count: 0,
+              });
+            }
+            analysisTagMap.get(key)!.count++;
+          }
+        }
+      }
+    }
+    
+    // Get all tags from metadata
+    console.log("📊 Fetching all tags from tag_metadata...");
+    const allMetadataTags = await db.select().from(tagMetadata);
+    const metadataTagMap = new Map<string, { name: string; category: string; id: string; parentTagId: string | null }>();
+    
+    for (const tag of allMetadataTags) {
+      const key = tag.name.toLowerCase().trim();
+      metadataTagMap.set(key, {
+        name: tag.name,
+        category: tag.category,
+        id: tag.id,
+        parentTagId: tag.parentTagId,
+      });
+    }
+    
+    // Find unmatched tags
+    const unmatchedTags: Array<{ name: string; category?: string; count: number }> = [];
+    for (const [key, tag] of analysisTagMap) {
+      if (!metadataTagMap.has(key)) {
+        unmatchedTags.push(tag);
+      }
+    }
+    
+    if (unmatchedTags.length === 0) {
+      return res.json({
+        success: true,
+        message: "No unmatched tags found. All tags are already allocated!",
+        allocated: 0,
+        skipped: 0,
+        unallocatable: 0,
+      });
+    }
+    
+    // Convert metadata tags to array for similarity matching
+    const matchedTagsArray = Array.from(metadataTagMap.values()).map(t => ({
+      name: t.name,
+      category: t.category,
+    }));
+    
+    console.log(`🔍 Finding similar tags for ${unmatchedTags.length} unmatched tags...`);
+    
+    const allocations: Array<{
+      unmatchedTag: { name: string; category?: string; count: number };
+      matchedTag: { name: string; category: string; id: string; parentTagId: string | null } | null;
+      similarity: number;
+    }> = [];
+    
+    // Find best match for each unmatched tag
+    for (const unmatchedTag of unmatchedTags) {
+      const similar = findSimilarTags(unmatchedTag.name, matchedTagsArray, 0.6);
+      
+      if (similar.length > 0) {
+        const bestMatch = similar[0];
+        const matchedTag = metadataTagMap.get(bestMatch.name!.toLowerCase().trim());
+        
+        if (matchedTag) {
+          allocations.push({
+            unmatchedTag,
+            matchedTag,
+            similarity: bestMatch.similarity,
+          });
+        }
+      } else {
+        allocations.push({
+          unmatchedTag,
+          matchedTag: null,
+          similarity: 0,
+        });
+      }
+    }
+    
+    // Sort by similarity
+    allocations.sort((a, b) => b.similarity - a.similarity);
+    
+    // Filter high confidence matches (≥0.7)
+    const toAllocate = allocations.filter(a => a.matchedTag !== null && a.similarity >= 0.7);
+    const lowConfidence = allocations.filter(a => a.matchedTag !== null && a.similarity >= 0.6 && a.similarity < 0.7);
+    const unallocatable = allocations.filter(a => a.matchedTag === null || a.similarity < 0.6);
+    
+    if (toAllocate.length === 0) {
+      return res.json({
+        success: true,
+        message: "No tags with high confidence matches found.",
+        allocated: 0,
+        skipped: 0,
+        lowConfidence: lowConfidence.length,
+        unallocatable: unallocatable.length,
+        unallocatableTags: unallocatable.slice(0, 50).map(a => ({
+          name: a.unmatchedTag.name,
+          count: a.unmatchedTag.count,
+        })),
+      });
+    }
+    
+    console.log(`💾 Creating ${toAllocate.length} tag_metadata entries...`);
+    
+    let created = 0;
+    let skipped = 0;
+    const createdTags: string[] = [];
+    
+    for (const alloc of toAllocate) {
+      try {
+        // Check if tag already exists
+        const existing = await db
+          .select()
+          .from(tagMetadata)
+          .where(
+            sql`LOWER(TRIM(${tagMetadata.name})) = LOWER(TRIM(${alloc.unmatchedTag.name}))`
+          )
+          .limit(1);
+        
+        if (existing.length > 0) {
+          skipped++;
+          continue;
+        }
+        
+        // Create new tag_metadata entry
+        await db.insert(tagMetadata).values({
+          name: alloc.unmatchedTag.name,
+          category: alloc.matchedTag!.category,
+          normalizedName: normalizeTagName(alloc.unmatchedTag.name),
+          usageCount: alloc.unmatchedTag.count,
+          parentTagId: alloc.matchedTag!.parentTagId || null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        
+        createdTags.push(`${alloc.unmatchedTag.name} → ${alloc.matchedTag!.category} (${(alloc.similarity * 100).toFixed(1)}%)`);
+        created++;
+      } catch (error: any) {
+        if (error.code === '23505') {
+          skipped++;
+        } else {
+          console.error(`❌ Error creating "${alloc.unmatchedTag.name}":`, error.message);
+        }
+      }
+    }
+    
+    // Invalidate caches
+    cacheManager.invalidate('tags:catalog');
+    cacheManager.invalidate('tags:catalog:manual');
+    cacheManager.invalidate('tags:catalog-v2');
+    cacheManager.invalidate('tags:catalog-v2:manual');
+    cacheManager.invalidate('tags:hierarchy');
+    
+    console.log(`✅ Allocation complete! Created: ${created}, Skipped: ${skipped}`);
+    
+    res.json({
+      success: true,
+      message: `Allocated ${created} unmatched tags`,
+      allocated: created,
+      skipped: skipped,
+      lowConfidence: lowConfidence.length,
+      unallocatable: unallocatable.length,
+      createdTags: createdTags.slice(0, 50),
+      unallocatableTags: unallocatable.slice(0, 50).map(a => ({
+        name: a.unmatchedTag.name,
+        count: a.unmatchedTag.count,
+      })),
+    });
+  } catch (error) {
+    console.error("❌ Error allocating unmatched tags:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
 export default router;
