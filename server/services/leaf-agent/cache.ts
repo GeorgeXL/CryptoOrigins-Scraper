@@ -9,6 +9,7 @@ import type {
   MainEventsDismissals,
 } from "../../../shared/leaf-agent-config";
 import { EMPTY_MAIN_EVENTS_DISMISSALS } from "../../../shared/leaf-agent-config";
+import { readCanonicalSourceUrl } from "./coverage-constants";
 import type { SkippedCanonicalDate, ValidCanonicalDate } from "./coverage-schemas";
 
 export type CachedMainEventsPayload = {
@@ -122,10 +123,12 @@ function parseStoredCanonicalDates(raw: unknown): ValidCanonicalDate[] {
     if (typeof row.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(row.date)) continue;
     if (typeof row.event !== "string" || row.event.length < 3) continue;
     if (row.importance !== "landmark" && row.importance !== "major" && row.importance !== "notable") continue;
+    const sourceUrl = readCanonicalSourceUrl(row);
     valid.push({
       date: row.date as ValidCanonicalDate["date"],
       event: row.event,
       importance: row.importance,
+      ...(sourceUrl ? { sourceUrl } : {}),
     });
   }
   return valid.sort((a, b) => a.date.localeCompare(b.date));

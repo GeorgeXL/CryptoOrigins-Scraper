@@ -27,11 +27,17 @@ import {
 import type { MainEventsDismissals, MainEventsDismissCategory } from "../../../shared/leaf-agent-config";
 import {
   canonicalDatesSchema,
+  sourceLinksSchema,
   type CanonicalDatesResponse,
   type ValidCanonicalDate,
 } from "./coverage-schemas";
 
-import { ISO_DATE } from "./coverage-constants";
+import { ISO_DATE, normalizeOptionalSourceUrl } from "./coverage-constants";
+
+const MAIN_EVENTS_SOURCE_LINK_BATCH_SIZE = 8;
+
+const MAIN_EVENTS_SOURCE_URL_GUIDANCE = `Use short, stable public URLs (Wikipedia, official project pages, major news outlets, .gov).
+Never use vertexaisearch.cloud.google.com, grounding-api-redirect, or other wrapper/redirect URLs.`;
 
 export type { ValidCanonicalDate } from "./coverage-schemas";
 export { ISO_DATE };
@@ -46,6 +52,7 @@ export type LeafCoverageMatched = {
   date: string;
   event: string;
   importance: ValidCanonicalDate["importance"];
+  sourceUrl?: string;
   summary: string;
   wasLocked: boolean;
   newlyLocked: boolean;
@@ -55,12 +62,14 @@ export type LeafCoverageMissing = {
   date: string;
   event: string;
   importance: ValidCanonicalDate["importance"];
+  sourceUrl?: string;
 };
 
 export type LeafCoverageMisplaced = {
   date: string;
   event: string;
   importance: ValidCanonicalDate["importance"];
+  sourceUrl?: string;
   currentLeaf: string;
   currentLeafLabel: string;
   summary: string;
@@ -129,7 +138,15 @@ export function normalizeCanonicalDates(
       skipped.push(entry);
       continue;
     }
-    valid.push(entry as ValidCanonicalDate);
+    const sourceUrl =
+      normalizeOptionalSourceUrl(entry.sourceUrl) ??
+      normalizeOptionalSourceUrl(entry.source_url);
+    valid.push({
+      date: entry.date as ValidCanonicalDate["date"],
+      event: entry.event,
+      importance: entry.importance,
+      ...(sourceUrl ? { sourceUrl } : {}),
+    });
   }
 
   return {
@@ -165,6 +182,15 @@ export function corpusForLeaf(allRows: LeafDatabaseRow[], leaf: string): LeafCor
     .map(({ date, summary, isLocked }) => ({ date, summary, isLocked }));
 }
 
+function canonicalEntryFields(entry: ValidCanonicalDate) {
+  return {
+    date: entry.date,
+    event: entry.event,
+    importance: entry.importance,
+    ...(entry.sourceUrl ? { sourceUrl: entry.sourceUrl } : {}),
+  };
+}
+
 export function crossCheckLeafCoverage(
   targetLeaf: string,
   allRows: LeafDatabaseRow[],
@@ -184,9 +210,7 @@ export function crossCheckLeafCoverage(
     const onLeaf = corpusByDate.get(entry.date);
     if (onLeaf) {
       matched.push({
-        date: entry.date,
-        event: entry.event,
-        importance: entry.importance,
+        ...canonicalEntryFields(entry),
         summary: onLeaf.summary,
         wasLocked: onLeaf.isLocked,
         newlyLocked: false,
@@ -196,16 +220,14 @@ export function crossCheckLeafCoverage(
 
     const dbRow = dbByDate.get(entry.date);
     if (!dbRow) {
-      missing.push(entry);
+      missing.push(canonicalEntryFields(entry));
       continue;
     }
 
     const currentNormalized = dbRow.topics[0];
     if (currentNormalized === normalizedTarget) {
       matched.push({
-        date: entry.date,
-        event: entry.event,
-        importance: entry.importance,
+        ...canonicalEntryFields(entry),
         summary: dbRow.summary,
         wasLocked: dbRow.isLocked,
         newlyLocked: false,
@@ -215,9 +237,7 @@ export function crossCheckLeafCoverage(
 
     const currentLeaf = displayLeafFromNormalized(currentNormalized);
     misplaced.push({
-      date: entry.date,
-      event: entry.event,
-      importance: entry.importance,
+      ...canonicalEntryFields(entry),
       currentLeaf,
       currentLeafLabel: currentNormalized ? formatTopicLeafWithGroup(currentLeaf) : "Untagged",
       summary: dbRow.summary,
@@ -365,6 +385,7 @@ Use web search when helpful to verify exact dates (YYYY-MM-DD).
 Only include dates from ${LEAF_AGENT_CORPUS_START_DATE} through ${LEAF_AGENT_CORPUS_END_DATE} inclusive — this corpus ends in 2024; do not include 2025+ or estimated future dates.
 Every date MUST be an exact calendar day in YYYY-MM-DD form — never use XX placeholders or month-only dates.
 Prefer landmark moments editors would expect on a daily timeline — not every minor news item.
+For each date include source_url: one reputable public link supporting the date and label. ${MAIN_EVENTS_SOURCE_URL_GUIDANCE}
 Respond ONLY with valid JSON matching the schema.`;
 
   const userPrompt = `Storyline group: ${group ?? "Unknown"}
@@ -372,11 +393,12 @@ Group description: ${groupMeta?.description ?? ""}
 Storyline leaf: ${leaf}
 
 Return the main canonical dates for this leaf (between ${LEAF_AGENT_CORPUS_START_DATE} and ${LEAF_AGENT_CORPUS_END_DATE} only). Include every landmark you can verify, up to ${maxDates} dates if needed.
+For each date include one reputable source URL (news article, official announcement, or encyclopedia) that supports the date and event label. Use web search to find the best link.
 JSON shape:
 {
   "storyline_leaf": "${leaf}",
   "canonical_dates": [
-    { "date": "YYYY-MM-DD", "event": "short label (max 120 chars)", "importance": "landmark"|"major"|"notable" }
+    { "date": "YYYY-MM-DD", "event": "short label (max 120 chars)", "importance": "landmark"|"major"|"notable", "source_url": "https://..." }
   ],
   "notes": "optional one sentence"
 }`;
@@ -471,6 +493,197 @@ export async function getMainEventsCacheOverview(): Promise<{
     cachedCount,
     uncachedLeaves,
   };
+}
+
+async function fetchSourceUrlsBatchFromGemini(
+  leaf: string,
+  entries: Array<{ date: string; event: string }>,
+): Promise<Map<string, string>> {
+  if (entries.length === 0) return new Map();
+
+  const group = topicGroupForLeaf(leaf);
+  const groupMeta = TOPIC_HIERARCHY.find((g) => g.name === group);
+  const gemini = aiService.getProvider("gemini");
+
+  const eventLines = entries
+    .map((entry) => `- ${entry.date}: ${entry.event}`)
+    .join("\n");
+
+  const systemPrompt = `You are a Bitcoin/crypto timeline researcher. For each canonical event below, find one reputable source URL that supports the date and event label.
+Use web search. ${MAIN_EVENTS_SOURCE_URL_GUIDANCE}
+Respond ONLY with valid JSON matching the schema. Every date in the input must appear in source_links.`;
+
+  const userPrompt = `Storyline group: ${group ?? "Unknown"}
+Group description: ${groupMeta?.description ?? ""}
+Storyline leaf: ${leaf}
+
+Return one source_url per date:
+{
+  "source_links": [
+    { "date": "YYYY-MM-DD", "source_url": "https://..." }
+  ]
+}
+
+Events:
+${eventLines}`;
+
+  const raw = await gemini.generateJson({
+    systemPrompt,
+    prompt: userPrompt,
+    model: resolveMainEventsGeminiModel(),
+    temperature: 0.1,
+    maxTokens: 4096,
+    context: "main-events-check",
+    purpose: `source links for ${leaf}`,
+    schema: sourceLinksSchema,
+  });
+
+  const parsed = sourceLinksSchema.parse(raw);
+  const linkMap = new Map<string, string>();
+  for (const row of parsed.source_links) {
+    if (!ISO_DATE.test(row.date)) continue;
+    const sourceUrl =
+      normalizeOptionalSourceUrl(row.sourceUrl) ?? normalizeOptionalSourceUrl(row.source_url);
+    if (sourceUrl) {
+      linkMap.set(row.date, sourceUrl);
+    }
+  }
+  return linkMap;
+}
+
+async function fetchSourceUrlsFromGemini(
+  leaf: string,
+  entries: Array<{ date: string; event: string }>,
+): Promise<Map<string, string>> {
+  const linkMap = new Map<string, string>();
+
+  for (let offset = 0; offset < entries.length; offset += MAIN_EVENTS_SOURCE_LINK_BATCH_SIZE) {
+    const batch = entries.slice(offset, offset + MAIN_EVENTS_SOURCE_LINK_BATCH_SIZE);
+    try {
+      const batchLinks = await fetchSourceUrlsBatchFromGemini(leaf, batch);
+      for (const [date, url] of batchLinks) {
+        linkMap.set(date, url);
+      }
+    } catch (error) {
+      console.warn(
+        `Source link batch failed for ${leaf} (${batch[0]?.date ?? "?"}…):`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  return linkMap;
+}
+
+export type MainEventsSourceLinkBackfillResult = {
+  leaf: string;
+  total: number;
+  alreadyHadLinks: number;
+  updated: number;
+  stillMissing: number;
+  error?: string;
+};
+
+export async function backfillMainEventsSourceUrls(leafInput: string): Promise<MainEventsSourceLinkBackfillResult> {
+  const leaf = resolveStorylineLeaf(leafInput);
+  const cached = await loadCachedMainEvents(leaf);
+  if (!cached) {
+    throw new Error("No cached main events list for this leaf");
+  }
+
+  const needsLinks = cached.canonical.filter((entry) => !entry.sourceUrl);
+  const alreadyHadLinks = cached.canonical.length - needsLinks.length;
+
+  if (needsLinks.length === 0) {
+    return {
+      leaf,
+      total: cached.canonical.length,
+      alreadyHadLinks,
+      updated: 0,
+      stillMissing: 0,
+    };
+  }
+
+  if (!process.env.GOOGLE_API_KEY && !process.env.GEMINI_API_KEY) {
+    throw new Error("GOOGLE_API_KEY or GEMINI_API_KEY is required to backfill source links from Gemini");
+  }
+
+  const linkMap = await fetchSourceUrlsFromGemini(
+    leaf,
+    needsLinks.map(({ date, event }) => ({ date, event })),
+  );
+
+  if (linkMap.size === 0) {
+    return {
+      leaf,
+      total: cached.canonical.length,
+      alreadyHadLinks,
+      updated: 0,
+      stillMissing: needsLinks.length,
+      error: "Gemini returned no source links",
+    };
+  }
+
+  let updated = 0;
+  const canonical = cached.canonical.map((entry) => {
+    if (entry.sourceUrl) return entry;
+    const sourceUrl = linkMap.get(entry.date);
+    if (!sourceUrl) return entry;
+    updated += 1;
+    return { ...entry, sourceUrl };
+  });
+
+  await saveCachedMainEvents(leaf, {
+    notes: cached.notes,
+    canonical,
+    skippedCanonical: cached.skippedCanonical,
+    geminiModel: cached.geminiModel,
+    fetchedAt: cached.fetchedAt,
+  });
+
+  return {
+    leaf,
+    total: canonical.length,
+    alreadyHadLinks,
+    updated,
+    stillMissing: canonical.filter((entry) => !entry.sourceUrl).length,
+  };
+}
+
+export async function backfillAllMainEventsSourceUrls(): Promise<MainEventsSourceLinkBackfillResult[]> {
+  const results: MainEventsSourceLinkBackfillResult[] = [];
+
+  for (const leaf of TOPIC_HIERARCHY_LEAVES) {
+    const cached = await loadCachedMainEvents(leaf);
+    if (!cached) continue;
+
+    const needsLinks = cached.canonical.some((entry) => !entry.sourceUrl);
+    if (!needsLinks) {
+      results.push({
+        leaf,
+        total: cached.canonical.length,
+        alreadyHadLinks: cached.canonical.length,
+        updated: 0,
+        stillMissing: 0,
+      });
+      continue;
+    }
+
+    try {
+      results.push(await backfillMainEventsSourceUrls(leaf));
+    } catch (error) {
+      results.push({
+        leaf,
+        total: cached.canonical.length,
+        alreadyHadLinks: cached.canonical.filter((entry) => entry.sourceUrl).length,
+        updated: 0,
+        stillMissing: cached.canonical.filter((entry) => !entry.sourceUrl).length,
+        error: error instanceof Error ? error.message : "Backfill failed",
+      });
+    }
+  }
+
+  return results;
 }
 
 async function lockMatchedDates(

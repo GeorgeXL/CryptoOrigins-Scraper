@@ -2,6 +2,8 @@ import { Router } from "express";
 
 import {
   cacheMainEventsGeminiForLeaf,
+  backfillAllMainEventsSourceUrls,
+  backfillMainEventsSourceUrls,
   getLeafCorpusStats,
   getMainEventsCacheOverview,
   getMainEventsCheckSnapshot,
@@ -146,6 +148,38 @@ router.post("/api/main-events-check/dismiss", async (req, res) => {
         : message.includes("Unknown") || message.includes("Ambiguous")
           ? 400
           : 500;
+    res.status(status).json({ error: message });
+  }
+});
+
+router.post("/api/main-events-check/backfill-links", async (req, res) => {
+  try {
+    const leaf = typeof req.body?.leaf === "string" ? req.body.leaf.trim() : "";
+    const all = req.body?.all === true;
+
+    if (all) {
+      const results = await backfillAllMainEventsSourceUrls();
+      res.json({ results });
+      return;
+    }
+
+    if (!leaf) {
+      res.status(400).json({ error: "leaf is required unless all is true" });
+      return;
+    }
+
+    const result = await backfillMainEventsSourceUrls(leaf);
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to backfill source links";
+    const status =
+      message.includes("Unknown") ||
+      message.includes("Ambiguous") ||
+      message.includes("No cached main events list") ||
+      message.includes("GEMINI") ||
+      message.includes("GOOGLE_API_KEY")
+        ? 400
+        : 500;
     res.status(status).json({ error: message });
   }
 });

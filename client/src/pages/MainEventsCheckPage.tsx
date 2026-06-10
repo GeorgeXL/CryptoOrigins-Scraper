@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { Link } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Leaf, Layers, Loader2, Lock, SearchCheck, Undo2, X } from "lucide-react";
+import { Leaf, Layers, Loader2, Lock, SearchCheck, Undo2, X, ExternalLink } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,6 +50,21 @@ function DateLink({ date }: { date: string }) {
     <Link href={`/day/${date}`} className="font-mono text-sm text-primary hover:underline">
       {date}
     </Link>
+  );
+}
+
+function SourceLink({ url }: { url?: string | null }) {
+  if (!url) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+    >
+      <ExternalLink className="h-3 w-3" />
+      Source
+    </a>
   );
 }
 
@@ -766,6 +781,7 @@ export default function MainEventsCheckPage() {
                     <Badge variant="secondary" className={cn("text-[10px]", importanceClass[entry.importance])}>
                       {entry.importance}
                     </Badge>
+                    <SourceLink url={entry.sourceUrl} />
                     {(entry.newlyLocked || entry.wasLocked) && (
                       <Badge variant="outline" className="gap-1 text-[10px]">
                         <Lock className="h-3 w-3" />
@@ -795,6 +811,7 @@ export default function MainEventsCheckPage() {
                     <Badge variant="secondary" className={cn("text-[10px]", importanceClass[entry.importance])}>
                       {entry.importance}
                     </Badge>
+                    <SourceLink url={entry.sourceUrl} />
                     {entry.isLocked ? (
                       <Badge variant="outline" className="gap-1 text-[10px]">
                         <Lock className="h-3 w-3" />
@@ -871,6 +888,7 @@ export default function MainEventsCheckPage() {
                     <Badge variant="secondary" className={cn("text-[10px]", importanceClass[entry.importance])}>
                       {entry.importance}
                     </Badge>
+                    <SourceLink url={entry.sourceUrl} />
                   </div>
                   <p className="mt-1 text-sm">{entry.event}</p>
                   <Button

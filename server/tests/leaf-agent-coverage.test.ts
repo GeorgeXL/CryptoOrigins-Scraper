@@ -8,6 +8,10 @@ import {
   splitCoverageByDismissals,
 } from "../services/leaf-agent/coverage";
 import {
+  normalizeOptionalSourceUrl,
+  readCanonicalSourceUrl,
+} from "../services/leaf-agent/coverage-constants";
+import {
   MAIN_EVENTS_CHECK_MAX_DATES,
 } from "../../shared/leaf-agent-config";
 
@@ -27,6 +31,40 @@ test("normalizeCanonicalDates drops non-exact and out-of-range dates", () => {
   );
   assert.equal(valid.length, 1);
   assert.equal(skipped.length, 2);
+});
+
+test("normalizeOptionalSourceUrl accepts http(s) URLs and rejects invalid values", () => {
+  assert.equal(normalizeOptionalSourceUrl("https://example.com/a"), "https://example.com/a");
+  assert.equal(normalizeOptionalSourceUrl("example.com/a"), "https://example.com/a");
+  assert.equal(normalizeOptionalSourceUrl(""), undefined);
+  assert.equal(normalizeOptionalSourceUrl("not a url"), undefined);
+});
+
+test("normalizeCanonicalDates preserves source URLs", () => {
+  const { valid } = normalizeCanonicalDates(
+    [
+      {
+        date: "2020-05-11",
+        event: "Third halving",
+        importance: "landmark",
+        source_url: "https://example.com/halving",
+      },
+    ],
+    10,
+  );
+  assert.equal(valid.length, 1);
+  assert.equal(valid[0]?.sourceUrl, "https://example.com/halving");
+});
+
+test("readCanonicalSourceUrl reads camelCase and snake_case keys", () => {
+  assert.equal(
+    readCanonicalSourceUrl({ source_url: "https://example.com/a" }),
+    "https://example.com/a",
+  );
+  assert.equal(
+    readCanonicalSourceUrl({ sourceUrl: "https://example.com/b" }),
+    "https://example.com/b",
+  );
 });
 
 test("MAIN_EVENTS_CHECK_MAX_DATES is fixed for server-side Gemini asks", () => {
@@ -95,7 +133,12 @@ test("crossCheckLeafCoverage splits matched, missing, misplaced, and extra", () 
     },
   ];
   const canonical = [
-    { date: "2020-05-11", event: "Third halving", importance: "landmark" as const },
+    {
+      date: "2020-05-11",
+      event: "Third halving",
+      importance: "landmark" as const,
+      sourceUrl: "https://example.com/halving",
+    },
     { date: "2009-01-12", event: "First Bitcoin transaction", importance: "landmark" as const },
     { date: "2024-04-20", event: "Fourth halving", importance: "landmark" as const },
   ];
@@ -107,5 +150,7 @@ test("crossCheckLeafCoverage splits matched, missing, misplaced, and extra", () 
   assert.equal(result.misplaced.find((row) => row.date === "2009-01-12")?.currentLeaf, "Bitcoin price action");
   assert.equal(result.missing.length, 1);
   assert.equal(result.missing[0]?.date, "2024-04-20");
+  assert.equal(result.missing[0]?.sourceUrl, undefined);
+  assert.equal(result.misplaced.find((row) => row.date === "2009-01-12")?.sourceUrl, undefined);
   assert.equal(result.extra.length, 0);
 });

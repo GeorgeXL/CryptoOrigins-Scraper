@@ -2,6 +2,7 @@ export type LeafCoverageMatched = {
   date: string;
   event: string;
   importance: "landmark" | "major" | "notable";
+  sourceUrl?: string;
   summary: string;
   wasLocked: boolean;
   newlyLocked: boolean;
@@ -11,12 +12,14 @@ export type LeafCoverageMissing = {
   date: string;
   event: string;
   importance: "landmark" | "major" | "notable";
+  sourceUrl?: string;
 };
 
 export type LeafCoverageMisplaced = {
   date: string;
   event: string;
   importance: "landmark" | "major" | "notable";
+  sourceUrl?: string;
   currentLeaf: string;
   currentLeafLabel: string;
   summary: string;
