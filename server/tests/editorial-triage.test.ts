@@ -186,7 +186,7 @@ test("triageExistingDay routes to existing_needs_correction when summary ok but 
   });
 
   assert.equal(item.route, "existing_needs_correction");
-  assert.ok(item.reasons.some((r) => r.includes("tags or topic categories")));
+  assert.ok(item.reasons.some((r) => r.includes("tags_version2") || r.includes("tags or topic categories")));
   assert.ok(item.requiredAgents.includes("TopicValidatorAgent"));
   assert.ok(item.requiredAgents.includes("TagManagerAgent"));
   const sumIdx = item.requiredAgents.indexOf("SummaryAgent");

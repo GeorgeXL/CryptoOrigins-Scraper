@@ -24,6 +24,7 @@ import { VeriBadge } from "@/components/VeriBadge";
 import { TopicBadgeEditor } from "@/components/TopicBadgeEditor";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { SingleDayAgentDialog } from "@/components/SingleDayAgentDialog";
+import { ManualDayEntryDialog } from "@/components/ManualDayEntryDialog";
 import { useToast } from "@/hooks/use-toast";
 import { useTagging } from "@/hooks/useTagging";
 import { SiOpenai } from "react-icons/si";
@@ -105,7 +106,8 @@ import {
   Lock,
   LockOpen,
   AlertTriangle,
-  Info
+  Info,
+  PenLine,
 } from "lucide-react";
 import { getCategoryColor, getCategoryIcon, getTagCategory } from "@/utils/tagHelpers";
 import { getCategoryKeyFromPath, getCategoryDisplayMeta } from "@shared/taxonomy";
@@ -113,6 +115,7 @@ import { deserializePageState, reconstructPageUrl } from "@/lib/navigationState"
 import { updateDayTopic } from "@/lib/updateDayTopic";
 import { setDayLocked } from "@/lib/dayLock";
 import { parseIsLocked } from "@/lib/parseIsLocked";
+import { isManualSourceUrl } from "@/lib/manualDayEntry";
 
 interface DayAnalysisData {
   analysis: {
@@ -265,7 +268,22 @@ export default function DayAnalysis() {
   const [activeTab, setActiveTab] = React.useState<string>('');
   const [showRedoSummaryDialog, setShowRedoSummaryDialog] = React.useState(false);
   const [showSingleDayAgentDialog, setShowSingleDayAgentDialog] = React.useState(false);
+  const [showManualEntryDialog, setShowManualEntryDialog] = React.useState(false);
   const articlesPerPage = 10;
+  const invalidateDayQueries = React.useCallback(() => {
+    if (!date) return;
+    queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+    queryClient.invalidateQueries({ queryKey: ["supabase-tags-analyses"] });
+    queryClient.invalidateQueries({ queryKey: ["supabase-counts"] });
+    queryClient.invalidateQueries({ queryKey: ["supabase-analysis-topic-categories"] });
+    queryClient.invalidateQueries({ queryKey: ["supabase-page-topics-rows"] });
+    queryClient.invalidateQueries({ queryKey: ["supabase-topics-rows"] });
+    const dateYear = date.substring(0, 4);
+    queryClient.invalidateQueries({ queryKey: [`supabase-year-${dateYear}`] });
+    queryClient.invalidateQueries({ queryKey: ["/api/analysis/stats"] });
+    invalidateAnalysisListQueries();
+  }, [date]);
+
   const { triggerHealthCheck } = useApiHealthCheck();
   const { aiProvider } = useAiProvider();
   
@@ -1324,6 +1342,10 @@ export default function DayAnalysis() {
   const analyzedArticles = dayData?.analyzedArticles || [];
   const tieredArticles = dayData?.tieredArticles;
   const hasTieredData = dayData?.meta?.hasTieredData || false;
+  const manualSourceUrl = isManualSourceUrl(dayData?.analysis?.topArticleId)
+    ? dayData?.analysis?.topArticleId ?? null
+    : null;
+  const showManualSource = Boolean(dayData?.analysis?.isManualOverride && manualSourceUrl);
   
   // Compute the winning tier based on where the selected article actually is
   const computedWinningTier = React.useMemo(() => {
@@ -1766,6 +1788,10 @@ export default function DayAnalysis() {
               >
                 <Bot className="w-4 h-4 mr-2" />
                 Run editorial agent
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowManualEntryDialog(true)} disabled={!date}>
+                <PenLine className="w-4 h-4 mr-2" />
+                Manual entry
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -2214,6 +2240,7 @@ export default function DayAnalysis() {
 
       {/* Data Mismatch Warning */}
       {dayData?.analysis?.topArticleId && 
+       !dayData.analysis.isManualOverride &&
        !dayData.analysis.topArticleId.includes('no-news-') && 
        dayData.analysis.topArticleId !== 'none' &&
        analyzedArticles.length > 0 && 
@@ -2264,8 +2291,27 @@ export default function DayAnalysis() {
         </Card>
       )}
 
+      {showManualSource && manualSourceUrl ? (
+        <Card className="border-sky-500/30 bg-background">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Manual source</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <a
+              href={manualSourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 text-sm text-primary hover:underline break-all"
+            >
+              <ExternalLink className="h-4 w-4 shrink-0" />
+              {manualSourceUrl}
+            </a>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* Multi-Tier Articles Interface */}
-      {(hasTieredData || analyzedArticles.length > 0) && (
+      {(hasTieredData || analyzedArticles.length > 0) && !showManualSource && (
         <Card className="bg-background border-border">
           <CardHeader className="bg-background rounded-t-xl pb-2">
             <div className="flex items-center justify-between">
@@ -2568,6 +2614,23 @@ export default function DayAnalysis() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {date ? (
+        <ManualDayEntryDialog
+          open={showManualEntryDialog}
+          onOpenChange={setShowManualEntryDialog}
+          date={date}
+          initialSummary={dayData?.analysis?.summary ?? ""}
+          initialSourceUrl={manualSourceUrl ?? ""}
+          initialTopic={dayData?.analysis?.topicCategories?.[0] ?? null}
+          onSaved={() => {
+            invalidateDayQueries();
+            setHasNewAnalysis(false);
+            setHasUnsavedChanges(false);
+            setIsEditing(false);
+          }}
+        />
+      ) : null}
 
       {date ? (
         <SingleDayAgentDialog

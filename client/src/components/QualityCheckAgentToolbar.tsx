@@ -107,12 +107,10 @@ function QualityCheckAgentLogPanel({
           {progressLabel}
         </p>
       ) : null}
-      {logLines.length > 0 ? (
-        <section className="space-y-2">
-          <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Activity log</Label>
-          <PipelineActivityLog lines={logLines} scrollRef={logScrollRef} scrollClassName="h-[200px]" />
-        </section>
-      ) : null}
+      <section className="space-y-2">
+        <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Activity log</Label>
+        <PipelineActivityLog lines={logLines} scrollRef={logScrollRef} scrollClassName="h-[200px]" />
+      </section>
     </div>
   );
 }

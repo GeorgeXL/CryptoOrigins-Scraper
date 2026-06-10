@@ -325,6 +325,23 @@ export const canonicalMilestones = pgTable("canonical_milestones", {
   priorityIdx: index("idx_canonical_milestones_priority").on(table.priority),
 }));
 
+/** Cached Gemini main-events list per storyline leaf (Main events check). */
+export const mainEventsCheckCache = pgTable("main_events_check_cache", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  storylineLeaf: text("storyline_leaf").notNull(),
+  normalizedLeaf: text("normalized_leaf").notNull(),
+  geminiModel: text("gemini_model").notNull(),
+  cacheVersion: text("cache_version").notNull(),
+  notes: text("notes"),
+  canonicalDates: jsonb("canonical_dates").notNull(),
+  skippedCanonical: jsonb("skipped_canonical").notNull().default([]),
+  dismissedDates: jsonb("dismissed_dates").notNull().default({ misplaced: [], missing: [], extra: [] }),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  normalizedLeafUq: uniqueIndex("idx_main_events_check_cache_normalized_leaf").on(table.normalizedLeaf),
+}));
+
 // Human review queue for final editorial approval (mandatory gate)
 export const humanReviewQueue = pgTable("human_review_queue", {
   id: uuid("id").primaryKey().defaultRandom(),

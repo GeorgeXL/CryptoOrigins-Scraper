@@ -5,7 +5,9 @@ import {
   QUALITY_CHECK_AGENT_ACTIONS,
   QUALITY_CHECK_AGENT_TAB_IDS,
   clusterIsoDatesIntoWindows,
+  filterQualityCheckAgentRows,
   getQualityCheckAgentAction,
+  isEmptyQualityCheckSummary,
   monthPipelineWindow,
   resolveQualityCheckRunWindows,
   slicePipelineWindow,
@@ -88,4 +90,39 @@ test("slicePipelineWindow splits long ranges", () => {
 
 test("ends-period uses deterministic remove-periods kind", () => {
   assert.equal(QUALITY_CHECK_AGENT_ACTIONS["ends-period"]?.kind, "remove-periods");
+});
+
+test("isEmptyQualityCheckSummary treats blank text as empty", () => {
+  assert.equal(isEmptyQualityCheckSummary(""), true);
+  assert.equal(isEmptyQualityCheckSummary("   "), true);
+  assert.equal(isEmptyQualityCheckSummary(null), true);
+  assert.equal(isEmptyQualityCheckSummary("Bitcoin hits $100."), false);
+});
+
+test("filterQualityCheckAgentRows skips empty summaries except empty-summary tab", () => {
+  const rows = [
+    { date: "2010-01-01", summary: "" },
+    { date: "2010-01-02", summary: "Bitcoin event on this day." },
+  ];
+
+  assert.equal(filterQualityCheckAgentRows("untagged", rows, new Set()).length, 1);
+  assert.equal(filterQualityCheckAgentRows("empty-summary", rows, new Set()).length, 2);
+  assert.equal(
+    filterQualityCheckAgentRows("missing-months", [{ date: "2010-03-01", year: 2010, month: 3 }], new Set()).length,
+    1,
+  );
+});
+
+test("resolveQualityCheckRunWindows ignores empty-summary days for tag agent", () => {
+  const windows = resolveQualityCheckRunWindows(
+    "untagged",
+    [
+      { date: "2010-01-01", summary: "" },
+      { date: "2010-01-02", summary: "Tagged day needs work." },
+    ],
+    new Set(),
+  );
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0]?.dateFrom, "2010-01-02");
+  assert.equal(windows[0]?.dateTo, "2010-01-02");
 });

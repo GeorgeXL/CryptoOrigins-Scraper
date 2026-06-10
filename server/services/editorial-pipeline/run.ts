@@ -11,6 +11,7 @@ import {
   pipelineSteps,
   type ArticleData,
 } from "@shared/schema";
+import { isIsoDate } from "@shared/quality-check-agent-actions";
 import {
   ALL_PIPELINE_CHECK_SCOPES,
   EDITORIAL_DEFAULT_MODEL,
@@ -123,6 +124,8 @@ type StartOpts = {
   checkScopes?: PipelineCheckScope[];
   requestedBy?: string;
   resumedFromRunId?: string;
+  /** Limit processing to explicit calendar days (quality-check bulk runs). */
+  targetDates?: string[];
   /** Re-run only a suffix of agents for one calendar date (must match `dateFrom`/`dateTo` for that day). */
   partialRun?: { date: string; agents: PipelineAgentName[] };
   /** When a day was cleared before this run (e.g. calendar conflict removal). */
@@ -1766,7 +1769,46 @@ async function runV3ExistingDayChecks(opts: {
     }
   }
 
-  // 6. No issue detected — auto-approve. This is the v3 "I looked and the
+  // 6. Tags-only runs must not auto-approve while tags_version2 is still empty.
+  if (
+    checkScopes.has("tags") &&
+    normalizedTagsFromRow(row.tagsVersion2).length === 0 &&
+    proposals.filter((proposal) => proposalMatchesCheckScopes(proposal, checkScopes)).length === 0
+  ) {
+    const correctionPkg: CorrectionApprovalPackage = {
+      phase: "awaiting_correction_approval",
+      triage,
+      proposals: [],
+      note: "Tag Agent found no grounded tags to add for this summary. Review manually or reject.",
+    };
+    const stepId = await createStep({
+      runId,
+      stepIndex,
+      agentName: "TagManagerAgent",
+      status: "completed",
+      confidence: 0.55,
+      input: { date: triage.date, route: triage.route },
+      output: buildStepOutput({
+        summary: "No tag proposals generated for an untagged day",
+        findings: ["tags_version2 is empty", "tag_agent_proposals=0"],
+      }),
+    });
+    stepIndex += 1;
+
+    await db.insert(humanReviewQueue).values({
+      runId,
+      stepId,
+      status: "pending",
+      priority: 72,
+      eventDate: triage.date,
+      package: correctionPkg,
+      reviewer: null,
+      reviewedAt: null,
+    });
+    return { nextStepIndex: stepIndex, autoApproved: false };
+  }
+
+  // 7. No issue detected — auto-approve. This is the v3 "I looked and the
   // deterministic checks all pass" path; the legacy run still gets an entry so
   // operator can review history later.
   await db.insert(humanReviewQueue).values({
@@ -1800,6 +1842,10 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
     dateTo: opts.dateTo,
     maxDaysToConsider: Math.max(1, Math.min(opts.maxDaysToConsider, 365)),
   });
+  if (opts.targetDates?.length) {
+    const allowed = new Set(opts.targetDates.filter(isIsoDate));
+    triage = triage.filter((item) => allowed.has(item.date));
+  }
   if (opts.partialRun) {
     triage = triage.filter((t) => t.date === opts.partialRun!.date);
   }

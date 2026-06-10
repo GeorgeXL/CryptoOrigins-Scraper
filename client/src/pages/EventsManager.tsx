@@ -83,7 +83,22 @@ import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor
 import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
 import { extractTopicLabelsFromCategories } from "@/lib/topicCatalog";
 import type { QualityCheckDateInput } from "@shared/quality-check-agent-actions";
-import { getQualityCheckAgentAction } from "@shared/quality-check-agent-actions";
+import { getQualityCheckAgentAction, isEmptyQualityCheckSummary } from "@shared/quality-check-agent-actions";
+
+function qualityCheckRowHasSummary(row: { summary?: string | null }): boolean {
+  return !isEmptyQualityCheckSummary(row.summary);
+}
+
+/** Empty days belong only on the Empty Summary tab; month-gap rows are month-level, not day summaries. */
+function applyQualityCheckSummaryFilter(
+  rows: QualityViolation[],
+  checkId: string | null,
+): QualityViolation[] {
+  if (!checkId || checkId === "empty-summary" || checkId === "missing-months") {
+    return rows;
+  }
+  return rows.filter(qualityCheckRowHasSummary);
+}
 
 // Quality violation types for filtering
 const VIOLATION_TYPES = [
@@ -873,11 +888,11 @@ export default function EventsManager() {
     const items: QualityCheckItem[] = [];
     const violations = qualityViolationsData || [];
     const emptyCount = emptySummaryData?.totalCount || 0;
-    const untaggedCount = untaggedData?.totalCount || 0;
+    const untaggedCount = (untaggedData?.entries || []).filter(qualityCheckRowHasSummary).length;
     const missingMonthsCount = missingMonthsData?.totalCount || 0;
-    const flaggedCount = flaggedData?.totalCount || 0;
-    const noTopicCount = topicQualityData?.noTopic.totalCount || 0;
-    const multiTopicCount = topicQualityData?.multiTopic.totalCount || 0;
+    const flaggedCount = (flaggedData?.entries || []).filter(qualityCheckRowHasSummary).length;
+    const noTopicCount = (topicQualityData?.noTopic.entries || []).filter(qualityCheckRowHasSummary).length;
+    const multiTopicCount = (topicQualityData?.multiTopic.entries || []).filter(qualityCheckRowHasSummary).length;
     const isEmptyLoading = emptySummaryLoading;
     const isUntaggedLoading = untaggedLoading;
     const isMissingMonthsLoading = missingMonthsLoading;
@@ -942,7 +957,9 @@ export default function EventsManager() {
     // Other violation types
     for (const type of VIOLATION_TYPES) {
       if (type.id === 'empty-summary' || type.id === 'untagged' || type.id === 'missing-months') continue;
-      const count = isViolationsLoading ? 0 : violations.filter(type.filterFn).length;
+      const count = isViolationsLoading
+        ? 0
+        : violations.filter((v) => type.filterFn(v) && qualityCheckRowHasSummary(v)).length;
       items.push({
         id: type.id,
         label: type.label,
@@ -1079,43 +1096,55 @@ export default function EventsManager() {
     }
 
     if (selectedQualityCheck === 'untagged') {
-      return (untaggedData?.entries || []).map((entry: any) => ({
-        date: entry.date,
-        summary: entry.summary || '',
-        violations: ['Untagged'],
-        length: entry.summary?.length || 0,
-        tags_version2: entry.tags_version2 || null,
-      }));
+      return applyQualityCheckSummaryFilter(
+        (untaggedData?.entries || []).map((entry: any) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: ['Untagged'],
+          length: entry.summary?.length || 0,
+          tags_version2: entry.tags_version2 || null,
+        })),
+        selectedQualityCheck,
+      );
     }
 
     if (selectedQualityCheck === 'flagged') {
-      return (flaggedData?.entries || []).map((entry: any) => ({
-        date: entry.date,
-        summary: entry.summary || '',
-        violations: ['Flagged'],
-        length: entry.summary?.length || 0,
-        tags_version2: entry.tags_version2 || null,
-      }));
+      return applyQualityCheckSummaryFilter(
+        (flaggedData?.entries || []).map((entry: any) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: ['Flagged'],
+          length: entry.summary?.length || 0,
+          tags_version2: entry.tags_version2 || null,
+        })),
+        selectedQualityCheck,
+      );
     }
 
     if (selectedQualityCheck === 'no-topic') {
-      return (topicQualityData?.noTopic.entries || []).map((entry) => ({
-        date: entry.date,
-        summary: entry.summary || '',
-        violations: ['No topic assigned'],
-        length: entry.summary?.length || 0,
-        tags_version2: null,
-      }));
+      return applyQualityCheckSummaryFilter(
+        (topicQualityData?.noTopic.entries || []).map((entry) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: ['No topic assigned'],
+          length: entry.summary?.length || 0,
+          tags_version2: null,
+        })),
+        selectedQualityCheck,
+      );
     }
 
     if (selectedQualityCheck === 'multi-topic') {
-      return (topicQualityData?.multiTopic.entries || []).map((entry) => ({
-        date: entry.date,
-        summary: entry.summary || '',
-        violations: [`${entry.topics.length} topics: ${entry.topics.join(", ")}`],
-        length: entry.summary?.length || 0,
-        tags_version2: null,
-      }));
+      return applyQualityCheckSummaryFilter(
+        (topicQualityData?.multiTopic.entries || []).map((entry) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: [`${entry.topics.length} topics: ${entry.topics.join(", ")}`],
+          length: entry.summary?.length || 0,
+          tags_version2: null,
+        })),
+        selectedQualityCheck,
+      );
     }
 
     if (selectedQualityCheck === 'missing-months') {
@@ -1137,21 +1166,23 @@ export default function EventsManager() {
     const violations = qualityViolationsData || [];
     const type = VIOLATION_TYPES.find(t => t.id === selectedQualityCheck);
     if (!type) return violations;
-    
-    return violations.filter(type.filterFn);
+
+    return applyQualityCheckSummaryFilter(violations.filter(type.filterFn), selectedQualityCheck);
   }, [selectedLocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, lockedDaysData, manualData, orphanData, verifiedData, notAvailableData, emptyVeriBadgeData]);
 
   const qualityCheckAgentRows = useMemo<QualityCheckDateInput[]>(() => {
     return filteredQualityViolations.map((violation) => ({
       date: violation.date,
+      summary: violation.summary ?? "",
       year: (violation as { year?: number }).year,
       month: (violation as { month?: number }).month,
     }));
   }, [filteredQualityViolations]);
 
   useEffect(() => {
+    if (qualityAgentRunning) return;
     clearQualityAgentLog();
-  }, [selectedQualityCheck, clearQualityAgentLog]);
+  }, [selectedQualityCheck, clearQualityAgentLog, qualityAgentRunning]);
 
   // Paginated quality violations
   const paginatedQualityViolations = useMemo(() => {

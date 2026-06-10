@@ -17,7 +17,9 @@ import {
 } from "@/lib/pipelineActivityLog";
 import { apiRequest } from "@/lib/queryClient";
 import {
+  filterQualityCheckAgentRows,
   getQualityCheckAgentAction,
+  qualityCheckTargetDates,
   resolveQualityCheckRunWindows,
   type QualityCheckDateInput,
   type PipelineRunWindow,
@@ -25,7 +27,12 @@ import {
 
 const POLL_MS = 1500;
 
-type SlicePlan = { slices: PipelineRunWindow[]; currentIndex: number; checkScopes: PipelineCheckScope[] };
+type SlicePlan = {
+  slices: PipelineRunWindow[];
+  currentIndex: number;
+  checkScopes: PipelineCheckScope[];
+  targetDates?: string[];
+};
 
 export function useQualityCheckAgentRun() {
   const { toast } = useToast();
@@ -55,7 +62,12 @@ export function useQualityCheckAgentRun() {
     async (
       window: PipelineRunWindow,
       checkScopes: PipelineCheckScope[],
-      options: { appendLog?: boolean; sliceIndex?: number; sliceTotal?: number } = {},
+      options: {
+        appendLog?: boolean;
+        sliceIndex?: number;
+        sliceTotal?: number;
+        targetDates?: string[];
+      } = {},
     ) => {
       if (stopRequestedRef.current) {
         setRunning(false);
@@ -67,6 +79,9 @@ export function useQualityCheckAgentRun() {
         completedLogRef.current = [];
         slicePlanRef.current = null;
         setLogLines([]);
+      } else if (completedLogRef.current.length > 0) {
+        // Keep accumulated log visible while the next slice's run is starting.
+        setLogLines([...completedLogRef.current]);
       }
       setRunId(null);
       runIdRef.current = null;
@@ -77,11 +92,16 @@ export function useQualityCheckAgentRun() {
           : `${window.dateFrom}${window.dateFrom !== window.dateTo ? ` → ${window.dateTo}` : ""}`,
       );
 
+      const sliceTargetDates = options.targetDates?.filter(
+        (date) => date >= window.dateFrom && date <= window.dateTo,
+      );
+
       const out = await startPipelineRun({
         dateFrom: window.dateFrom,
         dateTo: window.dateTo,
-        maxDaysToConsider: window.maxDays,
+        maxDaysToConsider: sliceTargetDates?.length ?? window.maxDays,
         checkScopes,
+        ...(sliceTargetDates && sliceTargetDates.length > 0 ? { targetDates: sliceTargetDates } : {}),
       });
 
       if (stopRequestedRef.current) {
@@ -110,7 +130,8 @@ export function useQualityCheckAgentRun() {
         text: `${slicePrefix}Pipeline ${out.runId.slice(0, 8)}… · ${window.dateFrom}${window.dateFrom !== window.dateTo ? ` → ${window.dateTo}` : ""}`,
         status: "approved",
       };
-      setLogLines([...completedLogRef.current, startLine]);
+      completedLogRef.current = [...completedLogRef.current, startLine];
+      setLogLines([...completedLogRef.current]);
     },
     [pushLog],
   );
@@ -163,13 +184,17 @@ export function useQualityCheckAgentRun() {
         return;
       }
 
-      const targetRows =
-        opts.selectedDates.size > 0
-          ? opts.rows.filter((row) => opts.selectedDates.has(row.date))
-          : opts.rows;
+      const targetRows = filterQualityCheckAgentRows(opts.checkId, opts.rows, opts.selectedDates);
 
       if (targetRows.length === 0) {
-        toast({ title: "Nothing selected", description: "Select rows or use the full tab list.", variant: "destructive" });
+        toast({
+          title: "Nothing to run",
+          description:
+            opts.checkId === "empty-summary"
+              ? "Select rows or use the full tab list."
+              : "No selected days with a summary to process (empty summaries are skipped).",
+          variant: "destructive",
+        });
         return;
       }
 
@@ -178,19 +203,23 @@ export function useQualityCheckAgentRun() {
         return;
       }
 
-      const windows = resolveQualityCheckRunWindows(opts.checkId, opts.rows, opts.selectedDates);
+      const windows = resolveQualityCheckRunWindows(opts.checkId, targetRows, new Set());
       if (windows.length === 0) {
         toast({ title: "No dates to run", description: "Could not build a pipeline window for this selection.", variant: "destructive" });
         return;
       }
 
       const checkScopes = action.checkScopes ?? [];
+      const targetDates =
+        opts.checkId === "missing-months"
+          ? undefined
+          : qualityCheckTargetDates(opts.checkId, opts.rows, opts.selectedDates);
       stopRequestedRef.current = false;
-      slicePlanRef.current = { slices: windows, currentIndex: 0, checkScopes };
+      slicePlanRef.current = { slices: windows, currentIndex: 0, checkScopes, targetDates };
       completedLogRef.current = [
         {
           id: `qc-agent-plan-${Date.now()}`,
-          text: `Queued ${windows.length} pipeline slice${windows.length === 1 ? "" : "s"} · scopes: ${checkScopes.join(", ")}`,
+          text: `Queued ${windows.length} pipeline slice${windows.length === 1 ? "" : "s"} · scopes: ${checkScopes.join(", ")}${targetDates ? ` · ${targetDates.length} day${targetDates.length === 1 ? "" : "s"}` : ""}`,
           status: "approved",
         },
       ];
@@ -199,6 +228,7 @@ export function useQualityCheckAgentRun() {
         appendLog: true,
         sliceIndex: windows.length > 1 ? 1 : undefined,
         sliceTotal: windows.length > 1 ? windows.length : undefined,
+        targetDates,
       });
     },
     [runRemovePeriods, startPipelineSlice, toast],
@@ -239,15 +269,23 @@ export function useQualityCheckAgentRun() {
 
   useEffect(() => {
     if (!running || !runId) return;
-    let cancelled = false;
 
     const poll = async () => {
-      if (cancelled || !runningRef.current || stopRequestedRef.current) return;
+      if (!runningRef.current || stopRequestedRef.current) return;
+      const pollRunId = runId;
       try {
-        const detail = await fetchPipelineRun(runId);
-        if (cancelled) return;
+        const detail = await fetchPipelineRun(pollRunId);
+        if (!runningRef.current || stopRequestedRef.current) return;
+        // Ignore stale in-flight polls for a superseded run, but still process terminal
+        // states so multi-slice handoffs are not dropped when runId clears between slices.
+        if (runIdRef.current !== pollRunId && detail.run.status === "running") return;
+
         const built = namespaceLogLines(buildActivityLogFromDetail(detail), detail.run.id);
-        const visible = [...completedLogRef.current, ...built];
+        const historyWithoutCurrentRun = completedLogRef.current.filter(
+          (line) => !line.id.startsWith(`${pollRunId}-`),
+        );
+        const visible = [...historyWithoutCurrentRun, ...built];
+        completedLogRef.current = visible;
         setLogLines((prev) => (logLinesEqual(prev, visible) ? prev : visible));
 
         if (detail.run.status !== "running") {
@@ -259,6 +297,7 @@ export function useQualityCheckAgentRun() {
             !stopRequestedRef.current;
 
           if (canContinue && plan) {
+            if (runIdRef.current !== pollRunId) return;
             const nextIndex = plan.currentIndex + 1;
             slicePlanRef.current = { ...plan, currentIndex: nextIndex };
             completedLogRef.current = [
@@ -269,18 +308,20 @@ export function useQualityCheckAgentRun() {
                 status: "pending",
               },
             ];
-            setLogLines(completedLogRef.current);
+            setLogLines([...completedLogRef.current]);
             setRunId(null);
             runIdRef.current = null;
             void startPipelineSlice(plan.slices[nextIndex]!, plan.checkScopes, {
               appendLog: true,
               sliceIndex: nextIndex + 1,
               sliceTotal: plan.slices.length,
+              targetDates: plan.targetDates,
             });
             return;
           }
 
           completedLogRef.current = visible;
+          setLogLines([...visible]);
           setRunning(false);
           setRunId(null);
           runIdRef.current = null;
@@ -293,8 +334,10 @@ export function useQualityCheckAgentRun() {
             title: detail.run.status === "completed" ? "Agent run finished" : "Agent run stopped",
             description:
               detail.run.status === "completed" && pending > 0
-                ? `${pending} item(s) queued for manual review on the Agents Homepage.`
-                : "Check the Agents review queue for outcomes.",
+                ? `${pending} item(s) queued on Agents → Pending (try Corrections for tag fixes).`
+                : detail.run.status === "completed"
+                  ? "Run finished — tag fixes may have auto-applied with no pending review. Check the day rows or Agents → All."
+                  : "Check the Agents review queue for outcomes.",
           });
         }
       } catch {
@@ -305,7 +348,6 @@ export function useQualityCheckAgentRun() {
     void poll();
     const timer = setInterval(() => void poll(), POLL_MS);
     return () => {
-      cancelled = true;
       clearInterval(timer);
     };
   }, [running, runId, startPipelineSlice, toast]);

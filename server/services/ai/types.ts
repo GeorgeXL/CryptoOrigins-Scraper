@@ -85,6 +85,8 @@ export interface CompletionOptions {
 export interface JsonCompletionOptions<T> extends CompletionOptions {
   schema?: z.ZodType<T>; // Optional runtime validation
   monitorId?: string; // Optional existing monitor request ID to update instead of creating new
+  /** When true (default), use Google Search grounding instead of JSON mime type. */
+  grounding?: boolean;
 }
 
 export interface CompletionResult {

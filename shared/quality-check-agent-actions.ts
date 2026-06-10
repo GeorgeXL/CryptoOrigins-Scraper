@@ -149,9 +149,42 @@ export const QUALITY_CHECK_AGENT_TAB_IDS = Object.keys(QUALITY_CHECK_AGENT_ACTIO
 
 export type QualityCheckDateInput = {
   date: string;
+  summary?: string | null;
   year?: number;
   month?: number;
 };
+
+export function isEmptyQualityCheckSummary(summary?: string | null): boolean {
+  return !summary || summary.trim() === "";
+}
+
+/** Month-gap runs target calendar ranges; empty-summary tab intentionally processes blank days. */
+export function qualityCheckAgentSkipsEmptySummaries(checkId: string): boolean {
+  return checkId !== "empty-summary" && checkId !== "missing-months";
+}
+
+export function filterQualityCheckAgentRows(
+  checkId: string,
+  rows: QualityCheckDateInput[],
+  selectedDates: Set<string>,
+): QualityCheckDateInput[] {
+  const pickRows =
+    selectedDates.size > 0 ? rows.filter((row) => selectedDates.has(row.date)) : rows;
+
+  if (!qualityCheckAgentSkipsEmptySummaries(checkId)) {
+    return pickRows;
+  }
+
+  return pickRows.filter((row) => !isEmptyQualityCheckSummary(row.summary));
+}
+
+export function qualityCheckTargetDates(
+  checkId: string,
+  rows: QualityCheckDateInput[],
+  selectedDates: Set<string>,
+): string[] {
+  return filterQualityCheckAgentRows(checkId, rows, selectedDates).map((row) => row.date);
+}
 
 export type PipelineRunWindow = {
   dateFrom: string;
@@ -248,8 +281,7 @@ export function resolveQualityCheckRunWindows(
   const action = QUALITY_CHECK_AGENT_ACTIONS[checkId];
   if (!action || action.kind !== "pipeline") return [];
 
-  const pickRows =
-    selectedDates.size > 0 ? rows.filter((row) => selectedDates.has(row.date)) : rows;
+  const pickRows = filterQualityCheckAgentRows(checkId, rows, selectedDates);
 
   if (checkId === "missing-months") {
     const monthWindows = pickRows

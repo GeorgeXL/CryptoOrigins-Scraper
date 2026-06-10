@@ -151,14 +151,17 @@ export class GeminiProvider implements IAiProvider {
       // Enforce JSON instruction
       promptText += "\n\nRespond ONLY with valid JSON.";
 
+      // Google Search grounding cannot be combined with responseMimeType: application/json.
+      const useGrounding = options.grounding !== false;
       const response = await this.client.models.generateContent({
         model: options.model || this.defaultModel,
         contents: promptText,
         config: {
           temperature: options.temperature,
           maxOutputTokens: options.maxTokens ?? 512,
-          responseMimeType: "application/json", // Force JSON mode
-          tools: [{ googleSearch: {} }], // Enable Google Search grounding
+          ...(useGrounding
+            ? { tools: [{ googleSearch: {} }] }
+            : { responseMimeType: "application/json" }),
           thinkingConfig: { thinkingBudget: 0 },
         },
       });

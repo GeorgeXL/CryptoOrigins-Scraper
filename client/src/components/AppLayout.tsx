@@ -48,6 +48,11 @@ const managerItems = [
     description: "Organize and manage tags with drag-drop.",
   },
   {
+    path: "/main-events-check",
+    label: "Main events check",
+    description: "Gemini main-events pass per storyline leaf; auto-locks matches.",
+  },
+  {
     path: "/events-manager",
     label: "Events",
     description: "View and change events.",

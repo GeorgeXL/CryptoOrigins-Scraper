@@ -46,11 +46,29 @@ function topicCategoryNames(raw: unknown): string[] {
   return out;
 }
 
-/** Legacy `tags` json array length. */
-function legacyTagsLen(v: unknown): number {
-  if (v == null) return 0;
-  if (!Array.isArray(v)) return 0;
-  return v.length;
+
+function legacyTagNames(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry === "string") {
+      const v = entry.trim();
+      if (v) out.push(v);
+    } else if (entry && typeof entry === "object") {
+      const name = (entry as { name?: unknown }).name;
+      if (typeof name === "string" && name.trim()) out.push(name.trim());
+    }
+  }
+  return out;
+}
+
+function isPlaceholderLegacyTag(name: string): boolean {
+  const key = name.trim().toLowerCase();
+  return key === "no tag" || key === "notag" || key === "untagged";
+}
+
+function meaningfulLegacyTagsLen(v: unknown): number {
+  return legacyTagNames(v).filter((name) => !isPlaceholderLegacyTag(name)).length;
 }
 
 /**
@@ -70,9 +88,12 @@ function editorialTaxonomyMissing(input: {
     input.tagLinkCount !== undefined;
   if (!anyFieldProvided) return false;
 
+  // tags_version2 is the publishable tag surface; an explicit empty array means untagged.
+  if (input.tagsVersion2 !== undefined && tagsVersion2Len(input.tagsVersion2) === 0) return true;
+
   if (tagsVersion2Len(input.tagsVersion2) > 0) return false;
   if (topicCategoriesLen(input.topicCategories) > 0) return false;
-  if (legacyTagsLen(input.tags) > 0) return false;
+  if (meaningfulLegacyTagsLen(input.tags) > 0) return false;
   if (typeof input.tagLinkCount === "number" && input.tagLinkCount > 0) return false;
   return true;
 }
@@ -120,7 +141,11 @@ export function triageExistingDay(input: {
   }
   if (Number(input.confidenceScore ?? 0) < 60) reasons.push("Low confidence score");
   if (taxonomyMissing) {
-    reasons.push("No tags or topic categories linked for this day");
+    reasons.push(
+      input.tagsVersion2 !== undefined && tagsVersion2Len(input.tagsVersion2) === 0
+        ? "No tags_version2 tags linked for this day"
+        : "No tags or topic categories linked for this day",
+    );
   }
   const topicIssues = invalidTopicReasons(topicCategoryNames(input.topicCategories));
   if (topicIssues.length > 0 && !taxonomyMissing) {

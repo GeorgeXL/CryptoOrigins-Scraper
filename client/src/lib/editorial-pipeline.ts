@@ -309,6 +309,8 @@ export async function startPipelineRun(body: {
   dateTo: string;
   maxDaysToConsider: number;
   checkScopes?: PipelineCheckScope[];
+  /** When set, only these calendar days are processed inside the window. */
+  targetDates?: string[];
 }) {
   const res = await fetch("/api/agent/pipeline/run", {
     method: "POST",

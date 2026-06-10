@@ -39,6 +39,49 @@ async function requireUnlockedDay(date: string, res: import("express").Response)
   }
 }
 
+function normalizeManualSourceUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("Source URL is required");
+  }
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withProtocol);
+  } catch {
+    throw new Error("Invalid source URL");
+  }
+  if (!parsed.hostname) {
+    throw new Error("Invalid source URL");
+  }
+  return parsed.toString();
+}
+
+function buildManualArticle(opts: {
+  date: string;
+  sourceUrl: string;
+  summary: string;
+  title?: string;
+}): ArticleData {
+  let title = opts.title?.trim() || "";
+  if (!title) {
+    try {
+      title = new URL(opts.sourceUrl).hostname.replace(/^www\./, "");
+    } catch {
+      title = "Manual source";
+    }
+  }
+
+  return {
+    id: opts.sourceUrl,
+    title,
+    url: opts.sourceUrl,
+    publishedDate: opts.date,
+    text: opts.summary,
+    summary: opts.summary,
+  };
+}
+
 function readReviewPackagePhase(pkg: unknown): string {
   if (!pkg || typeof pkg !== "object") return "triage";
   const phase = (pkg as { phase?: unknown }).phase;
@@ -496,6 +539,90 @@ function parsePerplexityDate(dateText: string | null): string | null {
     } catch (error) {
       console.error(`💥 Error updating veri_badge for ${req.params.date}:`, error);
       res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post("/api/analysis/date/:date/manual", async (req, res) => {
+    try {
+      const { date } = req.params;
+      const summary = typeof req.body?.summary === "string" ? req.body.summary.trim() : "";
+      const sourceUrlRaw = typeof req.body?.sourceUrl === "string" ? req.body.sourceUrl : "";
+      const topicLabel = typeof req.body?.topic === "string" ? req.body.topic.trim() : "";
+      const title = typeof req.body?.title === "string" ? req.body.title.trim() : undefined;
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
+      }
+      if (!(await requireUnlockedDay(date, res))) return;
+
+      if (summary.length < 20) {
+        return res.status(400).json({ error: "Summary must be at least 20 characters" });
+      }
+
+      if (!topicLabel) {
+        return res.status(400).json({ error: "Storyline tag is required for manual entry" });
+      }
+
+      const canonical = new Set(TOPIC_HIERARCHY_LEAVES.map((leaf) => leaf.trim().toLowerCase()));
+      if (!canonical.has(topicLabel.toLowerCase())) {
+        return res.status(400).json({ error: `"${topicLabel}" is not a valid hierarchy topic` });
+      }
+
+      const issues = invalidTopicReasons([topicLabel]);
+      if (issues.length > 0) {
+        return res.status(400).json({ error: `Topic rejected: ${issues.join("; ")}` });
+      }
+
+      const sourceUrl = normalizeManualSourceUrl(sourceUrlRaw);
+      const manualArticle = buildManualArticle({ date, sourceUrl, summary, title });
+      const tieredArticles: TieredArticles = {
+        bitcoin: [manualArticle],
+        crypto: [],
+        macro: [],
+      };
+      const linkedTopics = await ensureTopicCategoryAndStorylineLinks(date, [topicLabel]);
+      await syncStorylineAssignmentsForDate(date, [topicLabel]);
+
+      const analysisPayload: InsertHistoricalNewsAnalysis = {
+        date,
+        summary,
+        topArticleId: sourceUrl,
+        isManualOverride: true,
+        isOrphan: false,
+        aiProvider: "manual",
+        reasoning: "Manual entry with operator-provided source URL",
+        confidenceScore: "100",
+        winningTier: "bitcoin",
+        tierUsed: "manual",
+        tieredArticles,
+        analyzedArticles: [manualArticle],
+        totalArticlesFetched: 1,
+        uniqueArticlesAnalyzed: 1,
+        topicCategories: linkedTopics,
+        geminiApproved: false,
+        perplexityApproved: false,
+        tagsVersion2: [],
+      };
+
+      const existingAnalysis = await storage.getAnalysisByDate(date);
+      if (existingAnalysis) {
+        await storage.updateAnalysis(date, analysisPayload);
+      } else {
+        await storage.createAnalysis(analysisPayload);
+      }
+
+      res.json({
+        success: true,
+        date,
+        summary,
+        sourceUrl,
+        topics: linkedTopics,
+        message: "Manual entry saved",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save manual entry";
+      const status = message.includes("Invalid source URL") || message.includes("Topic rejected") ? 400 : 500;
+      res.status(status).json({ error: message });
     }
   });
 

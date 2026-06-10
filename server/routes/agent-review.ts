@@ -493,12 +493,18 @@ router.post("/api/agent/pipeline/run", async (req, res) => {
       return res.status(400).json({ error: "Select at least one pipeline check" });
     }
 
+    const rawTargetDates = Array.isArray(req.body?.targetDates) ? req.body.targetDates : [];
+    const targetDates = rawTargetDates.filter(
+      (value: unknown): value is string => typeof value === "string" && isIsoDate(value.trim()),
+    );
+
     const out = await startEditorialPipelineRun({
       dateFrom,
       dateTo,
       maxDaysToConsider: Number(maxDaysToConsider) || 60,
       requestedBy: "admin-ui",
       checkScopes,
+      ...(targetDates.length > 0 ? { targetDates } : {}),
     });
 
     res.json({
