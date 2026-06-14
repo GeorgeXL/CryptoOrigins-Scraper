@@ -58,6 +58,30 @@ export const QUALITY_CHECK_AGENT_ACTIONS: Record<string, QualityCheckAgentAction
     kind: "pipeline",
     checkScopes: ["topics"],
   },
+  "not-approved-has-topic": {
+    buttonLabel: "Run agent: fix topic",
+    confirmTitle: "Fix storyline topics on unapproved days?",
+    confirmDescription:
+      "Runs the editorial pipeline (topics scope) on days where Google Check is not yes but a storyline topic is still assigned.",
+    kind: "pipeline",
+    checkScopes: ["topics"],
+  },
+  "locked-no-topic": {
+    buttonLabel: "Run agent: assign topic",
+    confirmTitle: "Assign topics to locked days missing a storyline leaf?",
+    confirmDescription:
+      "Runs the editorial pipeline (topics scope) on locked days that still have no topic. Days without a topic should normally stay unlocked.",
+    kind: "pipeline",
+    checkScopes: ["topics"],
+  },
+  "locked-not-approved": {
+    buttonLabel: "Run agent: review lock",
+    confirmTitle: "Review locked days that are not Google-approved?",
+    confirmDescription:
+      "Runs an editorial pipeline pass on locked days where Google Check is not yes (no, uncertain, or not verified).",
+    kind: "pipeline",
+    checkScopes: ["relevance", "topics"],
+  },
   "multi-topic": {
     buttonLabel: "Run agent: consolidate topic",
     confirmTitle: "Consolidate topics with the Topic Agent?",

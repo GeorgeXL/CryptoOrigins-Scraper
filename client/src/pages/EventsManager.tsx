@@ -461,6 +461,30 @@ export default function EventsManager() {
       entries: { date: string; summary: string; topic_categories: unknown; google_check_happened: "yes" }[];
       totalCount: number;
     };
+    notApprovedHasTopic: {
+      entries: {
+        date: string;
+        summary: string;
+        topic_categories: unknown;
+        topics: string[];
+        google_check_happened: "yes" | "no" | "uncertain" | null;
+      }[];
+      totalCount: number;
+    };
+    lockedNoTopic: {
+      entries: { date: string; summary: string; topic_categories: unknown }[];
+      totalCount: number;
+    };
+    lockedNotApproved: {
+      entries: {
+        date: string;
+        summary: string;
+        topic_categories: unknown;
+        topics: string[];
+        google_check_happened: "yes" | "no" | "uncertain" | null;
+      }[];
+      totalCount: number;
+    };
     multiTopic: { entries: { date: string; summary: string; topic_categories: unknown; topics: string[] }[]; totalCount: number };
   }>({
     queryKey: ["events-manager-topic-quality"],
@@ -470,6 +494,9 @@ export default function EventsManager() {
         return {
           noTopic: { entries: [], totalCount: 0 },
           googleYesNoTopic: { entries: [], totalCount: 0 },
+          notApprovedHasTopic: { entries: [], totalCount: 0 },
+          lockedNoTopic: { entries: [], totalCount: 0 },
+          lockedNotApproved: { entries: [], totalCount: 0 },
           multiTopic: { entries: [], totalCount: 0 },
         };
       }
@@ -479,6 +506,7 @@ export default function EventsManager() {
         summary: string | null;
         topic_categories: unknown;
         google_check_happened: "yes" | "no" | "uncertain" | null;
+        is_locked: boolean | null;
       }[] = [];
       let from = 0;
       const batchSize = 1000;
@@ -487,7 +515,7 @@ export default function EventsManager() {
       while (hasMore) {
         const { data: batchData, error: batchError } = await supabase
           .from("historical_news_analyses")
-          .select("date, summary, topic_categories, google_check_happened")
+          .select("date, summary, topic_categories, google_check_happened, is_locked")
           .range(from, from + batchSize - 1);
 
         if (batchError) {
@@ -511,6 +539,21 @@ export default function EventsManager() {
         topic_categories: unknown;
         google_check_happened: "yes";
       }[] = [];
+      const notApprovedHasTopicEntries: {
+        date: string;
+        summary: string;
+        topic_categories: unknown;
+        topics: string[];
+        google_check_happened: "yes" | "no" | "uncertain" | null;
+      }[] = [];
+      const lockedNoTopicEntries: { date: string; summary: string; topic_categories: unknown }[] = [];
+      const lockedNotApprovedEntries: {
+        date: string;
+        summary: string;
+        topic_categories: unknown;
+        topics: string[];
+        google_check_happened: "yes" | "no" | "uncertain" | null;
+      }[] = [];
       const multiTopicEntries: {
         date: string;
         summary: string;
@@ -521,6 +564,27 @@ export default function EventsManager() {
       for (const entry of allData) {
         const topics = extractTopicLabelsFromCategories(entry.topic_categories);
         const summary = entry.summary || "";
+        const isLocked = parseIsLocked(entry.is_locked);
+
+        if (isLocked) {
+          if (topics.length === 0) {
+            lockedNoTopicEntries.push({
+              date: entry.date,
+              summary,
+              topic_categories: entry.topic_categories,
+            });
+          }
+          if (entry.google_check_happened !== "yes") {
+            lockedNotApprovedEntries.push({
+              date: entry.date,
+              summary,
+              topic_categories: entry.topic_categories,
+              topics,
+              google_check_happened: entry.google_check_happened ?? null,
+            });
+          }
+        }
+
         if (topics.length === 0) {
           if (entry.google_check_happened === "yes") {
             googleYesNoTopicEntries.push({
@@ -536,13 +600,24 @@ export default function EventsManager() {
               topic_categories: entry.topic_categories,
             });
           }
-        } else if (topics.length >= 2) {
-          multiTopicEntries.push({
-            date: entry.date,
-            summary,
-            topic_categories: entry.topic_categories,
-            topics,
-          });
+        } else {
+          if (entry.google_check_happened !== "yes") {
+            notApprovedHasTopicEntries.push({
+              date: entry.date,
+              summary,
+              topic_categories: entry.topic_categories,
+              topics,
+              google_check_happened: entry.google_check_happened ?? null,
+            });
+          }
+          if (topics.length >= 2) {
+            multiTopicEntries.push({
+              date: entry.date,
+              summary,
+              topic_categories: entry.topic_categories,
+              topics,
+            });
+          }
         }
       }
 
@@ -551,6 +626,18 @@ export default function EventsManager() {
         googleYesNoTopic: {
           entries: googleYesNoTopicEntries,
           totalCount: googleYesNoTopicEntries.length,
+        },
+        notApprovedHasTopic: {
+          entries: notApprovedHasTopicEntries,
+          totalCount: notApprovedHasTopicEntries.length,
+        },
+        lockedNoTopic: {
+          entries: lockedNoTopicEntries,
+          totalCount: lockedNoTopicEntries.length,
+        },
+        lockedNotApproved: {
+          entries: lockedNotApprovedEntries,
+          totalCount: lockedNotApprovedEntries.length,
         },
         multiTopic: { entries: multiTopicEntries, totalCount: multiTopicEntries.length },
       };
@@ -833,6 +920,15 @@ export default function EventsManager() {
     const googleYesNoTopicCount = (topicQualityData?.googleYesNoTopic.entries || []).filter(
       qualityCheckRowHasSummary,
     ).length;
+    const notApprovedHasTopicCount = (topicQualityData?.notApprovedHasTopic.entries || []).filter(
+      qualityCheckRowHasSummary,
+    ).length;
+    const lockedNoTopicCount = (topicQualityData?.lockedNoTopic.entries || []).filter(
+      qualityCheckRowHasSummary,
+    ).length;
+    const lockedNotApprovedCount = (topicQualityData?.lockedNotApproved.entries || []).filter(
+      qualityCheckRowHasSummary,
+    ).length;
     const multiTopicCount = (topicQualityData?.multiTopic.entries || []).filter(qualityCheckRowHasSummary).length;
     const isEmptyLoading = emptySummaryLoading;
     const isUntaggedLoading = untaggedLoading;
@@ -871,7 +967,7 @@ export default function EventsManager() {
     // No topic assigned
     items.push({
       id: 'no-topic',
-      label: 'Not approved, no topic',
+      label: 'Not yes, no topic',
       count: noTopicCount,
       hasIssues: noTopicCount > 0,
       isLoading: isTopicQualityLoading,
@@ -882,6 +978,30 @@ export default function EventsManager() {
       label: 'Google yes, no topic',
       count: googleYesNoTopicCount,
       hasIssues: googleYesNoTopicCount > 0,
+      isLoading: isTopicQualityLoading,
+    });
+
+    items.push({
+      id: 'not-approved-has-topic',
+      label: 'Not yes, has topic',
+      count: notApprovedHasTopicCount,
+      hasIssues: notApprovedHasTopicCount > 0,
+      isLoading: isTopicQualityLoading,
+    });
+
+    items.push({
+      id: 'locked-no-topic',
+      label: 'Locked, no topic',
+      count: lockedNoTopicCount,
+      hasIssues: lockedNoTopicCount > 0,
+      isLoading: isTopicQualityLoading,
+    });
+
+    items.push({
+      id: 'locked-not-approved',
+      label: 'Locked, not yes',
+      count: lockedNotApprovedCount,
+      hasIssues: lockedNotApprovedCount > 0,
       isLoading: isTopicQualityLoading,
     });
 
@@ -1056,7 +1176,7 @@ export default function EventsManager() {
         (topicQualityData?.noTopic.entries || []).map((entry) => ({
           date: entry.date,
           summary: entry.summary || '',
-          violations: ['Not approved, no topic assigned'],
+          violations: ['Not yes, no topic assigned'],
           length: entry.summary?.length || 0,
           tags_version2: null,
         })),
@@ -1072,6 +1192,71 @@ export default function EventsManager() {
           violations: ['Google Check yes, no topic assigned'],
           length: entry.summary?.length || 0,
           tags_version2: null,
+          googleCheckHappened: entry.google_check_happened,
+        })),
+        selectedQualityCheck,
+      );
+    }
+
+    if (selectedQualityCheck === 'not-approved-has-topic') {
+      return applyQualityCheckSummaryFilter(
+        (topicQualityData?.notApprovedHasTopic.entries || []).map((entry) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: [
+            entry.google_check_happened === "no"
+              ? "Google Check no, topic assigned"
+              : entry.google_check_happened === "uncertain"
+                ? "Google Check uncertain, topic assigned"
+                : "Google Check not yes, topic assigned",
+            entry.topics.length === 1
+              ? `Topic: ${entry.topics[0]}`
+              : `${entry.topics.length} topics: ${entry.topics.join(", ")}`,
+          ],
+          length: entry.summary?.length || 0,
+          tags_version2: null,
+          googleCheckHappened: entry.google_check_happened,
+        })),
+        selectedQualityCheck,
+      );
+    }
+
+    if (selectedQualityCheck === 'locked-no-topic') {
+      return applyQualityCheckSummaryFilter(
+        (topicQualityData?.lockedNoTopic.entries || []).map((entry) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: ['Locked but no storyline topic assigned'],
+          length: entry.summary?.length || 0,
+          tags_version2: null,
+          isLocked: true,
+        })),
+        selectedQualityCheck,
+      );
+    }
+
+    if (selectedQualityCheck === 'locked-not-approved') {
+      return applyQualityCheckSummaryFilter(
+        (topicQualityData?.lockedNotApproved.entries || []).map((entry) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: [
+            entry.google_check_happened === "no"
+              ? "Locked but Google Check is no"
+              : entry.google_check_happened === "uncertain"
+                ? "Locked but Google Check is uncertain"
+                : "Locked but Google Check is not yes",
+            ...(entry.topics.length > 0
+              ? [
+                  entry.topics.length === 1
+                    ? `Topic: ${entry.topics[0]}`
+                    : `${entry.topics.length} topics: ${entry.topics.join(", ")}`,
+                ]
+              : ["No topic assigned"]),
+          ],
+          length: entry.summary?.length || 0,
+          tags_version2: null,
+          isLocked: true,
           googleCheckHappened: entry.google_check_happened,
         })),
         selectedQualityCheck,
@@ -1690,6 +1875,9 @@ export default function EventsManager() {
                       ? untaggedLoading
                       : selectedQualityCheck === 'no-topic' ||
                         selectedQualityCheck === 'google-yes-no-topic' ||
+                        selectedQualityCheck === 'not-approved-has-topic' ||
+                        selectedQualityCheck === 'locked-no-topic' ||
+                        selectedQualityCheck === 'locked-not-approved' ||
                         selectedQualityCheck === 'multi-topic'
                       ? topicQualityLoading
                       : selectedQualityCheck === 'flagged'
