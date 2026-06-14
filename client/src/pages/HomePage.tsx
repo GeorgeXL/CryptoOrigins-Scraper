@@ -28,9 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { AnalysesTable, type AnalysisRowAnnotation, type GoogleCheckSummary } from "@/components/AnalysesTable";
-import { PipelineActivityLog } from "@/components/PipelineActivityLog";
 import type { LogLine } from "@/lib/pipelineActivityLog";
-import { Label } from "@/components/ui/label";
 import { parseIsLocked } from "@/lib/parseIsLocked";
 import {
   Select,
@@ -67,7 +65,8 @@ import {
   RefreshCw,
   FileText,
   FileSpreadsheet,
-  Tags
+  Tags,
+  MoreVertical,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { SiOpenai } from "react-icons/si";
@@ -98,6 +97,11 @@ import {
 import { fetchAllSupabaseRows } from "@/lib/supabaseBatch";
 import { downloadSummariesExcel } from "@/lib/exportSummariesExcel";
 import { PerplexityIcon } from "@/components/PerplexityIcon";
+import { analysisHasStorylineTopic } from "@shared/storyline-topic-eligibility";
+
+function isHomeDefaultBrowseView(showUntagged: boolean, selectedEntities: Set<string>): boolean {
+  return !showUntagged && selectedEntities.size === 0;
+}
 
 // Main category type definition
 export type MainCategory = 
@@ -528,6 +532,7 @@ export default function HomePage() {
 
   // Tags sidebar catalog disabled — storyline topics only.
   const sidebarCatalogData = topicCatalogData;
+  const defaultBrowseView = isHomeDefaultBrowseView(showUntagged, selectedEntities);
   // Fetch filtered analyses with server-side filtering and pagination
   const { data: analysesData, isLoading, refetch } = useQuery<{
     analyses: HistoricalNewsAnalysis[];
@@ -543,6 +548,7 @@ export default function HomePage() {
       sidebarMenu,
       Array.from(selectedEntities).sort().join(","),
       showUntagged,
+      defaultBrowseView,
       debouncedSearchQuery,
       currentPage,
       pageSize,
@@ -554,7 +560,8 @@ export default function HomePage() {
 
       // Build base query - use tags_version2 instead of tags
       const needsTopicCategoryField =
-        sidebarMenu === "topics" && selectedEntities.size > 0 && !showUntagged;
+        defaultBrowseView ||
+        (sidebarMenu === "topics" && selectedEntities.size > 0 && !showUntagged);
       const baseSelect =
         "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked, google_check_happened, google_check_checked_at";
       let query = supabase
@@ -565,6 +572,10 @@ export default function HomePage() {
             : baseSelect,
           { count: "exact" }
         );
+
+      if (defaultBrowseView) {
+        query = query.eq("is_locked", true);
+      }
 
       // Apply filters
       if (showUntagged) {
@@ -592,7 +603,8 @@ export default function HomePage() {
 
       // If we're doing client-side filtering (untagged or entity selection),
       // we need to fetch ALL results to properly filter
-      const needsClientSideFiltering = showUntagged || selectedEntities.size > 0;
+      const needsClientSideFiltering =
+        showUntagged || selectedEntities.size > 0 || defaultBrowseView;
       
       if (needsClientSideFiltering) {
         // Fetch all results in batches
@@ -643,6 +655,12 @@ export default function HomePage() {
       if (showUntagged) {
         filteredAnalyses = filteredAnalyses.filter(analysis => 
           !analysis.tags_version2 || analysis.tags_version2.length === 0
+        );
+      }
+
+      if (defaultBrowseView) {
+        filteredAnalyses = filteredAnalyses.filter((analysis) =>
+          analysisHasStorylineTopic(analysis.topic_categories),
         );
       }
       
@@ -703,9 +721,10 @@ export default function HomePage() {
         sidebarMenu === "topics" && selectedEntities.size > 0 && !showUntagged
           ? resolveSelectedTopicLeafFromSelection(selectedEntities, topicCatalogData)
           : null;
-      const googleCheckSummary = topicLeafForSummary
-        ? buildGoogleCheckSummary(filteredAnalyses)
-        : null;
+      const googleCheckSummary =
+        topicLeafForSummary || defaultBrowseView
+          ? buildGoogleCheckSummary(filteredAnalyses)
+          : null;
 
       console.log('📦 Received:', paginatedAnalyses.length, 'analyses, filtered total:', actualTotalCount);
 
@@ -879,6 +898,10 @@ export default function HomePage() {
       query = query.ilike("summary", `%${debouncedSearchQuery}%`);
     }
 
+    if (defaultBrowseView) {
+      query = query.eq("is_locked", true);
+    }
+
     query = query.order("date", { ascending: false });
 
     let analyses: Array<{
@@ -907,6 +930,12 @@ export default function HomePage() {
     if (showUntagged) {
       filteredAnalyses = filteredAnalyses.filter(
         (analysis) => !analysis.tags_version2 || analysis.tags_version2.length === 0,
+      );
+    }
+
+    if (defaultBrowseView) {
+      filteredAnalyses = filteredAnalyses.filter((analysis) =>
+        analysisHasStorylineTopic(analysis.topic_categories),
       );
     }
 
@@ -1834,101 +1863,69 @@ export default function HomePage() {
                 </Badge>
               </div>
               {totalCount > 0 && (
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleDownloadExcel}
-                    disabled={!canExportTopicExcel || isExportingExcel}
-                    className="flex items-center space-x-2"
-                    data-testid="button-download-excel"
-                    title={
-                      canExportTopicExcel
-                        ? `Download all ${totalCount.toLocaleString()} summaries for ${selectedTopicLabel}`
-                        : "Select one topic in the Topics sidebar to export"
-                    }
-                  >
-                    {isExportingExcel ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <FileSpreadsheet className="w-4 h-4" />
-                    )}
-                    <span>Download Excel</span>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCopyToClipboard}
-                    disabled={selectAllMatching || selectedDates.size > 50}
-                    className="flex items-center space-x-2"
-                    data-testid="button-copy-txt"
-                  >
-                    <Copy className="w-4 h-4" />
-                    <span>Copy TXT</span>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleStorylineFitCheck}
-                    disabled={!canRunTopicChecks || storylineFitRunning || paginatedAnalyses.length === 0}
-                    className="flex items-center space-x-2"
-                    data-testid="button-storyline-fit-check"
-                    title={
-                      canRunTopicChecks
-                        ? "Run TopicValidatorAgent on each visible row to verify storyline fit"
-                        : "Select one topic in the Topics sidebar to run the storyline agent"
-                    }
-                  >
-                    {storylineFitRunning ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Bot className="w-4 h-4" />
-                    )}
-                    <span>Storyline check</span>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleGoogleCheck}
-                    disabled={googleCheckRunning || paginatedAnalyses.length === 0}
-                    className="flex items-center space-x-2"
-                    data-testid="button-perplexity-check"
-                    title="Verify date and summary with Perplexity Sonar for visible rows"
-                  >
-                    {googleCheckRunning ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <PerplexityIcon className="w-4 h-4 shrink-0" />
-                    )}
-                    <span>Perplexity check</span>
-                  </Button>
-                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0"
+                      aria-label="Page actions"
+                      data-testid="button-page-actions-menu"
+                    >
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    <DropdownMenuItem
+                      onClick={handleDownloadExcel}
+                      disabled={!canExportTopicExcel || isExportingExcel}
+                      data-testid="button-download-excel"
+                    >
+                      {isExportingExcel ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <FileSpreadsheet className="w-4 h-4 mr-2" />
+                      )}
+                      Download Excel
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={handleCopyToClipboard}
+                      disabled={selectAllMatching || selectedDates.size > 50}
+                      data-testid="button-copy-txt"
+                    >
+                      <Copy className="w-4 h-4 mr-2" />
+                      Copy TXT
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={handleStorylineFitCheck}
+                      disabled={!canRunTopicChecks || storylineFitRunning || paginatedAnalyses.length === 0}
+                      data-testid="button-storyline-fit-check"
+                    >
+                      {storylineFitRunning ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Bot className="w-4 h-4 mr-2" />
+                      )}
+                      Storyline check
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={handleGoogleCheck}
+                      disabled={googleCheckRunning || paginatedAnalyses.length === 0}
+                      data-testid="button-perplexity-check"
+                    >
+                      {googleCheckRunning ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <PerplexityIcon className="w-4 h-4 mr-2 shrink-0" />
+                      )}
+                      Perplexity check
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
             </div>
 
-            <section className="mb-4 space-y-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-              {storylineFitRunning ? (
-                <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" />
-                  Topic agent checking storyline fit…
-                </p>
-              ) : null}
-              {googleCheckRunning ? (
-                <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" />
-                  Perplexity check running…
-                </p>
-              ) : null}
-              <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Activity log
-              </Label>
-              <PipelineActivityLog
-                lines={checkLogLines}
-                scrollRef={checkLogScrollRef}
-                scrollClassName="h-[200px]"
-                emptyMessage="No activity yet — run Storyline or Perplexity check on visible rows."
-              />
-            </section>
+            {/* Activity log hidden */}
 
             {/* Analysis Table */}
             <AnalysesTable
@@ -1979,6 +1976,10 @@ export default function HomePage() {
                   ? sidebarMenu === "topics"
                     ? "No analyses match the selected storylines"
                     : "No analyses match the selected entities"
+                  : defaultBrowseView
+                  ? debouncedSearchQuery
+                    ? "No locked analyses with a topic match your search"
+                    : "No locked analyses with a topic found"
                   : debouncedSearchQuery
                   ? "No analyses match your search"
                   : "No tagged analyses found"

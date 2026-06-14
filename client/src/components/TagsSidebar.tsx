@@ -104,6 +104,9 @@ export function TagsSidebar({
   selectedLocked,
   onLockedSelect,
 }: TagsSidebarProps) {
+  const activeSidebarButtonClass =
+    "data-[active=true]:bg-white data-[active=true]:text-black data-[active=true]:[&_[data-sidebar=menu-badge]]:!text-black";
+
   const memoizedCatalog = useMemo(() => {
     if (!catalogData) return null;
 
@@ -143,7 +146,7 @@ export function TagsSidebar({
           <SidebarMenuButton
             onClick={() => onEntitySelect(selectionKey)}
             isActive={selectedEntities.has(selectionKey)}
-            className="data-[active=true]:bg-white data-[active=true]:text-black"
+            className={activeSidebarButtonClass}
             tooltip={`${item.count || 0} analyses`}
           >
             <span className="truncate">{item.name}</span>
@@ -246,7 +249,7 @@ export function TagsSidebar({
                     <SidebarMenuButton
                       onClick={() => onQualityCheckSelect?.(item.id)}
                       isActive={selectedQualityCheck === item.id}
-                      className="data-[active=true]:bg-white data-[active=true]:text-black"
+                      className={activeSidebarButtonClass}
                       tooltip={item.isLoading ? 'Loading...' : `${item.count} entries`}
                     >
                       <span className="flex items-center gap-2 truncate">
@@ -281,7 +284,7 @@ export function TagsSidebar({
                   <SidebarMenuButton
                     onClick={() => onLockedSelect?.()}
                     isActive={selectedLocked}
-                    className="data-[active=true]:bg-white data-[active=true]:text-black"
+                    className={activeSidebarButtonClass}
                     tooltip={
                       lockStats.isLoading
                         ? "Loading..."
@@ -313,7 +316,7 @@ export function TagsSidebar({
                     <SidebarMenuButton
                       onClick={() => onVeriBadgeSelect?.(item.id)}
                       isActive={selectedVeriBadge === item.id}
-                      className="data-[active=true]:bg-white data-[active=true]:text-black"
+                      className={activeSidebarButtonClass}
                       tooltip={item.isLoading ? 'Loading...' : `${item.count} entries`}
                     >
                       <span className="flex items-center gap-2 truncate">
