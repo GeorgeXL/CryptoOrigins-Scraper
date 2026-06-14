@@ -1,8 +1,43 @@
 
+import {
+  buildHomepageGoogleCheckPrompt,
+  HOMEPAGE_GOOGLE_CHECK_SYSTEM_PROMPT,
+} from "../../../shared/google-check-prompts";
 import { IAiProvider, CompletionOptions, CompletionResult, JsonCompletionOptions } from "./types";
 import OpenAI from "openai";
 import { z } from "zod";
 import { apiMonitor } from "../api-monitor";
+
+export const HOMEPAGE_GOOGLE_CHECK_OPENAI_MODEL =
+  process.env.GOOGLE_CHECK_MODEL?.trim() ||
+  process.env.GOOGLE_CHECK_OPENAI_MODEL?.trim() ||
+  "gpt-5.4-mini";
+
+const homepageGoogleCheckSchema = z.object({
+  happened: z.enum(["yes", "no", "uncertain"]),
+});
+
+/** Extract the first JSON object from a model response (handles markdown fences / trailing citations). */
+export function parseHomepageGoogleCheckJson(text: string): { happened: "yes" | "no" | "uncertain" } {
+  const cleanContent = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+  const jsonStart = cleanContent.indexOf("{");
+  if (jsonStart === -1) {
+    throw new Error("No JSON object found in response");
+  }
+
+  let braceCount = 0;
+  let jsonEnd = jsonStart;
+  for (let i = jsonStart; i < cleanContent.length; i += 1) {
+    if (cleanContent[i] === "{") braceCount += 1;
+    if (cleanContent[i] === "}") braceCount -= 1;
+    if (braceCount === 0) {
+      jsonEnd = i + 1;
+      break;
+    }
+  }
+
+  return homepageGoogleCheckSchema.parse(JSON.parse(cleanContent.substring(jsonStart, jsonEnd)));
+}
 
 export class OpenAIProvider implements IAiProvider {
   private client: OpenAI;
@@ -236,6 +271,64 @@ export class OpenAIProvider implements IAiProvider {
         reasoning: z.string(),
       }),
     });
+  }
+
+  /** Homepage check — ChatGPT Responses API with web_search grounding. */
+  async verifyHomepageEvent(
+    summary: string,
+    date: string,
+    _topicLeaf?: string | null,
+  ): Promise<{ happened: "yes" | "no" | "uncertain" }> {
+    const model = HOMEPAGE_GOOGLE_CHECK_OPENAI_MODEL;
+    const startTime = Date.now();
+    const requestId = apiMonitor.logRequest({
+      service: "openai",
+      endpoint: "/responses",
+      method: "POST",
+      status: "pending",
+      context: "homepage-google-check",
+      date,
+      purpose: "Verify homepage summary with ChatGPT web search",
+      requestData: { model },
+    });
+
+    try {
+      const prompt = buildHomepageGoogleCheckPrompt(summary, date);
+      const response = await this.client.responses.create({
+        model,
+        instructions: HOMEPAGE_GOOGLE_CHECK_SYSTEM_PROMPT,
+        input: `${prompt}\n\nRespond ONLY with valid JSON.`,
+        tools: [{ type: "web_search", search_context_size: "low" }],
+        max_output_tokens: 256,
+      });
+
+      const text = response.output_text?.trim() || "";
+      if (!text) {
+        throw new Error("OpenAI returned empty response");
+      }
+
+      const result = parseHomepageGoogleCheckJson(text);
+
+      apiMonitor.updateRequest(requestId, {
+        status: "success",
+        duration: Date.now() - startTime,
+        responseSize: JSON.stringify(result).length,
+        responseData: {
+          happened: result.happened,
+          date,
+          model: response.model,
+        },
+      });
+
+      return result;
+    } catch (error) {
+      apiMonitor.updateRequest(requestId, {
+        status: "error",
+        duration: Date.now() - startTime,
+        error: (error as Error).message,
+      });
+      throw error;
+    }
   }
 
   async doubleCheckSummary(summary: string): Promise<{ isValid: boolean; issues: string[]; reasoning: string }> {

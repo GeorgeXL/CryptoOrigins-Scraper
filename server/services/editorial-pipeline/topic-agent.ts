@@ -1,9 +1,12 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import {
-  TOPIC_HIERARCHY,
   TOPIC_HIERARCHY_LEAVES,
 } from "@shared/topic-hierarchy";
+import {
+  buildTopicHierarchyAgentPromptBlock,
+  formatTopicLeafAgentGuidance,
+} from "@shared/main-events-leaf-prompts";
 import { getModelForAgent } from "./model-config";
 import {
   rankTopicCandidatesFromSummary,
@@ -23,6 +26,10 @@ export type TopicAgentInput = {
   /** Short source excerpt — title + first ~600 chars of article, not full bundle noise. */
   sourceSnippet?: string | null;
   neighborHints?: Array<{ date: string; topics: string[]; summaryPreview: string }>;
+  /** When verifying whether a day belongs on a specific leaf (homepage fit check). */
+  expectedLeaf?: string | null;
+  /** When true, never fall back to keyword rules — used by homepage storyline fit check. */
+  requireLlm?: boolean;
 };
 
 export type TopicAgentResult = {
@@ -49,11 +56,30 @@ let hierarchyPromptBlock: string | null = null;
 
 function topicHierarchyPromptBlock(): string {
   if (hierarchyPromptBlock) return hierarchyPromptBlock;
-  hierarchyPromptBlock = TOPIC_HIERARCHY.map(
-    (group) =>
-      `${group.name} — ${group.description}\n${group.leaves.map((leaf) => `  - ${leaf}`).join("\n")}`,
-  ).join("\n\n");
+  hierarchyPromptBlock = buildTopicHierarchyAgentPromptBlock();
   return hierarchyPromptBlock;
+}
+
+function buildStorylineFitCheckSystemPrompt(expectedLeaf: string): string {
+  const guidance = formatTopicLeafAgentGuidance(expectedLeaf);
+  return `You verify whether a historical news summary belongs on ONE specific storyline leaf (fit check).
+
+Expected leaf: ${expectedLeaf}
+
+${guidance}
+
+Critical fit-check rules:
+1. Apply the Exclude line before Include. If Exclude forbids Bitcoin/crypto events, summaries whose headline is crypto price, trading, exchanges, or market reaction do NOT belong — even when inflation, CPI, rates, or stimulus are mentioned as context.
+2. "Bitcoin falls on hotter CPI" → Markets › Bitcoin price & cycles, NOT Macroeconomy › Inflation.
+3. Pure macro inflation prints, national inflation shocks, or CPI reports without a crypto headline → can belong on Inflation.
+4. If Exclude is violated, recommended_topic MUST be a different leaf (not ${expectedLeaf}).
+5. Only set recommended_topic to ${expectedLeaf} when Include fits AND Exclude is not violated.
+
+Respond with JSON only (no markdown): {"recommended_topic":string|null,"alternates":string[],"confidence":"high"|"medium"|"low","reason":string,"duplicate_risk":"low"|"medium"|"high","no_good_fit":boolean}
+Set reason to at most 12 words — name the exclude rule if rejecting the expected leaf.
+
+FULL HIERARCHY (for alternate leaves):
+${topicHierarchyPromptBlock()}`;
 }
 
 const LEAF_BY_LOWER = new Map(TOPIC_HIERARCHY_LEAVES.map((leaf) => [leaf.toLowerCase(), leaf]));
@@ -140,6 +166,20 @@ function rulesFallback(input: TopicAgentInput, reason: string): TopicAgentResult
   };
 }
 
+function agentUnavailableResult(input: TopicAgentInput, reason: string): TopicAgentResult {
+  const ranking = rankTopicCandidatesFromSummary({ summary: input.summary, tags: input.tags ?? [] });
+  return {
+    source: "skipped",
+    confidence: "low",
+    recommended: null,
+    alternates: [],
+    proposed: [],
+    reason,
+    duplicateRisk: "low",
+    ranking,
+  };
+}
+
 /**
  * LLM Topic Agent — assigns homepage storyline leaves from summary (+ optional source snippet).
  * Falls back to deterministic rules when disabled, on error, or invalid model output.
@@ -147,25 +187,34 @@ function rulesFallback(input: TopicAgentInput, reason: string): TopicAgentResult
 export async function suggestTopicsWithAgent(input: TopicAgentInput): Promise<TopicAgentResult> {
   const summary = input.summary.trim();
   if (!summary) {
-    return rulesFallback(input, "Summary is empty — rule fallback returned no topic.");
+    return input.requireLlm
+      ? agentUnavailableResult(input, "Summary is empty.")
+      : rulesFallback(input, "Summary is empty — rule fallback returned no topic.");
   }
 
   if (!isTopicAgentEnabled()) {
-    return rulesFallback(input, "Topic Agent disabled or OPENAI_API_KEY missing — used keyword rules.");
+    return input.requireLlm
+      ? agentUnavailableResult(input, "Topic Agent disabled or OPENAI_API_KEY missing.")
+      : rulesFallback(input, "Topic Agent disabled or OPENAI_API_KEY missing — used keyword rules.");
   }
 
-  const system = `You assign exactly one homepage storyline topic for a historical crypto/macro timeline day.
+  const system =
+    input.requireLlm && input.expectedLeaf
+      ? buildStorylineFitCheckSystemPrompt(input.expectedLeaf)
+      : `You assign exactly one homepage storyline topic for a historical crypto/macro timeline day.
 
 Use ONLY topic leaves from the hierarchy below. Copy leaf names EXACTLY (case and spelling).
 
 Rules:
 1. Read the SUMMARY first — it is the editorial truth for this day.
-2. Pick the most specific accurate leaf. Prefer Macro & Policy leaves for macro/labor/housing/government stories with no Bitcoin angle.
-3. Do NOT pick a Bitcoin-group leaf unless the summary is actually about Bitcoin/BTC/Satoshi/blockchain.
-4. If two leaves are plausible, set confidence=medium and list up to 2 alternates.
-5. If no leaf fits well, set no_good_fit=true, recommended_topic=null, confidence=low — do NOT force a weak Bitcoin topic.
-6. Ignore legacy labels like historical, economic, adoption, technology — they are invalid.
-7. duplicate_risk=high only when the event clearly duplicates a neighbor day listed in context.
+2. Use each leaf's Include/Exclude lines — they define what belongs on that subcategory and what must go elsewhere.
+3. Pick the most specific accurate leaf. Prefer Macroeconomy leaves for pure macro/labor/housing stories with no Bitcoin angle. Prefer Crypto policy for government/regulator actions.
+4. Do NOT pick a Bitcoin-group leaf unless the summary is actually about Bitcoin/BTC/Satoshi/blockchain.
+5. If two leaves are plausible, set confidence=medium and list up to 2 alternates.
+6. If no leaf fits well, set no_good_fit=true, recommended_topic=null, confidence=low — do NOT force a weak Bitcoin topic.
+7. Ignore legacy labels like historical, economic, adoption, technology — they are invalid.
+8. duplicate_risk=high only when the event clearly duplicates a neighbor day listed in context.
+9. When expected_leaf is set, decide if the summary belongs on that leaf (recommended_topic should match expected_leaf if yes, otherwise pick the correct leaf).
 
 Respond with a JSON object only (no markdown): {"recommended_topic":string|null,"alternates":string[],"confidence":"high"|"medium"|"low","reason":string,"duplicate_risk":"low"|"medium"|"high","no_good_fit":boolean}
 Set reason to "" (preferred) or at most 6 words — internal only, not shown to editors.
@@ -179,6 +228,8 @@ ${topicHierarchyPromptBlock()}`;
     tags: input.tags ?? [],
     current_topics: input.currentTopics ?? [],
     source_snippet: input.sourceSnippet?.slice(0, 600) ?? null,
+    expected_leaf: input.expectedLeaf ?? null,
+    expected_leaf_guidance: input.expectedLeaf ? formatTopicLeafAgentGuidance(input.expectedLeaf) : null,
     neighbor_days: (input.neighborHints ?? []).slice(0, 4).map((n) => ({
       date: n.date,
       topics: n.topics,
@@ -192,7 +243,7 @@ ${topicHierarchyPromptBlock()}`;
     const completion = await openai.chat.completions.create({
       model: getModelForAgent("TopicValidatorAgent"),
       temperature: 0.1,
-      max_completion_tokens: 220,
+      max_completion_tokens: input.requireLlm && input.expectedLeaf ? 320 : 220,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: system },
@@ -206,7 +257,9 @@ ${topicHierarchyPromptBlock()}`;
     const content = completion.choices[0]?.message?.content ?? "";
     const parsed = parseTopicAgentJson(content);
     if (!parsed) {
-      return rulesFallback(input, "Topic Agent returned invalid JSON — used keyword rules.");
+      return input.requireLlm
+        ? agentUnavailableResult(input, "Topic Agent returned invalid JSON.")
+        : rulesFallback(input, "Topic Agent returned invalid JSON — used keyword rules.");
     }
 
     if (parsed.no_good_fit && !parsed.recommended_topic) {
@@ -227,7 +280,9 @@ ${topicHierarchyPromptBlock()}`;
 
     const { recommended, alternates } = normalizeTopicAgentLeaves(parsed);
     if (!recommended && alternates.length === 0) {
-      return rulesFallback(input, "Invalid model leaves — used keyword rules.");
+      return input.requireLlm
+        ? agentUnavailableResult(input, "Topic Agent returned invalid leaves.")
+        : rulesFallback(input, "Invalid model leaves — used keyword rules.");
     }
 
     const proposed =
@@ -249,7 +304,9 @@ ${topicHierarchyPromptBlock()}`;
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return rulesFallback(input, `Topic Agent error (${msg}) — used keyword rules.`);
+    return input.requireLlm
+      ? agentUnavailableResult(input, `Topic Agent error (${msg}).`)
+      : rulesFallback(input, `Topic Agent error (${msg}) — used keyword rules.`);
   }
 }
 

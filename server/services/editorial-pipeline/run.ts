@@ -130,6 +130,8 @@ type StartOpts = {
   partialRun?: { date: string; agents: PipelineAgentName[] };
   /** When a day was cleared before this run (e.g. calendar conflict removal). */
   removedDayContext?: RemovedDayContext;
+  /** Quality-check bulk fixes may modify locked days (Main Events lock is unrelated). */
+  ignoreDayLock?: boolean;
 };
 
 function normalizeCheckScopes(scopes: PipelineCheckScope[] | undefined): Set<PipelineCheckScope> {
@@ -161,7 +163,9 @@ function agentMatchesCheckScopes(agent: PipelineAgentName, scopes: Set<PipelineC
 
 function proposalMatchesCheckScopes(proposal: CorrectionProposal, scopes: Set<PipelineCheckScope>): boolean {
   if (proposal.kind === "set_topic_categories") return true;
-  if (proposal.kind === "edit_summary" || proposal.kind === "redo_summary") return scopes.has("summary");
+  if (proposal.kind === "edit_summary" || proposal.kind === "redo_summary" || proposal.kind === "expand_summary") {
+    return scopes.has("summary");
+  }
   return scopes.has("tags");
 }
 
@@ -1862,7 +1866,7 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
       .from(historicalNewsAnalyses)
       .where(eq(historicalNewsAnalyses.date, item.date))
       .limit(1);
-    if (lockRow?.isLocked) {
+    if (!opts.ignoreDayLock && lockRow?.isLocked) {
       const skipStepId = await createStep({
         runId,
         stepIndex,
@@ -1984,7 +1988,12 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
     }
 
     // Unified existing-day branch: deterministic + LLM checks via corpus-clean graph.
-    const useUnifiedExistingChecks = shouldUseUnifiedExistingDayClean(item.route, item.analysisId);
+    // Summary-only quality-check runs should auto-fix length even on empty_day rows.
+    const summaryOnlyQualityFix =
+      checkScopes.has("summary") && !checkScopes.has("relevance") && Boolean(item.analysisId);
+    const useUnifiedExistingChecks =
+      shouldUseUnifiedExistingDayClean(item.route, item.analysisId) ||
+      (summaryOnlyQualityFix && item.route === "empty_day");
 
     if (useUnifiedExistingChecks) {
       const handled = await runV3ExistingDayChecks({
@@ -2186,6 +2195,7 @@ export async function startEditorialPipelineRun(opts: StartOpts): Promise<{ runI
         resumedFromRunId: opts.resumedFromRunId || null,
         partialRun: opts.partialRun ?? null,
         shortCircuitOnReject: EDITORIAL_PIPELINE_SHORT_CIRCUIT_ON_REJECT,
+        ignoreDayLock: opts.ignoreDayLock === true,
       },
       stats: { phase: "queued" },
     })

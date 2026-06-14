@@ -1,7 +1,11 @@
 import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { type Server } from "http";
+
+const serverDir = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(serverDir, "..");
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -57,12 +61,7 @@ export async function setupVite(app: Express, server: Server) {
     }
 
     try {
-      const clientTemplate = path.resolve(
-        import.meta.dirname,
-        "..",
-        "client",
-        "index.html",
-      );
+      const clientTemplate = path.resolve(projectRoot, "client", "index.html");
 
       // always reload the index.html file from disk incase it changes
       let template = await fs.promises.readFile(clientTemplate, "utf-8");
@@ -83,7 +82,7 @@ export function serveStatic(app: Express) {
   // In production (Vercel), files are in dist relative to project root
   const distPath = process.env.VERCEL 
     ? path.resolve(process.cwd(), "dist")
-    : path.resolve(import.meta.dirname, "..", "dist");
+    : path.resolve(projectRoot, "dist");
 
   if (!fs.existsSync(distPath)) {
     console.warn(

@@ -1,4 +1,8 @@
 
+import {
+  buildHomepageGoogleCheckPrompt,
+  HOMEPAGE_GOOGLE_CHECK_SYSTEM_PROMPT,
+} from "../../../shared/google-check-prompts";
 import { IAiProvider, CompletionOptions, CompletionResult, JsonCompletionOptions } from "./types";
 import { apiMonitor } from "../api-monitor";
 import { ArticleData } from "@shared/schema";
@@ -39,13 +43,14 @@ export class PerplexityProvider implements IAiProvider {
   async healthCheck(): Promise<boolean> {
     try {
       await this.generateCompletion({
-        prompt: "ping",
-        maxTokens: 5
+        prompt: "Reply with ok.",
+        maxTokens: 16,
+        returnCitations: false,
       });
       return true;
     } catch (error) {
       console.error("Perplexity health check failed:", error);
-      return false;
+      throw error;
     }
   }
 
@@ -78,7 +83,7 @@ export class PerplexityProvider implements IAiProvider {
           messages,
           temperature: options.temperature ?? 0.2,
           max_tokens: options.maxTokens,
-          return_citations: true,
+          return_citations: options.returnCitations ?? true,
         }),
       });
 
@@ -459,6 +464,97 @@ Return JSON: {
         status: 'error',
         duration: Date.now() - startTime,
         error: (error as Error).message
+      });
+      throw error;
+    }
+  }
+
+  /** Homepage check — Sonar web search + shared timeline fact-check prompt. */
+  async verifyHomepageEvent(
+    summary: string,
+    date: string,
+    _topicLeaf?: string | null,
+  ): Promise<{ happened: "yes" | "no" | "uncertain" }> {
+    const startTime = Date.now();
+    const requestId = apiMonitor.logRequest({
+      service: "perplexity",
+      endpoint: "/chat/completions",
+      method: "POST",
+      status: "pending",
+      context: "homepage-perplexity-check",
+      date,
+      purpose: "Verify homepage summary with Sonar",
+      requestData: { model: this.defaultModel },
+    });
+
+    try {
+      const prompt = buildHomepageGoogleCheckPrompt(summary, date);
+      const messages: PerplexityMessage[] = [
+        { role: "system", content: HOMEPAGE_GOOGLE_CHECK_SYSTEM_PROMPT },
+        { role: "user", content: `${prompt}\n\nRespond ONLY with valid JSON.` },
+      ];
+
+      const response = await fetch(this.baseUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: this.defaultModel,
+          messages,
+          temperature: 0.1,
+          max_tokens: 128,
+          return_citations: true,
+          web_search_options: { search_context_size: "low" },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Perplexity API error: ${response.status} ${await response.text()}`);
+      }
+
+      const data = await response.json();
+      const text = data.choices[0]?.message?.content || "{}";
+      const cleanContent = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+
+      const jsonStart = cleanContent.indexOf("{");
+      if (jsonStart === -1) {
+        throw new Error("No JSON object found in response");
+      }
+
+      let braceCount = 0;
+      let jsonEnd = jsonStart;
+      for (let i = jsonStart; i < cleanContent.length; i += 1) {
+        if (cleanContent[i] === "{") braceCount += 1;
+        if (cleanContent[i] === "}") braceCount -= 1;
+        if (braceCount === 0) {
+          jsonEnd = i + 1;
+          break;
+        }
+      }
+
+      const schema = z.object({
+        happened: z.enum(["yes", "no", "uncertain"]),
+      });
+      const result = schema.parse(JSON.parse(cleanContent.substring(jsonStart, jsonEnd)));
+
+      apiMonitor.updateRequest(requestId, {
+        status: "success",
+        duration: Date.now() - startTime,
+        responseSize: JSON.stringify(result).length,
+        responseData: {
+          happened: result.happened,
+          date,
+        },
+      });
+
+      return result;
+    } catch (error) {
+      apiMonitor.updateRequest(requestId, {
+        status: "error",
+        duration: Date.now() - startTime,
+        error: (error as Error).message,
       });
       throw error;
     }

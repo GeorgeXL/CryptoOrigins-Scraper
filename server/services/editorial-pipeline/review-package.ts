@@ -118,6 +118,12 @@ export const correctionProposalSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     id: z.string().min(1),
+    kind: z.literal("expand_summary"),
+    currentSummary: z.string(),
+    rationale: z.string(),
+  }),
+  z.object({
+    id: z.string().min(1),
     kind: z.literal("edit_summary"),
     currentSummary: z.string(),
     targetMin: z.number().int().default(100),

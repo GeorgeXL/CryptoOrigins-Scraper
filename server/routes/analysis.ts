@@ -19,12 +19,40 @@ import { sql, eq, desc, and, asc, inArray } from "drizzle-orm";
 import { aiService } from "../services/ai";
 import { db } from "../db";
 import { historicalNewsAnalyses, humanReviewQueue, pipelineSteps } from "@shared/schema";
+import {
+  buildManualArticle,
+  normalizeManualSourceUrl,
+  validateManualDayEntryInputs,
+} from "@shared/manual-day-entry-build";
+import { saveManualDayEntryWithSupabase } from "@shared/manual-day-entry-save";
+import { getSupabaseAdmin } from "../lib/supabase-admin";
 import { TOPIC_HIERARCHY_LEAVES } from "@shared/topic-hierarchy";
+import { buildEmptySummaryEntries } from "@shared/empty-summaries-build";
 import { ensureTopicCategoryAndStorylineLinks, syncStorylineAssignmentsForDate } from "../services/editorial-pipeline/storyline-taxonomy";
 import { invalidTopicReasons } from "../services/editorial-pipeline/topic-validation";
 import { assertDayNotLocked, DayLockedError, setDayLocked } from "../services/day-lock";
+import {
+  mergeGoogleCheckBatchWithSkipped,
+  partitionGoogleCheckItems,
+  runGoogleCheckBatch,
+  runGoogleCheckSingle,
+  type GoogleCheckBatchResult,
+} from "../services/homepage-checks/google-check";
+import { runStorylineFitBatch } from "../services/homepage-checks/storyline-fit";
 
 const router = Router();
+
+async function persistGoogleCheckResults(result: GoogleCheckBatchResult): Promise<void> {
+  const checkedAt = new Date();
+  await Promise.all(
+    Object.entries(result.results).map(([date, row]) =>
+      storage.updateAnalysisGoogleCheck(date, {
+        googleCheckHappened: row.happened,
+        googleCheckCheckedAt: checkedAt,
+      }),
+    ),
+  );
+}
 
 async function requireUnlockedDay(date: string, res: import("express").Response): Promise<boolean> {
   try {
@@ -37,49 +65,6 @@ async function requireUnlockedDay(date: string, res: import("express").Response)
     }
     throw error;
   }
-}
-
-function normalizeManualSourceUrl(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    throw new Error("Source URL is required");
-  }
-  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(withProtocol);
-  } catch {
-    throw new Error("Invalid source URL");
-  }
-  if (!parsed.hostname) {
-    throw new Error("Invalid source URL");
-  }
-  return parsed.toString();
-}
-
-function buildManualArticle(opts: {
-  date: string;
-  sourceUrl: string;
-  summary: string;
-  title?: string;
-}): ArticleData {
-  let title = opts.title?.trim() || "";
-  if (!title) {
-    try {
-      title = new URL(opts.sourceUrl).hostname.replace(/^www\./, "");
-    } catch {
-      title = "Manual source";
-    }
-  }
-
-  return {
-    id: opts.sourceUrl,
-    title,
-    url: opts.sourceUrl,
-    publishedDate: opts.date,
-    text: opts.summary,
-    summary: opts.summary,
-  };
 }
 
 function readReviewPackagePhase(pkg: unknown): string {
@@ -416,7 +401,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
         })
         .from(humanReviewQueue)
         .where(and(eq(humanReviewQueue.status, "pending"), inArray(humanReviewQueue.eventDate, validDates)))
-        .orderBy(desc(humanReviewQueue.priority), asc(humanReviewQueue.createdAt));
+        .orderBy(asc(humanReviewQueue.eventDate), asc(humanReviewQueue.createdAt));
 
       res.json({ byDate: mapPendingAgentQueueRows(rows) });
     } catch (error) {
@@ -442,7 +427,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
         })
         .from(humanReviewQueue)
         .where(and(eq(humanReviewQueue.eventDate, date), eq(humanReviewQueue.status, "pending")))
-        .orderBy(desc(humanReviewQueue.priority), asc(humanReviewQueue.createdAt));
+        .orderBy(asc(humanReviewQueue.eventDate), asc(humanReviewQueue.createdAt));
 
       res.json({
         pending: mapPendingAgentQueueRows(
@@ -545,33 +530,41 @@ function parsePerplexityDate(dateText: string | null): string | null {
   router.post("/api/analysis/date/:date/manual", async (req, res) => {
     try {
       const { date } = req.params;
-      const summary = typeof req.body?.summary === "string" ? req.body.summary.trim() : "";
       const sourceUrlRaw = typeof req.body?.sourceUrl === "string" ? req.body.sourceUrl : "";
-      const topicLabel = typeof req.body?.topic === "string" ? req.body.topic.trim() : "";
       const title = typeof req.body?.title === "string" ? req.body.title.trim() : undefined;
 
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
+      let summary: string;
+      let topicLabel: string;
+      try {
+        ({ summary, topicLabel } = validateManualDayEntryInputs({
+          date,
+          summary: typeof req.body?.summary === "string" ? req.body.summary : "",
+          topic: typeof req.body?.topic === "string" ? req.body.topic : null,
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Invalid manual entry";
+        return res.status(400).json({ error: message });
       }
+      const supabaseAdmin = getSupabaseAdmin();
+      if (supabaseAdmin) {
+        const saved = await saveManualDayEntryWithSupabase(supabaseAdmin, {
+          date,
+          summary,
+          sourceUrl: sourceUrlRaw,
+          topic: topicLabel,
+          title,
+        });
+        return res.json({
+          success: true,
+          date: saved.date,
+          summary: saved.summary,
+          sourceUrl: saved.sourceUrl,
+          topics: saved.topics,
+          message: "Manual entry saved",
+        });
+      }
+
       if (!(await requireUnlockedDay(date, res))) return;
-
-      if (summary.length < 20) {
-        return res.status(400).json({ error: "Summary must be at least 20 characters" });
-      }
-
-      if (!topicLabel) {
-        return res.status(400).json({ error: "Storyline tag is required for manual entry" });
-      }
-
-      const canonical = new Set(TOPIC_HIERARCHY_LEAVES.map((leaf) => leaf.trim().toLowerCase()));
-      if (!canonical.has(topicLabel.toLowerCase())) {
-        return res.status(400).json({ error: `"${topicLabel}" is not a valid hierarchy topic` });
-      }
-
-      const issues = invalidTopicReasons([topicLabel]);
-      if (issues.length > 0) {
-        return res.status(400).json({ error: `Topic rejected: ${issues.join("; ")}` });
-      }
 
       const sourceUrl = normalizeManualSourceUrl(sourceUrlRaw);
       const manualArticle = buildManualArticle({ date, sourceUrl, summary, title });
@@ -621,6 +614,17 @@ function parsePerplexityDate(dateText: string | null): string | null {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save manual entry";
+      if (
+        message.includes("ENOTFOUND") ||
+        message.includes("ECONNREFUSED") ||
+        message.includes("ETIMEDOUT")
+      ) {
+        return res.status(503).json({
+          error:
+            "Database unreachable from server. Add SUPABASE_SERVICE_ROLE_KEY to .env for HTTPS fallback, " +
+            "or apply supabase/migrations/20260613120000_historical_news_analyses_anon_write.sql for client-side writes.",
+        });
+      }
       const status = message.includes("Invalid source URL") || message.includes("Topic rejected") ? 400 : 500;
       res.status(status).json({ error: message });
     }
@@ -2542,6 +2546,7 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
         tags_version2?: string[] | null;
         readyForTagging?: boolean | null;
         doubleCheckReasoning?: string | null;
+        isLocked?: boolean;
       }> = [];
       
       for (const analysis of allAnalyses) {
@@ -2556,7 +2561,8 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
             length: analysis.summary.length,
             tags_version2: analysis.tagsVersion2 || null,
             readyForTagging: (analysis as any).readyForTagging,
-            doubleCheckReasoning: (analysis as any).doubleCheckReasoning
+            doubleCheckReasoning: (analysis as any).doubleCheckReasoning,
+            isLocked: analysis.isLocked === true,
           });
         }
       }
@@ -2575,32 +2581,7 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
   router.get("/api/quality-check/empty-summaries", async (_req, res) => {
     try {
       const analyses = await storage.getAllAnalyses();
-      const minValidDate = new Date('2009-01-03');
-
-      const existingDates = new Set<string>();
-      const emptyEntries: { date: string; summary: string }[] = [];
-
-      for (const a of analyses) {
-        existingDates.add(a.date);
-        const isEmpty = !a.summary || a.summary.trim() === '';
-        if (isEmpty) {
-          emptyEntries.push({ date: a.date, summary: a.summary || '' });
-        }
-      }
-
-      // also add missing dates between minValidDate and max existing
-      const sortedDates = Array.from(existingDates).sort();
-      if (sortedDates.length > 0) {
-        const maxDate = new Date(sortedDates[sortedDates.length - 1]);
-        const cursor = new Date(minValidDate);
-        while (cursor <= maxDate) {
-          const ds = cursor.toISOString().split('T')[0];
-          if (!existingDates.has(ds)) {
-            emptyEntries.push({ date: ds, summary: '' });
-          }
-          cursor.setDate(cursor.getDate() + 1);
-        }
-      }
+      const emptyEntries = buildEmptySummaryEntries(analyses);
 
       res.json({
         entries: emptyEntries,
@@ -3265,6 +3246,135 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
       total: doubleCheckTotal,
       progress: doubleCheckTotal > 0 ? Math.round((doubleCheckProcessed / doubleCheckTotal) * 100) : 0
     });
+  });
+
+  router.post("/api/analysis/google-verify", async (req, res) => {
+    try {
+      const { date, summary, topicLeaf } = req.body ?? {};
+      if (!date || typeof date !== "string") {
+        return res.status(400).json({ error: "date is required" });
+      }
+      if (!summary || typeof summary !== "string") {
+        return res.status(400).json({ error: "summary is required" });
+      }
+
+      const result = await runGoogleCheckSingle({
+        date,
+        summary,
+        topicLeaf: typeof topicLeaf === "string" ? topicLeaf : null,
+      });
+      await storage.updateAnalysisGoogleCheck(date, {
+        googleCheckHappened: result.happened,
+        googleCheckCheckedAt: new Date(),
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post("/api/analysis/google-check-month", async (req, res) => {
+    try {
+      const { analyses, topicLeaf } = req.body ?? {};
+      if (!Array.isArray(analyses) || analyses.length === 0) {
+        return res.status(400).json({ error: "analyses array is required" });
+      }
+
+      const items = analyses.map((row: { analysisDate?: string; date?: string; summary?: string }) => ({
+        date: String(row.analysisDate ?? row.date ?? "").trim(),
+        summary: String(row.summary ?? ""),
+        topicLeaf: typeof topicLeaf === "string" ? topicLeaf : null,
+      }));
+
+      if (items.some((row) => !row.date)) {
+        return res.status(400).json({ error: "Each analysis row must include analysisDate or date" });
+      }
+
+      const result = await runGoogleCheckBatch(items);
+      await persistGoogleCheckResults(result);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post("/api/analysis/homepage/storyline-fit-check", async (req, res) => {
+    try {
+      const { topicLeaf, items } = req.body ?? {};
+      if (!topicLeaf || typeof topicLeaf !== "string") {
+        return res.status(400).json({ error: "topicLeaf is required" });
+      }
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "items array is required" });
+      }
+
+      const normalized = items.map(
+        (row: { date?: string; summary?: string; tags?: string[]; topic_categories?: unknown }) => ({
+          date: String(row.date ?? "").trim(),
+          summary: String(row.summary ?? ""),
+          tags: Array.isArray(row.tags) ? row.tags : [],
+          topic_categories: row.topic_categories,
+        }),
+      );
+
+      if (normalized.some((row) => !row.date)) {
+        return res.status(400).json({ error: "Each item must include date" });
+      }
+
+      const result = await runStorylineFitBatch(topicLeaf, normalized);
+      res.json(result);
+    } catch (error) {
+      const message = (error as Error).message;
+      const status = message.includes("Cannot check more than") ? 400 : 500;
+      res.status(status).json({ error: message });
+    }
+  });
+
+  router.post("/api/analysis/homepage/google-check-batch", async (req, res) => {
+    try {
+      const { items } = req.body ?? {};
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "items array is required" });
+      }
+
+      const normalized = items.map(
+        (row: { date?: string; summary?: string; topicLeaf?: string | null }) => ({
+          date: String(row.date ?? "").trim(),
+          summary: String(row.summary ?? ""),
+          topicLeaf: typeof row.topicLeaf === "string" ? row.topicLeaf : null,
+        }),
+      );
+
+      if (normalized.some((row) => !row.date)) {
+        return res.status(400).json({ error: "Each item must include date" });
+      }
+
+      const dates = normalized.map((row) => row.date);
+      const existingRows = await db
+        .select({
+          date: historicalNewsAnalyses.date,
+          googleCheckHappened: historicalNewsAnalyses.googleCheckHappened,
+        })
+        .from(historicalNewsAnalyses)
+        .where(inArray(historicalNewsAnalyses.date, dates));
+
+      const existingByDate = new Map(
+        existingRows.map((row) => [row.date, row.googleCheckHappened]),
+      );
+      const { toCheck, skipped } = partitionGoogleCheckItems(normalized, existingByDate);
+
+      let batchResult: GoogleCheckBatchResult | null = null;
+      if (toCheck.length > 0) {
+        batchResult = await runGoogleCheckBatch(toCheck);
+        await persistGoogleCheckResults(batchResult);
+      }
+
+      res.json(mergeGoogleCheckBatchWithSkipped(batchResult, skipped));
+    } catch (error) {
+      const message = (error as Error).message;
+      const status = message.includes("Cannot verify more than") ? 400 : 500;
+      res.status(status).json({ error: message });
+    }
   });
 
 export default router;

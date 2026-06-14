@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Link } from "wouter";
 
@@ -17,6 +17,7 @@ import {
   duplicatePairKey,
   expectedFirstOperatorExperienceV3,
   mapReviewItemToQueueRow,
+  sortQueueRowsByEventDate,
   type AgentsV2PipelinePhase,
   type AgentsV2QueueRow,
 } from "@/pages/agents-v2/map-review-queue";
@@ -2086,7 +2087,10 @@ export default function AgentsV2HomePanel() {
     }
   };
 
-  const listRows = filter === "pending" ? consolidateQueueRows(rows) : rows;
+  const listRows = useMemo(
+    () => (filter === "pending" ? consolidateQueueRows(rows) : sortQueueRowsByEventDate(rows)),
+    [filter, rows],
+  );
   const listProps = {
     rows: listRows,
     busyId,

@@ -311,6 +311,8 @@ export async function startPipelineRun(body: {
   checkScopes?: PipelineCheckScope[];
   /** When set, only these calendar days are processed inside the window. */
   targetDates?: string[];
+  /** Quality-check bulk runs: allow edits even when the day row is locked. */
+  ignoreDayLock?: boolean;
 }) {
   const res = await fetch("/api/agent/pipeline/run", {
     method: "POST",

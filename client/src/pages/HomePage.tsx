@@ -27,7 +27,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AnalysesTable } from "@/components/AnalysesTable";
+import { AnalysesTable, type AnalysisRowAnnotation, type GoogleCheckSummary } from "@/components/AnalysesTable";
+import { PipelineActivityLog } from "@/components/PipelineActivityLog";
+import type { LogLine } from "@/lib/pipelineActivityLog";
+import { Label } from "@/components/ui/label";
 import { parseIsLocked } from "@/lib/parseIsLocked";
 import {
   Select,
@@ -82,8 +85,10 @@ import {
 import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor, buildFilterTreeFromTags } from "@/utils/tagHelpers";
 import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
 import {
+  analysisMatchesTopicLeaf,
   buildTopicCatalogData,
   parseTopicIdsFromSelection,
+  resolveSelectedTopicLeafFromSelection,
   resolveTopicLabelFromSelection,
   selectionUsesTopicKeys,
   type AnalysisTopicRow,
@@ -92,6 +97,7 @@ import {
 } from "@/lib/topicCatalog";
 import { fetchAllSupabaseRows } from "@/lib/supabaseBatch";
 import { downloadSummariesExcel } from "@/lib/exportSummariesExcel";
+import { PerplexityIcon } from "@/components/PerplexityIcon";
 
 // Main category type definition
 export type MainCategory = 
@@ -121,14 +127,30 @@ interface HistoricalNewsAnalysis {
   summary: string;
   tags?: EntityTag[] | null; // Old tags column (deprecated)
   tags_version2?: string[] | null; // New tags column - array of tag names
+  topic_categories?: unknown;
   tier?: number;
   url?: string;
   source_url?: string;
   isManualOverride?: boolean;
   isFlagged?: boolean;
+  googleCheckHappened?: "yes" | "no" | "uncertain" | null;
 }
 
 const PAGE_SIZE_OPTIONS = [50, 200, 500];
+
+function buildGoogleCheckSummary(
+  analyses: Array<{ google_check_happened?: "yes" | "no" | "uncertain" | null }>,
+): GoogleCheckSummary {
+  const summary: GoogleCheckSummary = { yes: 0, no: 0, uncertain: 0, unverified: 0 };
+  for (const row of analyses) {
+    const verdict = row.google_check_happened;
+    if (verdict === "yes") summary.yes += 1;
+    else if (verdict === "no") summary.no += 1;
+    else if (verdict === "uncertain") summary.uncertain += 1;
+    else summary.unverified += 1;
+  }
+  return summary;
+}
 
 export default function HomePage() {
   const { toast } = useToast();
@@ -136,8 +158,8 @@ export default function HomePage() {
   
   // View mode state - toggle between Keywords and Topics
   const [viewMode, setViewMode] = useState<'keywords' | 'topics'>('keywords');
-  /** Left nav: tag taxonomy vs DB narrative topics */
-  const [sidebarMenu, setSidebarMenu] = useState<'tags' | 'topics'>('tags');
+  /** Left nav: storyline topics only (tags tab hidden). */
+  const [sidebarMenu, setSidebarMenu] = useState<'tags' | 'topics'>('topics');
   const [pageSize, setPageSize] = useState(50);
   
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
@@ -219,7 +241,7 @@ export default function HomePage() {
         if (state.currentPage) setCurrentPage(state.currentPage);
         if (state.pageSize) setPageSize(state.pageSize);
         if (state.viewMode) setViewMode(state.viewMode);
-        if (state.sidebarMenu) setSidebarMenu(state.sidebarMenu);
+        setSidebarMenu('topics');
       }
     };
 
@@ -246,6 +268,11 @@ export default function HomePage() {
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [textToCopy, setTextToCopy] = useState("");
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [rowAnnotations, setRowAnnotations] = useState<Record<string, AnalysisRowAnnotation>>({});
+  const [storylineFitRunning, setStorylineFitRunning] = useState(false);
+  const [googleCheckRunning, setGoogleCheckRunning] = useState(false);
+  const [checkLogLines, setCheckLogLines] = useState<LogLine[]>([]);
+  const checkLogScrollRef = useRef<HTMLDivElement | null>(null);
 
   // State for edit/delete tag dialogs
   const [showRenameDialog, setShowRenameDialog] = useState(false);
@@ -499,7 +526,8 @@ export default function HomePage() {
     [topicRows, pageTopicRows, analysisTopicRows],
   );
 
-  const sidebarCatalogData = sidebarMenu === "topics" ? topicCatalogData : catalogData;
+  // Tags sidebar catalog disabled — storyline topics only.
+  const sidebarCatalogData = topicCatalogData;
   // Fetch filtered analyses with server-side filtering and pagination
   const { data: analysesData, isLoading, refetch } = useQuery<{
     analyses: HistoricalNewsAnalysis[];
@@ -525,10 +553,16 @@ export default function HomePage() {
       if (!supabase) throw new Error("Supabase not configured");
 
       // Build base query - use tags_version2 instead of tags
+      const needsTopicCategoryField =
+        sidebarMenu === "topics" && selectedEntities.size > 0 && !showUntagged;
+      const baseSelect =
+        "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked, google_check_happened, google_check_checked_at";
       let query = supabase
         .from("historical_news_analyses")
         .select(
-          "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked",
+          needsTopicCategoryField
+            ? `${baseSelect}, topic_categories`
+            : baseSelect,
           { count: "exact" }
         );
 
@@ -613,7 +647,12 @@ export default function HomePage() {
       }
       
       if (selectedEntities.size > 0 && !showUntagged) {
-        let analysisIdFilter: Set<string> | null = null;
+        const selectedTopicLeaf = resolveSelectedTopicLeafFromSelection(
+          selectedEntities,
+          topicCatalogData,
+        );
+        let pageTopicAnalysisIds: Set<string> | null = null;
+
         if (sidebarMenu === "topics" && selectionUsesTopicKeys(selectedEntities)) {
           const topicIds = parseTopicIdsFromSelection(selectedEntities);
           if (topicIds.length > 0) {
@@ -622,15 +661,19 @@ export default function HomePage() {
               .select("analysis_id")
               .in("topic_id", topicIds);
             if (ptErr) throw ptErr;
-            analysisIdFilter = new Set((pt ?? []).map((r: { analysis_id: string }) => r.analysis_id));
+            pageTopicAnalysisIds = new Set((pt ?? []).map((r: { analysis_id: string }) => r.analysis_id));
           } else {
-            analysisIdFilter = new Set();
+            pageTopicAnalysisIds = new Set();
           }
         }
 
         filteredAnalyses = filteredAnalyses.filter((analysis) => {
-          if (analysisIdFilter) {
-            return !!(analysis.id && analysisIdFilter.has(analysis.id));
+          if (sidebarMenu === "topics" && selectedTopicLeaf) {
+            if (pageTopicAnalysisIds?.has(analysis.id)) return true;
+            return analysisMatchesTopicLeaf(analysis, selectedTopicLeaf);
+          }
+          if (pageTopicAnalysisIds) {
+            return !!(analysis.id && pageTopicAnalysisIds.has(analysis.id));
           }
           if (!analysis.tags_version2 || !Array.isArray(analysis.tags_version2)) return false;
           return Array.from(selectedEntities).some((entityKey) => {
@@ -647,6 +690,8 @@ export default function HomePage() {
         ...a,
         isFlagged: a.is_flagged || false,
         isLocked: parseIsLocked(a.is_locked),
+        googleCheckHappened: a.google_check_happened ?? null,
+        googleCheckCheckedAt: a.google_check_checked_at ?? null,
       }));
       
       // If we did client-side filtering, use the filtered count
@@ -654,10 +699,19 @@ export default function HomePage() {
       const actualTotalCount = needsClientSideFiltering ? filteredAnalyses.length : (totalCount || filteredAnalyses.length);
       const totalPages = Math.ceil(actualTotalCount / pageSize);
 
+      const topicLeafForSummary =
+        sidebarMenu === "topics" && selectedEntities.size > 0 && !showUntagged
+          ? resolveSelectedTopicLeafFromSelection(selectedEntities, topicCatalogData)
+          : null;
+      const googleCheckSummary = topicLeafForSummary
+        ? buildGoogleCheckSummary(filteredAnalyses)
+        : null;
+
       console.log('📦 Received:', paginatedAnalyses.length, 'analyses, filtered total:', actualTotalCount);
 
       return {
         analyses: paginatedAnalyses,
+        googleCheckSummary,
         pagination: {
           currentPage,
           pageSize,
@@ -723,11 +777,25 @@ export default function HomePage() {
   }
   
   const paginatedAnalyses = analysesData?.analyses || [];
+  const googleCheckSummary = analysesData?.googleCheckSummary ?? null;
   const totalPages = analysesData?.pagination.totalPages || 1;
   const totalCount = analysesData?.pagination.totalCount || 0;
   const selectedTopicLabel = resolveTopicLabelFromSelection(selectedEntities, topicCatalogData);
   const canExportTopicExcel =
     sidebarMenu === "topics" && selectedEntities.size === 1 && !!selectedTopicLabel && totalCount > 0;
+  const selectedTopicLeaf = resolveSelectedTopicLeafFromSelection(selectedEntities, topicCatalogData);
+  const canRunTopicChecks = canExportTopicExcel && !!selectedTopicLeaf;
+
+  useEffect(() => {
+    setRowAnnotations({});
+  }, [selectedEntities, showUntagged, debouncedSearchQuery, currentPage, pageSize, sidebarMenu]);
+
+  useEffect(() => {
+    if (checkLogLines.length === 0) return;
+    const root = checkLogScrollRef.current;
+    const viewport = root?.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
+    viewport?.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+  }, [checkLogLines]);
 
   // Helper function to get tag category from tag name using catalogData
   const getTagCategory = (tagName: string): string => {
@@ -843,7 +911,12 @@ export default function HomePage() {
     }
 
     if (selectedEntities.size > 0 && !showUntagged) {
-      let analysisIdFilter: Set<string> | null = null;
+      const selectedTopicLeaf = resolveSelectedTopicLeafFromSelection(
+        selectedEntities,
+        topicCatalogData,
+      );
+      let pageTopicAnalysisIds: Set<string> | null = null;
+
       if (sidebarMenu === "topics" && selectionUsesTopicKeys(selectedEntities)) {
         const topicIds = parseTopicIdsFromSelection(selectedEntities);
         if (topicIds.length > 0) {
@@ -852,15 +925,19 @@ export default function HomePage() {
             .select("analysis_id")
             .in("topic_id", topicIds);
           if (ptErr) throw ptErr;
-          analysisIdFilter = new Set((pt ?? []).map((r: { analysis_id: string }) => r.analysis_id));
+          pageTopicAnalysisIds = new Set((pt ?? []).map((r: { analysis_id: string }) => r.analysis_id));
         } else {
-          analysisIdFilter = new Set();
+          pageTopicAnalysisIds = new Set();
         }
       }
 
       filteredAnalyses = filteredAnalyses.filter((analysis) => {
-        if (analysisIdFilter) {
-          return !!(analysis.id && analysisIdFilter.has(analysis.id));
+        if (sidebarMenu === "topics" && selectedTopicLeaf) {
+          if (pageTopicAnalysisIds?.has(analysis.id!)) return true;
+          return analysisMatchesTopicLeaf(analysis, selectedTopicLeaf);
+        }
+        if (pageTopicAnalysisIds) {
+          return !!(analysis.id && pageTopicAnalysisIds.has(analysis.id));
         }
         if (!analysis.tags_version2 || !Array.isArray(analysis.tags_version2)) return false;
         return Array.from(selectedEntities).some((entityKey) => {
@@ -1349,6 +1426,310 @@ export default function HomePage() {
     }
   };
 
+  const getHomepageCheckRows = () => {
+    if (selectedDates.size > 0) {
+      return paginatedAnalyses.filter((analysis) => selectedDates.has(analysis.date));
+    }
+    return paginatedAnalyses;
+  };
+
+  const pushCheckLog = (line: LogLine) => {
+    setCheckLogLines((current) => [...current, line]);
+  };
+
+  const replaceCheckLog = (id: string, line: LogLine) => {
+    setCheckLogLines((current) => current.map((entry) => (entry.id === id ? line : entry)));
+  };
+
+  const formatCheckRangeLabel = (rows: Array<{ date: string }>) => {
+    if (rows.length === 0) return "";
+    if (rows.length === 1) return rows[0]!.date;
+    return `${rows[0]!.date} → ${rows[rows.length - 1]!.date}`;
+  };
+
+  const handleStorylineFitCheck = async () => {
+    if (!canRunTopicChecks || !selectedTopicLeaf) {
+      toast({
+        title: "Select one topic",
+        description: "Switch to Topics in the sidebar and choose a single storyline to check.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const rows = getHomepageCheckRows();
+    if (rows.length === 0) {
+      toast({
+        title: "Nothing to check",
+        description: "No analyses on this page to review.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const runId = String(Date.now());
+    let totalOk = 0;
+    let totalMismatch = 0;
+    let totalUncertain = 0;
+
+    setStorylineFitRunning(true);
+    pushCheckLog({
+      id: `${runId}-start`,
+      text: `Starting storyline agent · ${rows.length} row${rows.length === 1 ? "" : "s"} · ${selectedTopicLabel}`,
+      status: "approved",
+    });
+
+    try {
+      for (let index = 0; index < rows.length; index += 1) {
+        const analysis = rows[index]!;
+        const lineId = `${runId}-${analysis.date}`;
+        const progressLabel = `${index + 1} of ${rows.length}`;
+
+        pushCheckLog({
+          id: lineId,
+          text: `${analysis.date} · Topic agent checking (${progressLabel})…`,
+          status: "pending",
+        });
+
+        try {
+          const response = await fetch("/api/analysis/homepage/storyline-fit-check", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              topicLeaf: selectedTopicLeaf,
+              items: [
+                {
+                  date: analysis.date,
+                  summary: analysis.summary,
+                  tags: analysis.tags_version2 ?? [],
+                  topic_categories: analysis.topic_categories,
+                },
+              ],
+            }),
+          });
+
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.error || response.statusText);
+          }
+
+          const report = await response.json();
+          totalOk += report.ok ?? 0;
+          totalMismatch += report.mismatch ?? 0;
+          totalUncertain += report.uncertain ?? 0;
+
+          const row = report.results?.[analysis.date] as
+            | {
+                status: "ok" | "mismatch" | "uncertain";
+                reason?: string;
+                suggestedLeaves?: string[];
+              }
+            | undefined;
+
+          if (row) {
+            setRowAnnotations((prev) => ({
+              ...prev,
+              [analysis.date]: {
+                ...prev[analysis.date],
+                storylineFit: {
+                  status: row.status,
+                  reason: row.reason,
+                  suggestedLeaves: row.suggestedLeaves,
+                },
+              },
+            }));
+          }
+
+          const statusLabel =
+            row?.status === "ok" ? "belongs here" : row?.status === "mismatch" ? "mismatch" : "uncertain";
+          replaceCheckLog(lineId, {
+            id: lineId,
+            text: `${analysis.date} · ${statusLabel}${row?.reason ? ` — ${row.reason}` : ""}`,
+            status: row?.status === "ok" ? "approved" : row?.status === "mismatch" ? "review" : "review",
+          });
+        } catch (error) {
+          replaceCheckLog(lineId, {
+            id: lineId,
+            text: `${analysis.date} — ${error instanceof Error ? error.message : "Failed"}`,
+            status: "rejected",
+          });
+        }
+      }
+
+      pushCheckLog({
+        id: `${runId}-done`,
+        text: `Storyline agent complete · ${totalOk} ok · ${totalMismatch} mismatches · ${totalUncertain} uncertain`,
+        status: totalMismatch > 0 || totalUncertain > 0 ? "review" : "approved",
+      });
+
+      toast({
+        title: "Storyline check complete",
+        description: `${totalOk} ok · ${totalMismatch} mismatches · ${totalUncertain} uncertain`,
+        variant: totalMismatch > 0 ? "destructive" : "default",
+      });
+    } catch (error) {
+      pushCheckLog({
+        id: `${runId}-failed`,
+        text: error instanceof Error ? error.message : "Storyline check failed",
+        status: "rejected",
+      });
+      toast({
+        title: "Storyline check failed",
+        description: error instanceof Error ? error.message : "Could not run storyline agent.",
+        variant: "destructive",
+      });
+    } finally {
+      setStorylineFitRunning(false);
+    }
+  };
+
+  const formatGoogleCheckLabel = (happened: "yes" | "no" | "uncertain") => {
+    if (happened === "yes") return "Happened";
+    if (happened === "no") return "Did not happen";
+    return "Uncertain";
+  };
+
+  const googleCheckLogStatus = (
+    happened: "yes" | "no" | "uncertain",
+  ): LogLine["status"] => {
+    if (happened === "yes") return "approved";
+    if (happened === "no") return "rejected";
+    return "review";
+  };
+
+  const handleGoogleCheck = async () => {
+    const rows = getHomepageCheckRows();
+    if (rows.length === 0) {
+      toast({
+        title: "Nothing to check",
+        description: "No analyses on this page to verify.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const alreadyChecked = rows.filter((row) => row.googleCheckHappened != null);
+    const toCheck = rows.filter((row) => row.googleCheckHappened == null);
+
+    if (toCheck.length === 0) {
+      pushCheckLog({
+        id: `google-${Date.now()}-all-skipped`,
+        text: `Skipped ${alreadyChecked.length} already checked`,
+        status: "approved",
+      });
+      toast({
+        title: "All rows already checked",
+        description: `Skipped ${alreadyChecked.length} row${alreadyChecked.length === 1 ? "" : "s"} with existing Perplexity check.`,
+      });
+      return;
+    }
+
+    const runId = String(Date.now());
+    const batchSize = 3;
+    let totalYes = 0;
+    let totalNo = 0;
+    let totalUncertain = 0;
+    let totalSkipped = alreadyChecked.length;
+
+    setGoogleCheckRunning(true);
+    pushCheckLog({
+      id: `${runId}-start`,
+      text: `Starting Perplexity check · ${toCheck.length} row${toCheck.length === 1 ? "" : "s"}${alreadyChecked.length > 0 ? ` · ${alreadyChecked.length} skipped` : ""}`,
+      status: "approved",
+    });
+
+    if (alreadyChecked.length > 0) {
+      pushCheckLog({
+        id: `${runId}-skipped`,
+        text: `Skipped ${alreadyChecked.length} already checked`,
+        status: "approved",
+      });
+    }
+
+    try {
+      for (let offset = 0; offset < toCheck.length; offset += batchSize) {
+        const chunk = toCheck.slice(offset, offset + batchSize);
+
+        for (const analysis of chunk) {
+          pushCheckLog({
+            id: `${runId}-${analysis.date}`,
+            text: `Checking ${analysis.date}…`,
+            status: "pending",
+          });
+        }
+
+        const response = await fetch("/api/analysis/homepage/google-check-batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: chunk.map((analysis) => ({
+              date: analysis.date,
+              summary: analysis.summary,
+              topicLeaf: canRunTopicChecks ? selectedTopicLeaf : null,
+            })),
+          }),
+        });
+
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || response.statusText);
+        }
+
+        const report = await response.json();
+        totalYes += report.yesDays ?? 0;
+        totalNo += report.noDays ?? 0;
+        totalUncertain += report.uncertainDays ?? 0;
+        totalSkipped += report.skippedDays ?? 0;
+
+        for (const analysis of chunk) {
+          const lineId = `${runId}-${analysis.date}`;
+          const row = report.results?.[analysis.date] as { happened?: "yes" | "no" | "uncertain" } | undefined;
+
+          if (!row?.happened) {
+            replaceCheckLog(lineId, {
+              id: lineId,
+              text: `${analysis.date} — no result returned`,
+              status: "rejected",
+            });
+            continue;
+          }
+
+          replaceCheckLog(lineId, {
+            id: lineId,
+            text: `${analysis.date}: ${formatGoogleCheckLabel(row.happened)}`,
+            status: googleCheckLogStatus(row.happened),
+          });
+        }
+
+        await refetch();
+      }
+
+      pushCheckLog({
+        id: `${runId}-done`,
+        text: `Perplexity check complete · ${totalYes} yes · ${totalNo} no · ${totalUncertain} uncertain${totalSkipped > 0 ? ` · ${totalSkipped} skipped` : ""}`,
+        status: totalNo > 0 || totalUncertain > 0 ? "review" : "approved",
+      });
+
+      toast({
+        title: "Perplexity check complete",
+        description: `${totalYes} yes · ${totalNo} no · ${totalUncertain} uncertain${totalSkipped > 0 ? ` · ${totalSkipped} skipped` : ""}`,
+      });
+    } catch (error) {
+      pushCheckLog({
+        id: `${runId}-failed`,
+        text: error instanceof Error ? error.message : "Perplexity check failed",
+        status: "rejected",
+      });
+      toast({
+        title: "Perplexity check failed",
+        description: error instanceof Error ? error.message : "Could not verify with Perplexity.",
+        variant: "destructive",
+      });
+    } finally {
+      setGoogleCheckRunning(false);
+    }
+  };
+
   const allPageSelected = paginatedAnalyses.length > 0 && 
     paginatedAnalyses.every(a => selectedDates.has(a.date));
 
@@ -1357,6 +1738,7 @@ export default function HomePage() {
       <div className="space-y-6">
         <div className="flex flex-col gap-6 lg:flex-row">
           <div className="lg:w-72 shrink-0 space-y-2">
+            {/* Tags/Topics tab hidden — storyline topics only
             <div className="flex rounded-lg border bg-muted/30 p-1">
               <Button
                 type="button"
@@ -1399,7 +1781,8 @@ export default function HomePage() {
                 Topics
               </Button>
             </div>
-            {sidebarMenu === "topics" && !sidebarCatalogData ? (
+            */}
+            {!sidebarCatalogData ? (
               <Card className="p-4 text-sm text-muted-foreground rounded-xl border bg-sidebar/40">
                 No storylines yet. Add rows to <code className="text-xs">topics</code> and link analyses in{" "}
                 <code className="text-xs">page_topics</code>.
@@ -1411,19 +1794,11 @@ export default function HomePage() {
               showUntagged={showUntagged}
               searchQuery={searchQuery}
               mode="inline"
-              showOverview={sidebarMenu === "tags"}
+              showOverview={false}
               onEntitySelect={(entityKey) => {
-                let newSelected: Set<string>;
-                if (sidebarMenu === "topics") {
-                  newSelected = selectedEntities.has(entityKey) ? new Set<string>() : new Set([entityKey]);
-                } else {
-                  newSelected = new Set(selectedEntities);
-                  if (newSelected.has(entityKey)) {
-                    newSelected.delete(entityKey);
-                  } else {
-                    newSelected.add(entityKey);
-                  }
-                }
+                const newSelected = selectedEntities.has(entityKey)
+                  ? new Set<string>()
+                  : new Set([entityKey]);
                 setSelectedEntities(newSelected);
                 setShowUntagged(false);
                 setCurrentPage(1);
@@ -1491,13 +1866,74 @@ export default function HomePage() {
                     <Copy className="w-4 h-4" />
                     <span>Copy TXT</span>
                   </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleStorylineFitCheck}
+                    disabled={!canRunTopicChecks || storylineFitRunning || paginatedAnalyses.length === 0}
+                    className="flex items-center space-x-2"
+                    data-testid="button-storyline-fit-check"
+                    title={
+                      canRunTopicChecks
+                        ? "Run TopicValidatorAgent on each visible row to verify storyline fit"
+                        : "Select one topic in the Topics sidebar to run the storyline agent"
+                    }
+                  >
+                    {storylineFitRunning ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Bot className="w-4 h-4" />
+                    )}
+                    <span>Storyline check</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleGoogleCheck}
+                    disabled={googleCheckRunning || paginatedAnalyses.length === 0}
+                    className="flex items-center space-x-2"
+                    data-testid="button-perplexity-check"
+                    title="Verify date and summary with Perplexity Sonar for visible rows"
+                  >
+                    {googleCheckRunning ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <PerplexityIcon className="w-4 h-4 shrink-0" />
+                    )}
+                    <span>Perplexity check</span>
+                  </Button>
                 </div>
               )}
             </div>
 
+            <section className="mb-4 space-y-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+              {storylineFitRunning ? (
+                <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Topic agent checking storyline fit…
+                </p>
+              ) : null}
+              {googleCheckRunning ? (
+                <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Perplexity check running…
+                </p>
+              ) : null}
+              <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Activity log
+              </Label>
+              <PipelineActivityLog
+                lines={checkLogLines}
+                scrollRef={checkLogScrollRef}
+                scrollClassName="h-[200px]"
+                emptyMessage="No activity yet — run Storyline or Perplexity check on visible rows."
+              />
+            </section>
+
             {/* Analysis Table */}
             <AnalysesTable
               analyses={paginatedAnalyses}
+              googleCheckSummary={googleCheckSummary}
               isLoading={isLoading}
               selectedDates={selectedDates}
               onDateSelect={(date) => {
@@ -1535,6 +1971,7 @@ export default function HomePage() {
                   isFlagged: !analysis.isFlagged,
                 });
               }}
+              rowAnnotations={rowAnnotations}
               emptyMessage={
                 showUntagged
                   ? "No untagged analyses found"

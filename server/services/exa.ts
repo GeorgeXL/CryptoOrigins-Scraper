@@ -16,6 +16,38 @@ interface ExaSearchResult {
   autopromptString?: string;
 }
 
+export type ExaSearchType =
+  | "auto"
+  | "fast"
+  | "instant"
+  | "deep-lite"
+  | "deep"
+  | "deep-reasoning"
+  | "neural"
+  | "keyword"
+  | "hybrid";
+
+const EXA_SEARCH_TYPES: ExaSearchType[] = [
+  "auto",
+  "fast",
+  "instant",
+  "deep-lite",
+  "deep",
+  "deep-reasoning",
+  "neural",
+  "keyword",
+  "hybrid",
+];
+
+/** Default `deep` — override with EXA_SEARCH_TYPE=auto|fast|neural etc. */
+export function resolveExaSearchType(): ExaSearchType {
+  const raw = process.env.EXA_SEARCH_TYPE?.trim().toLowerCase();
+  if (raw && EXA_SEARCH_TYPES.includes(raw as ExaSearchType)) {
+    return raw as ExaSearchType;
+  }
+  return "deep";
+}
+
 interface ExaSearchOptions {
   query: string;
   startPublishedDate: string;
@@ -23,7 +55,7 @@ interface ExaSearchOptions {
   numResults?: number;
   includeDomains?: string[];
   excludeDomains?: string[];
-  type?: "neural" | "keyword" | "auto";
+  type?: ExaSearchType;
   category?: string;
   useAutoprompt?: boolean;
   text?: boolean | { max_characters: number };
@@ -38,8 +70,15 @@ export class ExaNewsService {
   // FIXED: Remove shared state that causes race conditions
   private requestQueue: Promise<any>[] = [];
   private maxConcurrentRequests = 3; // Allow 3 concurrent requests max
-  private requestDelay = 200; // 200ms between requests (5 QPS max)
+  private requestDelay = 200; // overridden for deep search in executeRequest
   private lastRequestTime = 0;
+
+  private getRequestDelayMs(): number {
+    const type = resolveExaSearchType();
+    if (type === "deep-reasoning") return 1200;
+    if (type.startsWith("deep")) return 800;
+    return this.requestDelay;
+  }
 
   constructor() {
     const apiKey = process.env.EXA_API_KEY;
@@ -79,8 +118,9 @@ export class ExaNewsService {
     const now = Date.now();
     const timeSinceLastRequest = now - this.lastRequestTime;
     
-    if (timeSinceLastRequest < this.requestDelay) {
-      const waitTime = this.requestDelay - timeSinceLastRequest;
+    const delay = this.getRequestDelayMs();
+    if (timeSinceLastRequest < delay) {
+      const waitTime = delay - timeSinceLastRequest;
       console.log(`⏳ Rate limiting: waiting ${waitTime}ms before next EXA request`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
@@ -95,7 +135,7 @@ export class ExaNewsService {
    * FIXED: Main search method with proper isolation
    */
   async searchAndContents(query: string, options: {
-    type: "neural" | "keyword" | "auto";
+    type?: ExaSearchType;
     category: "company" | "research paper" | "news" | "pdf" | "github" | "tweet" | "personal site" | "linkedin profile" | "financial report";
     startPublishedDate: string;
     endPublishedDate: string;
@@ -105,6 +145,7 @@ export class ExaNewsService {
     includeDomains?: string[];
     numResults?: number;
     excludeText?: string[];
+    systemPrompt?: string;
   }, context?: {
     context?: string;
     purpose?: string;
@@ -112,10 +153,14 @@ export class ExaNewsService {
     tier?: string;
   }): Promise<ExaSearchResult> {
     
+    const searchType = options.type ?? resolveExaSearchType();
+    const numResults = options.numResults ?? 10;
     // FIXED: Create unique request identifier to prevent mixing
     const requestId = `${query}-${options.startPublishedDate}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
-    console.log(`🔍 [${requestId}] EXA search: "${query}" (${options.startPublishedDate} to ${options.endPublishedDate})`);
+    console.log(
+      `🔍 [${requestId}] EXA ${searchType} search: "${query}" (${options.startPublishedDate} to ${options.endPublishedDate})`,
+    );
     
     return this.executeWithRateLimit(async () => {
       const { apiMonitor } = await import('./api-monitor');
@@ -135,26 +180,31 @@ export class ExaNewsService {
           requestData: { 
             query, 
             dateRange: `${options.startPublishedDate} to ${options.endPublishedDate}`,
-            type: options.type,
+            type: searchType,
             category: options.category,
-            numResults: options.numResults || 10,
+            numResults,
             includeDomains: options.includeDomains,
             tier: context?.tier,
             requestId // Add unique request ID
           }
         });
 
-        // Use the official EXA library with isolated request
-        const result = await this.exa.searchAndContents(query, {
-          type: options.type,
+        const requestPayload: Record<string, unknown> = {
+          type: searchType,
           category: options.category,
           startPublishedDate: options.startPublishedDate,
           endPublishedDate: options.endPublishedDate,
-          numResults: options.numResults || 10,
+          numResults,
           summary: options.summary,
           includeDomains: options.includeDomains,
           excludeText: options.excludeText,
-        });
+        };
+        if (options.systemPrompt?.trim()) {
+          requestPayload.systemPrompt = options.systemPrompt.trim();
+        }
+
+        // Use the official EXA library with isolated request
+        const result = await this.exa.searchAndContents(query, requestPayload as never);
 
         console.log(`📊 [${requestId}] EXA API returned ${result.results?.length || 0} results`);
         
@@ -178,9 +228,9 @@ export class ExaNewsService {
             requestData: { 
               query, 
               dateRange: `${options.startPublishedDate} to ${options.endPublishedDate}`,
-              type: options.type,
+              type: searchType,
               category: options.category,
-              numResults: options.numResults || 10,
+              numResults,
               includeDomains: options.includeDomains,
               requestId,
               result: {
@@ -218,9 +268,9 @@ export class ExaNewsService {
             requestData: { 
               query, 
               dateRange: `${options.startPublishedDate} to ${options.endPublishedDate}`, 
-              type: options.type,
+              type: searchType,
               category: options.category,
-              numResults: options.numResults || 10,
+              numResults,
               includeDomains: options.includeDomains,
               requestId,
               error: errorMessage
@@ -236,15 +286,14 @@ export class ExaNewsService {
 
   // FIXED: Keep the existing searchNews method but remove caching to prevent issues
   async searchNews(options: ExaSearchOptions): Promise<ExaSearchResult> {
-    // Convert to searchAndContents format and use the fixed method
     return this.searchAndContents(options.query, {
-      type: options.type || "neural",
+      type: options.type ?? resolveExaSearchType(),
       category: "news",
       startPublishedDate: options.startPublishedDate,
       endPublishedDate: options.endPublishedDate,
       summary: { query: "Create 50 words summary" },
       includeDomains: options.includeDomains,
-      numResults: options.numResults
+      numResults: options.numResults,
     });
   }
 

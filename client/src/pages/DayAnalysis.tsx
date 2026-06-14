@@ -713,7 +713,7 @@ export default function DayAnalysis() {
 
   // Google verification mutation
   const googleVerifyMutation = useMutation({
-    mutationFn: async (): Promise<{ assessment: 'Valid' | 'Incorrect' | 'Cannot Verify' }> => {
+    mutationFn: async (): Promise<{ happened: "yes" | "no" | "uncertain" }> => {
       if (!dayData?.analysis?.summary) {
         throw new Error("No summary available to verify");
       }
@@ -735,16 +735,21 @@ export default function DayAnalysis() {
       
       return response.json();
     },
-    onSuccess: (result: { assessment: 'Valid' | 'Incorrect' | 'Cannot Verify' }) => {
+    onSuccess: (result: { happened: "yes" | "no" | "uncertain" }) => {
       setGoogleVerification({ 
-        status: result.assessment, 
+        status: result.happened, 
         isLoading: false 
       });
       
       toast({
         title: "Google Verification Complete",
-        description: `Summary was assessed as: ${result.assessment}`,
-        variant: result.assessment === 'Valid' ? "default" : "destructive",
+        description:
+          result.happened === "yes"
+            ? "Event happened on/near this date"
+            : result.happened === "uncertain"
+              ? "Could not verify this event with Google Search"
+              : "Event did not happen on/near this date",
+        variant: result.happened === "no" ? "destructive" : "default",
       });
     },
     onError: (error: any) => {
@@ -763,7 +768,7 @@ export default function DayAnalysis() {
   
   // Google verification state
   const [googleVerification, setGoogleVerification] = React.useState<{
-    status: 'Valid' | 'Incorrect' | 'Cannot Verify' | null;
+    status: "yes" | "no" | "uncertain" | null;
     isLoading: boolean;
   }>({ status: null, isLoading: false });
 
@@ -1655,9 +1660,9 @@ export default function DayAnalysis() {
           </div>
         </div>
 
-        {/* Centered Analyse Button */}
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <Button 
+        {/* Centered actions when no analysis exists yet */}
+        <div className="flex flex-col items-center justify-center gap-3 min-h-[60vh] sm:flex-row">
+          <Button
             size="lg"
             onClick={handleInitialAnalyze}
             disabled={analyzeDayMutation.isPending || isAnalyzing}
@@ -1675,7 +1680,31 @@ export default function DayAnalysis() {
               </>
             )}
           </Button>
+          <Button
+            size="lg"
+            variant="outline"
+            onClick={() => setShowManualEntryDialog(true)}
+            disabled={analyzeDayMutation.isPending || isAnalyzing}
+            className="px-8 py-6 text-lg"
+          >
+            <PenLine className="w-5 h-5 mr-2" />
+            Manual entry
+          </Button>
         </div>
+
+        {date ? (
+          <ManualDayEntryDialog
+            open={showManualEntryDialog}
+            onOpenChange={setShowManualEntryDialog}
+            date={date}
+            onSaved={() => {
+              invalidateDayQueries();
+              setHasNewAnalysis(false);
+              setHasUnsavedChanges(false);
+              setIsEditing(false);
+            }}
+          />
+        ) : null}
       </div>
     );
   }

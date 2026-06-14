@@ -510,6 +510,20 @@ export async function applyCorrectionProposals(opts: {
         redoSummaryRequested = true;
         break;
       }
+      case "expand_summary": {
+        const { expandShortSummaryWithAgent } = await import("./summary-agent");
+        const out = await expandShortSummaryWithAgent(opts.date);
+        if (out.ok) {
+          applied.push(`expanded summary (${out.summaryLength} chars)`);
+        } else {
+          return {
+            ok: false,
+            applied,
+            message: out.message ?? "Expand summary failed",
+          };
+        }
+        break;
+      }
       case "edit_summary": {
         const edited = opts.editedSummary?.trim() ?? "";
         const quality = evaluateSummaryQuality(edited);
@@ -544,7 +558,7 @@ export async function applyCorrectionProposals(opts: {
   }
 
   if (redoSummaryRequested) {
-    const { regenerateSummaryWithAgent } = await import("./summary-agent");
+    const { regenerateSummaryWithAgent, expandShortSummaryWithAgent } = await import("./summary-agent");
     const out = await regenerateSummaryWithAgent(opts.date);
     if (out.ok) {
       applied.push(`regenerated summary (${out.summaryLength} chars)`);
@@ -557,11 +571,27 @@ export async function applyCorrectionProposals(opts: {
       if (isAutoReviewer && missingArticlePayload) {
         applied.push(`skipped summary regen (${out.message})`);
       } else {
-        return {
-          ok: false,
-          applied,
-          message: `Partial apply: ${applied.join("; ") || "no changes"}. Redo-summary failed: ${out.message}`,
-        };
+        const existing = await storage.getAnalysisByDate(opts.date);
+        const stillTooShort =
+          evaluateSummaryQuality(String(existing?.summary ?? "").trim())?.code === "too_short";
+        if (stillTooShort) {
+          const expandOut = await expandShortSummaryWithAgent(opts.date);
+          if (expandOut.ok) {
+            applied.push(`expanded summary after regen miss (${expandOut.summaryLength} chars)`);
+          } else {
+            return {
+              ok: false,
+              applied,
+              message: `Partial apply: ${applied.join("; ") || "no changes"}. Redo-summary failed: ${out.message}; expand fallback: ${expandOut.message}`,
+            };
+          }
+        } else {
+          return {
+            ok: false,
+            applied,
+            message: `Partial apply: ${applied.join("; ") || "no changes"}. Redo-summary failed: ${out.message}`,
+          };
+        }
       }
     }
   }

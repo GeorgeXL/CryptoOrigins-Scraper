@@ -47,3 +47,32 @@ export type ValidCanonicalDate = Omit<
 };
 
 export type SkippedCanonicalDate = CanonicalDatesResponse["canonical_dates"][number];
+
+export const mainEventsAlignmentBatchSchema = z.object({
+  verdicts: z.array(
+    z.object({
+      date: z.string(),
+      agrees_with_gemini: z.boolean(),
+      recommended_leaf: z.string().nullable(),
+      confidence: z.enum(["high", "medium", "low"]),
+      reason: z.string().max(160),
+    }),
+  ),
+});
+
+export type MainEventsAlignmentBatchResponse = z.infer<typeof mainEventsAlignmentBatchSchema>;
+
+export const mainEventsSummaryAlignmentBatchSchema = z.object({
+  verdicts: z.array(
+    z.object({
+      date: z.string(),
+      same_story: z.boolean(),
+      confidence: z.enum(["high", "medium", "low"]),
+      reason: z.string().max(160),
+    }),
+  ),
+});
+
+export type MainEventsSummaryAlignmentBatchResponse = z.infer<
+  typeof mainEventsSummaryAlignmentBatchSchema
+>;

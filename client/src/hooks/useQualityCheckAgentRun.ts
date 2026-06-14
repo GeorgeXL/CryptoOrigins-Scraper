@@ -86,21 +86,26 @@ export function useQualityCheckAgentRun() {
       setRunId(null);
       runIdRef.current = null;
       setRunning(true);
+      const dayLabel =
+        window.dateFrom === window.dateTo
+          ? window.dateFrom
+          : `${window.dateFrom} → ${window.dateTo}`;
       setProgressLabel(
         options.sliceIndex && options.sliceTotal
-          ? `Slice ${options.sliceIndex}/${options.sliceTotal}: ${window.dateFrom}${window.dateFrom !== window.dateTo ? ` → ${window.dateTo}` : ""}`
-          : `${window.dateFrom}${window.dateFrom !== window.dateTo ? ` → ${window.dateTo}` : ""}`,
+          ? `Day ${options.sliceIndex}/${options.sliceTotal}: ${dayLabel}`
+          : dayLabel,
       );
 
-      const sliceTargetDates = options.targetDates?.filter(
-        (date) => date >= window.dateFrom && date <= window.dateTo,
-      );
+      const sliceTargetDates =
+        options.targetDates?.filter((date) => date >= window.dateFrom && date <= window.dateTo) ??
+        (window.dateFrom === window.dateTo ? [window.dateFrom] : undefined);
 
       const out = await startPipelineRun({
         dateFrom: window.dateFrom,
         dateTo: window.dateTo,
         maxDaysToConsider: sliceTargetDates?.length ?? window.maxDays,
         checkScopes,
+        ignoreDayLock: true,
         ...(sliceTargetDates && sliceTargetDates.length > 0 ? { targetDates: sliceTargetDates } : {}),
       });
 
@@ -123,11 +128,11 @@ export function useQualityCheckAgentRun() {
       setRunId(out.runId);
       runIdRef.current = out.runId;
       rememberLastPipelineRunId(out.runId);
-      const slicePrefix =
-        options.sliceIndex && options.sliceTotal ? `Slice ${options.sliceIndex}/${options.sliceTotal} · ` : "";
+      const dayPrefix =
+        options.sliceIndex && options.sliceTotal ? `Day ${options.sliceIndex}/${options.sliceTotal} · ` : "";
       const startLine: LogLine = {
         id: `${out.runId}-start`,
-        text: `${slicePrefix}Pipeline ${out.runId.slice(0, 8)}… · ${window.dateFrom}${window.dateFrom !== window.dateTo ? ` → ${window.dateTo}` : ""}`,
+        text: `${dayPrefix}Pipeline ${out.runId.slice(0, 8)}… · ${dayLabel}`,
         status: "approved",
       };
       completedLogRef.current = [...completedLogRef.current, startLine];
@@ -219,7 +224,7 @@ export function useQualityCheckAgentRun() {
       completedLogRef.current = [
         {
           id: `qc-agent-plan-${Date.now()}`,
-          text: `Queued ${windows.length} pipeline slice${windows.length === 1 ? "" : "s"} · scopes: ${checkScopes.join(", ")}${targetDates ? ` · ${targetDates.length} day${targetDates.length === 1 ? "" : "s"}` : ""}`,
+          text: `Queued ${windows.length} day${windows.length === 1 ? "" : "s"} (one pipeline run each) · scopes: ${checkScopes.join(", ")}`,
           status: "approved",
         },
       ];
@@ -290,21 +295,41 @@ export function useQualityCheckAgentRun() {
 
         if (detail.run.status !== "running") {
           const plan = slicePlanRef.current;
+          const sliceFailed = detail.run.status === "error" || detail.run.status === "stopped";
           const canContinue =
-            detail.run.status === "completed" &&
             plan &&
             plan.currentIndex < plan.slices.length - 1 &&
-            !stopRequestedRef.current;
+            !stopRequestedRef.current &&
+            (detail.run.status === "completed" || sliceFailed);
+
+          if (sliceFailed && plan && !stopRequestedRef.current) {
+            const errMsg =
+              typeof detail.run.stats === "object" &&
+              detail.run.stats &&
+              "error" in detail.run.stats &&
+              typeof detail.run.stats.error === "string"
+                ? detail.run.stats.error
+                : "Pipeline run failed";
+            completedLogRef.current = [
+              ...visible,
+              {
+                id: `${pollRunId}-failed`,
+                text: errMsg,
+                status: "rejected" as const,
+              },
+            ];
+            setLogLines([...completedLogRef.current]);
+          }
 
           if (canContinue && plan) {
             if (runIdRef.current !== pollRunId) return;
             const nextIndex = plan.currentIndex + 1;
             slicePlanRef.current = { ...plan, currentIndex: nextIndex };
             completedLogRef.current = [
-              ...visible,
+              ...completedLogRef.current,
               {
                 id: `qc-agent-slice-${nextIndex}`,
-                text: `Starting slice ${nextIndex + 1}/${plan.slices.length}`,
+                text: `Starting day ${nextIndex + 1}/${plan.slices.length}`,
                 status: "pending",
               },
             ];
@@ -330,14 +355,29 @@ export function useQualityCheckAgentRun() {
           if (stopRequestedRef.current) return;
 
           const pending = humanReviewQueuedCount(detail.run.stats);
+          const batchHadFailures = completedLogRef.current.some((line) => line.status === "rejected");
           toast({
-            title: detail.run.status === "completed" ? "Agent run finished" : "Agent run stopped",
+            title:
+              detail.run.status === "completed" && !batchHadFailures
+                ? "Agent run finished"
+                : batchHadFailures && plan && plan.slices.length > 1
+                  ? "Agent run finished with errors"
+                  : detail.run.status === "completed"
+                    ? "Agent run finished"
+                    : "Agent run stopped",
             description:
-              detail.run.status === "completed" && pending > 0
-                ? `${pending} item(s) queued on Agents → Pending (try Corrections for tag fixes).`
-                : detail.run.status === "completed"
-                  ? "Run finished — tag fixes may have auto-applied with no pending review. Check the day rows or Agents → All."
-                  : "Check the Agents review queue for outcomes.",
+              batchHadFailures && plan && plan.slices.length > 1
+                ? "Some days failed — see the activity log. Successful days may have auto-applied fixes."
+                : detail.run.status === "completed" && pending > 0
+                  ? `${pending} item(s) queued on Agents → Pending (try Corrections for tag fixes).`
+                  : detail.run.status === "completed"
+                    ? "Run finished — tag fixes may have auto-applied with no pending review. Check the day rows or Agents → All."
+                    : typeof detail.run.stats === "object" &&
+                        detail.run.stats &&
+                        "error" in detail.run.stats &&
+                        typeof detail.run.stats.error === "string"
+                      ? detail.run.stats.error
+                      : "Check the Agents review queue for outcomes.",
           });
         }
       } catch {

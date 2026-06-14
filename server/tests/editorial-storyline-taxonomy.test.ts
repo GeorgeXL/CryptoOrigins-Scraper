@@ -18,7 +18,7 @@ test("maps Canaan mining update to concrete mining storylines", () => {
     summary: "Canaan boosts deployed bitcoin mining capacity to 9.91 EH/s, mines 86 BTC, and grows holdings to 1,750 BTC",
     tags: ["Canaan", "Bitcoin"],
   });
-  assert.deepEqual(labels, ["Mining companies"]);
+  assert.deepEqual(labels, ["Bitcoin mining"]);
   assert.ok(!labels.includes("industry-news"));
 });
 
@@ -57,7 +57,7 @@ test("does not infer derivatives from generic fee management options", () => {
     tags: ["Samourai Wallet"],
   });
 
-  assert.ok(labels.includes("Wallet development"));
+  assert.ok(labels.includes("Wallets & self-custody"));
   assert.equal(labels.includes("Derivatives"), false);
 });
 
@@ -67,7 +67,7 @@ test("maps exchange card purchases to exchanges and payment processors", () => {
     tags: ["Binance", "Bitcoin", "Ethereum", "Litecoin"],
   });
 
-  assert.deepEqual(labels, ["Payment processors"]);
+  assert.deepEqual(labels, ["Bitcoin adoption"]);
 });
 
 test("rejects broad model topics and keeps only hierarchy leaves", () => {
@@ -91,7 +91,7 @@ test("maps macro and financial 2010 summaries into concrete leaves", () => {
       "Nigeria's anti-corruption agency probes $15M in alleged Daimler bribes, underscoring its corruption fight",
     tags: ["Nigeria", "Daimler"],
   });
-  assert.ok(bribery.includes("Fraud and scams"));
+  assert.ok(bribery.includes("Enforcement & crime"));
 
   const labor = inferStorylineLabels({
     summary:
@@ -139,7 +139,7 @@ test("maps Bitcoin-Qt client releases to protocol development under Bitcoin", ()
       "Bitcoin-Qt v0.5.3 introduces critical fixes and improvements to enhance user experience and stability",
     tags: ["Bitcoin", "Bitcoin-Qt"],
   });
-  assert.deepEqual(labels, ["Protocol development"]);
+  assert.deepEqual(labels, ["Protocol & upgrades"]);
 });
 
 test("maps Satoshi doublespend explanation to protocol development", () => {
@@ -148,7 +148,7 @@ test("maps Satoshi doublespend explanation to protocol development", () => {
       "Satoshi explains Bitcoin relies on cryptographic proof, addressing the doublespend issue effectively",
     tags: ["Bitcoin", "Satoshi"],
   });
-  assert.deepEqual(labels, ["Protocol development"]);
+  assert.deepEqual(labels, ["Protocol & upgrades"]);
 });
 
 test("maps exchange expansion stories to trading activity from summary only", () => {
@@ -159,15 +159,15 @@ test("maps exchange expansion stories to trading activity from summary only", ()
 
   assert.deepEqual(
     inferTopicProposal({ summary, tags: ["Bitcoin", "Ruxum"] }),
-    ["Trading activity"],
+    ["Bitcoin price & cycles"],
   );
   assert.deepEqual(
     inferTopicProposal({ summary, articleText: noisyArticle, tags: ["Bitcoin", "Ruxum"] }),
-    ["Trading activity"],
+    ["Bitcoin price & cycles"],
   );
   assert.deepEqual(
     inferStorylineLabels({ summary, articleText: noisyArticle, tags: ["Bitcoin", "Ruxum"] }),
-    ["Trading activity"],
+    ["Bitcoin price & cycles"],
   );
 });
 

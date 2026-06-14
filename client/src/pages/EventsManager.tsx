@@ -84,6 +84,7 @@ import { serializePageState, deserializePageState, type HomePageState } from "@/
 import { extractTopicLabelsFromCategories } from "@/lib/topicCatalog";
 import type { QualityCheckDateInput } from "@shared/quality-check-agent-actions";
 import { getQualityCheckAgentAction, isEmptyQualityCheckSummary } from "@shared/quality-check-agent-actions";
+import { parseIsLocked } from "@/lib/parseIsLocked";
 
 function qualityCheckRowHasSummary(row: { summary?: string | null }): boolean {
   return !isEmptyQualityCheckSummary(row.summary);
@@ -125,6 +126,16 @@ interface QualityViolation {
   tags_version2?: string[] | null;
   readyForTagging?: boolean | null;
   doubleCheckReasoning?: string | null;
+  isLocked?: boolean;
+}
+
+function resolveQualityCheckRowLocked(
+  date: string,
+  opts: { selectedLocked: boolean; rowLocked?: unknown; lockedDates: ReadonlySet<string> },
+): boolean {
+  if (opts.selectedLocked) return true;
+  if (parseIsLocked(opts.rowLocked)) return true;
+  return opts.lockedDates.has(date);
 }
 
 // Main category type definition
@@ -159,6 +170,8 @@ interface HistoricalNewsAnalysis {
   source_url?: string;
   isManualOverride?: boolean;
   isFlagged?: boolean;
+  isLocked?: boolean;
+  googleCheckHappened?: "yes" | "no" | "uncertain" | null;
 }
 
 const PAGE_SIZE_OPTIONS = [50, 200, 500];
@@ -570,6 +583,11 @@ export default function EventsManager() {
     staleTime: 1000 * 60 * 5,
   });
 
+  const lockedDateSet = useMemo(
+    () => new Set((lockedDaysData?.entries ?? []).map((entry) => entry.date)),
+    [lockedDaysData],
+  );
+
   // Fetch missing months (months with incomplete data)
   const { data: missingMonthsData, isLoading: missingMonthsLoading } = useQuery<{ entries: any[]; totalCount: number }>({
     queryKey: ['events-manager-missing-months'],
@@ -662,11 +680,10 @@ export default function EventsManager() {
         
         // Include month if it's completely missing or incomplete
         if (daysPresent < expectedDays) {
-          const monthStart = new Date(year, month - 1, 1);
           const monthName = monthNames[month - 1];
           const missingDays = expectedDays - daysPresent;
           incompleteMonths.push({
-            date: monthStart.toISOString().split('T')[0],
+            date: `${year}-${String(month).padStart(2, '0')}-01`,
             summary: `${monthName} ${year}: ${daysPresent}/${expectedDays} days${year === currentYear && month === currentMonth ? ' (current month)' : ''}`,
             violations: [`Missing ${missingDays} day${missingDays !== 1 ? 's' : ''} in ${monthName} ${year}`],
             length: 0,
@@ -699,187 +716,80 @@ export default function EventsManager() {
     staleTime: 1000 * 60 * 5,
   });
 
-  // Fetch VeriBadge data - Manual
-  const { data: manualData, isLoading: manualLoading } = useQuery<{ entries: any[]; totalCount: number }>({
-    queryKey: ['events-manager-veribadge-manual'],
-    queryFn: async () => {
-      if (!supabase) {
-        console.warn('Supabase not configured for veribadge check');
-        return { entries: [], totalCount: 0 };
-      }
-      
-      const { data, error } = await supabase
+  const fetchGoogleCheckCategory = async (
+    happened: "yes" | "no" | "uncertain" | null,
+  ): Promise<{ entries: any[]; totalCount: number }> => {
+    if (!supabase) {
+      console.warn("Supabase not configured for google check sidebar");
+      return { entries: [], totalCount: 0 };
+    }
+
+    let allData: any[] = [];
+    let from = 0;
+    const batchSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      let query = supabase
         .from("historical_news_analyses")
-        .select("date, summary, veri_badge")
-        .eq("veri_badge", "Manual");
+        .select("date, summary, google_check_happened, is_locked")
+        .range(from, from + batchSize - 1);
 
-      if (error) {
-        console.error('Error fetching manual analyses:', error);
-        throw error;
+      query =
+        happened === null
+          ? query.is("google_check_happened", null)
+          : query.eq("google_check_happened", happened);
+
+      const { data: batchData, error: batchError } = await query;
+
+      if (batchError) {
+        console.error("Error fetching google check analyses:", batchError);
+        throw batchError;
       }
 
-      const entries = (data || []).map((entry: any) => ({
-        date: entry.date,
-        summary: entry.summary || '',
-        veri_badge: entry.veri_badge,
-      }));
+      if (batchData && batchData.length > 0) {
+        allData = allData.concat(batchData);
+        from += batchSize;
+        hasMore = batchData.length === batchSize;
+      } else {
+        hasMore = false;
+      }
+    }
 
-      return {
-        entries,
-        totalCount: entries.length
-      };
-    },
+    const entries = allData.map((entry: any) => ({
+      date: entry.date,
+      summary: entry.summary || "",
+      google_check_happened: entry.google_check_happened ?? null,
+      is_locked: entry.is_locked ?? false,
+    }));
+
+    return {
+      entries,
+      totalCount: entries.length,
+    };
+  };
+
+  const { data: datesApprovedData, isLoading: datesApprovedLoading } = useQuery<{ entries: any[]; totalCount: number }>({
+    queryKey: ["events-manager-google-check-dates-approved"],
+    queryFn: () => fetchGoogleCheckCategory("yes"),
     staleTime: 1000 * 60 * 5,
   });
 
-  // Fetch VeriBadge data - Orphan
-  const { data: orphanData, isLoading: orphanLoading } = useQuery<{ entries: any[]; totalCount: number }>({
-    queryKey: ['events-manager-veribadge-orphan'],
-    queryFn: async () => {
-      if (!supabase) {
-        console.warn('Supabase not configured for veribadge check');
-        return { entries: [], totalCount: 0 };
-      }
-      
-      const { data, error } = await supabase
-        .from("historical_news_analyses")
-        .select("date, summary, veri_badge")
-        .eq("veri_badge", "Orphan");
-
-      if (error) {
-        console.error('Error fetching orphan analyses:', error);
-        throw error;
-      }
-
-      const entries = (data || []).map((entry: any) => ({
-        date: entry.date,
-        summary: entry.summary || '',
-        veri_badge: entry.veri_badge,
-      }));
-
-      return {
-        entries,
-        totalCount: entries.length
-      };
-    },
+  const { data: uncertainData, isLoading: uncertainLoading } = useQuery<{ entries: any[]; totalCount: number }>({
+    queryKey: ["events-manager-google-check-uncertain"],
+    queryFn: () => fetchGoogleCheckCategory("uncertain"),
     staleTime: 1000 * 60 * 5,
   });
 
-  // Fetch VeriBadge data - Verified
-  const { data: verifiedData, isLoading: verifiedLoading } = useQuery<{ entries: any[]; totalCount: number }>({
-    queryKey: ['events-manager-veribadge-verified'],
-    queryFn: async () => {
-      if (!supabase) {
-        console.warn('Supabase not configured for veribadge check');
-        return { entries: [], totalCount: 0 };
-      }
-      
-      const { data, error } = await supabase
-        .from("historical_news_analyses")
-        .select("date, summary, veri_badge")
-        .eq("veri_badge", "Verified");
-
-      if (error) {
-        console.error('Error fetching verified analyses:', error);
-        throw error;
-      }
-
-      const entries = (data || []).map((entry: any) => ({
-        date: entry.date,
-        summary: entry.summary || '',
-        veri_badge: entry.veri_badge,
-      }));
-
-      return {
-        entries,
-        totalCount: entries.length
-      };
-    },
+  const { data: notVerifiedData, isLoading: notVerifiedLoading } = useQuery<{ entries: any[]; totalCount: number }>({
+    queryKey: ["events-manager-google-check-not-verified"],
+    queryFn: () => fetchGoogleCheckCategory(null),
     staleTime: 1000 * 60 * 5,
   });
 
-  // Fetch VeriBadge data - Not Available
-  const { data: notAvailableData, isLoading: notAvailableLoading } = useQuery<{ entries: any[]; totalCount: number }>({
-    queryKey: ['events-manager-veribadge-not-available'],
-    queryFn: async () => {
-      if (!supabase) {
-        console.warn('Supabase not configured for veribadge check');
-        return { entries: [], totalCount: 0 };
-      }
-      
-      const { data, error } = await supabase
-        .from("historical_news_analyses")
-        .select("date, summary, veri_badge")
-        .eq("veri_badge", "Not Available");
-
-      if (error) {
-        console.error('Error fetching not available analyses:', error);
-        throw error;
-      }
-
-      const entries = (data || []).map((entry: any) => ({
-        date: entry.date,
-        summary: entry.summary || '',
-        veri_badge: entry.veri_badge,
-      }));
-
-      return {
-        entries,
-        totalCount: entries.length
-      };
-    },
-    staleTime: 1000 * 60 * 5,
-  });
-
-  // Fetch VeriBadge data - Empty (null or empty string)
-  const { data: emptyVeriBadgeData, isLoading: emptyVeriBadgeLoading } = useQuery<{ entries: any[]; totalCount: number }>({
-    queryKey: ['events-manager-veribadge-empty'],
-    queryFn: async () => {
-      if (!supabase) {
-        console.warn('Supabase not configured for veribadge check');
-        return { entries: [], totalCount: 0 };
-      }
-      
-      // Fetch all entries and filter for null/empty veri_badge
-      let allData: any[] = [];
-      let from = 0;
-      const batchSize = 1000;
-      let hasMore = true;
-
-      while (hasMore) {
-        const { data: batchData, error: batchError } = await supabase
-          .from("historical_news_analyses")
-          .select("date, summary, veri_badge")
-          .range(from, from + batchSize - 1);
-
-        if (batchError) {
-          console.error('Error fetching analyses:', batchError);
-          throw batchError;
-        }
-
-        if (batchData && batchData.length > 0) {
-          allData = allData.concat(batchData);
-          from += batchSize;
-          hasMore = batchData.length === batchSize;
-        } else {
-          hasMore = false;
-        }
-      }
-
-      // Filter for null or empty veri_badge
-      const entries = allData
-        .filter((entry: any) => !entry.veri_badge || entry.veri_badge.trim() === '')
-        .map((entry: any) => ({
-          date: entry.date,
-          summary: entry.summary || '',
-          veri_badge: null,
-        }));
-
-      return {
-        entries,
-        totalCount: entries.length
-      };
-    },
+  const { data: didntHappenData, isLoading: didntHappenLoading } = useQuery<{ entries: any[]; totalCount: number }>({
+    queryKey: ["events-manager-google-check-didnt-happen"],
+    queryFn: () => fetchGoogleCheckCategory("no"),
     staleTime: 1000 * 60 * 5,
   });
 
@@ -972,46 +882,39 @@ export default function EventsManager() {
     return items;
   }, [qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, qualityLoading, emptySummaryLoading, untaggedLoading, missingMonthsLoading, flaggedLoading, topicQualityLoading]);
 
-  // Build VeriBadge items for sidebar
+  // Build Google Check items for sidebar
   const veriBadgeItems = useMemo<QualityCheckItem[]>(() => {
     return [
       {
-        id: 'manual',
-        label: 'Manual',
-        count: manualData?.totalCount || 0,
-        hasIssues: false, // No status indicators for VeriBadge
-        isLoading: manualLoading,
+        id: "dates-approved",
+        label: "Dates approved",
+        count: datesApprovedData?.totalCount || 0,
+        hasIssues: false,
+        isLoading: datesApprovedLoading,
       },
       {
-        id: 'orphan',
-        label: 'Orphan',
-        count: orphanData?.totalCount || 0,
+        id: "uncertain",
+        label: "Uncertain",
+        count: uncertainData?.totalCount || 0,
         hasIssues: false,
-        isLoading: orphanLoading,
+        isLoading: uncertainLoading,
       },
       {
-        id: 'verified',
-        label: 'Verified',
-        count: verifiedData?.totalCount || 0,
+        id: "not-verified",
+        label: "Not verified",
+        count: notVerifiedData?.totalCount || 0,
         hasIssues: false,
-        isLoading: verifiedLoading,
+        isLoading: notVerifiedLoading,
       },
       {
-        id: 'not-available',
-        label: 'Not available',
-        count: notAvailableData?.totalCount || 0,
+        id: "didnt-happen",
+        label: "Didn't happen",
+        count: didntHappenData?.totalCount || 0,
         hasIssues: false,
-        isLoading: notAvailableLoading,
-      },
-      {
-        id: 'empty',
-        label: 'Empty',
-        count: emptyVeriBadgeData?.totalCount || 0,
-        hasIssues: false,
-        isLoading: emptyVeriBadgeLoading,
+        isLoading: didntHappenLoading,
       },
     ];
-  }, [manualData, orphanData, verifiedData, notAvailableData, emptyVeriBadgeData, manualLoading, orphanLoading, verifiedLoading, notAvailableLoading, emptyVeriBadgeLoading]);
+  }, [datesApprovedData, uncertainData, notVerifiedData, didntHappenData, datesApprovedLoading, uncertainLoading, notVerifiedLoading, didntHappenLoading]);
 
   const lockStats = useMemo<LockStatsItem>(
     () => ({
@@ -1034,65 +937,53 @@ export default function EventsManager() {
       }));
     }
 
-    // Handle VeriBadge selections
+    // Handle Google Check sidebar selections
     if (selectedVeriBadge) {
-      if (selectedVeriBadge === 'manual') {
-        return (manualData?.entries || []).map((entry: any) => ({
-          date: entry.date,
-          summary: entry.summary || '',
-          violations: [`VeriBadge: ${entry.veri_badge}`],
-          length: entry.summary?.length || 0,
-          tags_version2: null,
-        }));
+      const mapGoogleCheckEntry = (entry: any, label: string) => ({
+        date: entry.date,
+        summary: entry.summary || "",
+        violations: [label],
+        length: entry.summary?.length || 0,
+        tags_version2: null,
+        isLocked: parseIsLocked(entry.is_locked),
+        googleCheckHappened: entry.google_check_happened ?? null,
+      });
+
+      if (selectedVeriBadge === "dates-approved") {
+        return (datesApprovedData?.entries || []).map((entry: any) =>
+          mapGoogleCheckEntry(entry, "Google Check: Approved (yes)"),
+        );
       }
-      if (selectedVeriBadge === 'orphan') {
-        return (orphanData?.entries || []).map((entry: any) => ({
-          date: entry.date,
-          summary: entry.summary || '',
-          violations: [`VeriBadge: ${entry.veri_badge}`],
-          length: entry.summary?.length || 0,
-          tags_version2: null,
-        }));
+      if (selectedVeriBadge === "uncertain") {
+        return (uncertainData?.entries || []).map((entry: any) =>
+          mapGoogleCheckEntry(entry, "Google Check: Uncertain"),
+        );
       }
-      if (selectedVeriBadge === 'verified') {
-        return (verifiedData?.entries || []).map((entry: any) => ({
-          date: entry.date,
-          summary: entry.summary || '',
-          violations: [`VeriBadge: ${entry.veri_badge}`],
-          length: entry.summary?.length || 0,
-          tags_version2: null,
-        }));
+      if (selectedVeriBadge === "not-verified") {
+        return (notVerifiedData?.entries || []).map((entry: any) =>
+          mapGoogleCheckEntry(entry, "Google Check: Not verified"),
+        );
       }
-      if (selectedVeriBadge === 'not-available') {
-        return (notAvailableData?.entries || []).map((entry: any) => ({
-          date: entry.date,
-          summary: entry.summary || '',
-          violations: [`VeriBadge: ${entry.veri_badge}`],
-          length: entry.summary?.length || 0,
-          tags_version2: null,
-        }));
-      }
-      if (selectedVeriBadge === 'empty') {
-        return (emptyVeriBadgeData?.entries || []).map((entry: any) => ({
-          date: entry.date,
-          summary: entry.summary || '',
-          violations: ['VeriBadge: Empty'],
-          length: entry.summary?.length || 0,
-          tags_version2: null,
-        }));
+      if (selectedVeriBadge === "didnt-happen") {
+        return (didntHappenData?.entries || []).map((entry: any) =>
+          mapGoogleCheckEntry(entry, "Google Check: Didn't happen"),
+        );
       }
     }
 
     if (!selectedQualityCheck) return [];
     
     if (selectedQualityCheck === 'empty-summary') {
-      return (emptySummaryData?.entries || []).map((entry: any) => ({
-        date: entry.date,
-        summary: entry.summary || '',
-        violations: ['Empty summary'],
-        length: 0,
-        tags_version2: null,
-      }));
+      return (emptySummaryData?.entries || []).map((entry: { date: string; summary?: string; kind?: string }) => {
+        const isMissingDay = entry.kind === 'missing-day';
+        return {
+          date: entry.date,
+          summary: isMissingDay ? 'Missing day — no analysis row' : (entry.summary || ''),
+          violations: [isMissingDay ? 'Missing day' : 'Empty summary'],
+          length: 0,
+          tags_version2: null,
+        };
+      });
     }
 
     if (selectedQualityCheck === 'untagged') {
@@ -1168,7 +1059,7 @@ export default function EventsManager() {
     if (!type) return violations;
 
     return applyQualityCheckSummaryFilter(violations.filter(type.filterFn), selectedQualityCheck);
-  }, [selectedLocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, lockedDaysData, manualData, orphanData, verifiedData, notAvailableData, emptyVeriBadgeData]);
+  }, [selectedLocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, lockedDaysData, datesApprovedData, uncertainData, notVerifiedData, didntHappenData]);
 
   const qualityCheckAgentRows = useMemo<QualityCheckDateInput[]>(() => {
     return filteredQualityViolations.map((violation) => ({
@@ -2228,14 +2119,14 @@ export default function EventsManager() {
               <Card className="pt-0 px-6 pb-6 border-0">
             {(selectedQualityCheck || selectedVeriBadge || selectedLocked) ? (
               <>
-                {/* Quality Check, Locked, or VeriBadge View */}
+                {/* Quality Check, Locked, or Google Check View */}
                 <div className="mb-3 flex items-start justify-between gap-4">
                   <div className="flex items-center space-x-3">
                     <h2 className="text-lg font-semibold text-foreground">
                       {selectedLocked
                         ? "Locked"
                         : selectedVeriBadge 
-                        ? veriBadgeItems.find(t => t.id === selectedVeriBadge)?.label || 'VeriBadge'
+                        ? veriBadgeItems.find(t => t.id === selectedVeriBadge)?.label || 'Google Check'
                         : qualityCheckItems.find(t => t.id === selectedQualityCheck)?.label || 'Quality Check'}
                     </h2>
                     <Badge variant="secondary" className="font-normal">
@@ -2301,21 +2192,24 @@ export default function EventsManager() {
                     url: undefined,
                     source_url: undefined,
                     isManualOverride: false,
-                    isLocked: selectedLocked,
+                    isLocked: resolveQualityCheckRowLocked(violation.date, {
+                      selectedLocked,
+                      rowLocked: (violation as { isLocked?: boolean }).isLocked,
+                      lockedDates: lockedDateSet,
+                    }),
+                    googleCheckHappened: (violation as { googleCheckHappened?: "yes" | "no" | "uncertain" | null }).googleCheckHappened ?? null,
                   }))}
                   isLoading={
                     selectedLocked
                       ? lockedDaysLoading
-                      : selectedVeriBadge === 'manual'
-                      ? manualLoading
-                      : selectedVeriBadge === 'orphan'
-                      ? orphanLoading
-                      : selectedVeriBadge === 'verified'
-                      ? verifiedLoading
-                      : selectedVeriBadge === 'not-available'
-                      ? notAvailableLoading
-                      : selectedVeriBadge === 'empty'
-                      ? emptyVeriBadgeLoading
+                      : selectedVeriBadge === "dates-approved"
+                      ? datesApprovedLoading
+                      : selectedVeriBadge === "uncertain"
+                      ? uncertainLoading
+                      : selectedVeriBadge === "not-verified"
+                      ? notVerifiedLoading
+                      : selectedVeriBadge === "didnt-happen"
+                      ? didntHappenLoading
                       : selectedQualityCheck === 'empty-summary' 
                       ? emptySummaryLoading 
                       : selectedQualityCheck === 'untagged'

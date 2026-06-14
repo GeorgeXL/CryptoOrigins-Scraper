@@ -126,3 +126,27 @@ test("resolveQualityCheckRunWindows ignores empty-summary days for tag agent", (
   assert.equal(windows[0]?.dateFrom, "2010-01-02");
   assert.equal(windows[0]?.dateTo, "2010-01-02");
 });
+
+test("resolveQualityCheckRunWindows runs one pipeline job per calendar day", () => {
+  const windows = resolveQualityCheckRunWindows(
+    "too-long",
+    [
+      { date: "2010-01-01", summary: "x".repeat(111) },
+      { date: "2010-01-02", summary: "y".repeat(111) },
+    ],
+    new Set(),
+  );
+  assert.equal(windows.length, 2);
+  assert.deepEqual(windows[0], {
+    dateFrom: "2010-01-01",
+    dateTo: "2010-01-01",
+    maxDays: 1,
+    totalDays: 1,
+  });
+  assert.deepEqual(windows[1], {
+    dateFrom: "2010-01-02",
+    dateTo: "2010-01-02",
+    maxDays: 1,
+    totalDays: 1,
+  });
+});

@@ -13,7 +13,7 @@ test("keeps concrete market summaries from being forced into weak replacement re
   const result = currentStorylineQuality({
     summary: "Bitcoin holds its 50-week moving average as traders watch for bear market exhaustion",
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["Bitcoin price action"],
+    topicCategories: ["Bitcoin price & cycles"],
   });
 
   assert.equal(result.acceptable, true);

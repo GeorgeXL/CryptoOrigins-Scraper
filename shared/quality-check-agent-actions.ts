@@ -290,8 +290,14 @@ export function resolveQualityCheckRunWindows(
     return monthWindows.flatMap((window) => slicePipelineWindow(window));
   }
 
-  const dates = pickRows.map((row) => row.date).filter(isIsoDate);
-  return clusterIsoDatesIntoWindows(dates).flatMap((window) => slicePipelineWindow(window));
+  const dates = [...new Set(pickRows.map((row) => row.date).filter(isIsoDate))].sort();
+  // One calendar day per pipeline run — clearer progress and avoids batching unrelated fixes.
+  return dates.map((date) => ({
+    dateFrom: date,
+    dateTo: date,
+    maxDays: 1,
+    totalDays: 1,
+  }));
 }
 
 export function getQualityCheckAgentAction(checkId: string | null | undefined): QualityCheckAgentAction | null {

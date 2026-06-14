@@ -1852,6 +1852,17 @@ export default function AdminAgentsPage() {
   const [pipelineDetail, setPipelineDetail] = useState<PipelineRunDetail | null>(null);
   const [pipelineMaxDays, setPipelineMaxDays] = useState("60");
   const [reviewItems, setReviewItems] = useState<HumanReviewItem[]>([]);
+  const sortedReviewItems = useMemo(
+    () =>
+      [...reviewItems].sort((a, b) => {
+        const dateA = a.eventDate ?? "";
+        const dateB = b.eventDate ?? "";
+        const byDate = dateA.localeCompare(dateB);
+        if (byDate !== 0) return byDate;
+        return a.id.localeCompare(b.id);
+      }),
+    [reviewItems],
+  );
   const [reviewStatus, setReviewStatus] = useState<"pending" | "approved" | "rejected">("pending");
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewRefreshCountdown, setReviewRefreshCountdown] = useState<number | null>(null);
@@ -2654,7 +2665,7 @@ export default function AdminAgentsPage() {
                       </p>
                     ) : (
                       <div className="space-y-4">
-                        {reviewItems.map((item) => (
+                        {sortedReviewItems.map((item) => (
                           <HumanReviewItemCard
                             key={item.id}
                             item={item}

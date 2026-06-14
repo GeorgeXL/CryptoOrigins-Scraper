@@ -7,8 +7,15 @@ import { MAIN_EVENTS_CHECK_CACHE_VERSION } from "../../../shared/leaf-agent-conf
 import type {
   MainEventsDismissCategory,
   MainEventsDismissals,
+  MainEventsVerificationDates,
+  MainEventsVerificationStatus,
 } from "../../../shared/leaf-agent-config";
-import { EMPTY_MAIN_EVENTS_DISMISSALS } from "../../../shared/leaf-agent-config";
+import {
+  EMPTY_MAIN_EVENTS_DISMISSALS,
+  EMPTY_MAIN_EVENTS_VERIFICATION_DATES,
+} from "../../../shared/leaf-agent-config";
+import { verificationStatusRequiresDayLock } from "../../../shared/main-events-verification-lock";
+import { tryLockDay } from "../day-lock";
 import { readCanonicalSourceUrl } from "./coverage-constants";
 import type { SkippedCanonicalDate, ValidCanonicalDate } from "./coverage-schemas";
 
@@ -28,7 +35,14 @@ export type MainEventsGeminiCacheMeta = {
   cacheVersion: string | null;
 };
 
-export type { MainEventsDismissCategory, MainEventsDismissals };
+export type { MainEventsDismissCategory, MainEventsDismissals, MainEventsVerificationDates };
+
+function parseDateList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (value): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value),
+  );
+}
 
 function parseDismissals(raw: unknown): MainEventsDismissals {
   if (!raw || typeof raw !== "object") {
@@ -47,6 +61,96 @@ function parseDismissals(raw: unknown): MainEventsDismissals {
     missing: readDates("missing"),
     extra: readDates("extra"),
   };
+}
+
+export function parseVerificationDates(raw: unknown): MainEventsVerificationDates {
+  if (!raw || typeof raw !== "object") {
+    return { ...EMPTY_MAIN_EVENTS_VERIFICATION_DATES };
+  }
+  const row = raw as Record<string, unknown>;
+  return {
+    matched: parseDateList(row.matched).sort((a, b) => a.localeCompare(b)),
+    pending: parseDateList(row.pending).sort((a, b) => a.localeCompare(b)),
+    rejected: parseDateList(row.rejected).sort((a, b) => a.localeCompare(b)),
+  };
+}
+
+export async function loadMainEventsVerificationDates(leaf: string): Promise<MainEventsVerificationDates> {
+  const normalizedLeaf = normalizeTopicValue(leaf);
+  const [row] = await db
+    .select({ verificationDates: mainEventsCheckCache.verificationDates })
+    .from(mainEventsCheckCache)
+    .where(eq(mainEventsCheckCache.normalizedLeaf, normalizedLeaf))
+    .limit(1);
+
+  if (!row) return { ...EMPTY_MAIN_EVENTS_VERIFICATION_DATES };
+  return parseVerificationDates(row.verificationDates);
+}
+
+export async function applyMainEventsVerificationUpdates(opts: {
+  leaf: string;
+  updates: Array<{ date: string; status: MainEventsVerificationStatus }>;
+}): Promise<MainEventsVerificationDates> {
+  if (opts.updates.length === 0) {
+    return loadMainEventsVerificationDates(opts.leaf);
+  }
+
+  for (const entry of opts.updates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.date)) {
+      throw new Error("Invalid date format. Use YYYY-MM-DD");
+    }
+  }
+
+  const normalizedLeaf = normalizeTopicValue(opts.leaf);
+  const [row] = await db
+    .select()
+    .from(mainEventsCheckCache)
+    .where(eq(mainEventsCheckCache.normalizedLeaf, normalizedLeaf))
+    .limit(1);
+
+  if (!row) {
+    throw new Error("No main events check saved for this leaf yet — run Prepare all first");
+  }
+
+  const current = parseVerificationDates(row.verificationDates);
+  const matched = new Set(current.matched);
+  const pending = new Set(current.pending);
+  const rejected = new Set(current.rejected);
+
+  for (const entry of opts.updates) {
+    matched.delete(entry.date);
+    pending.delete(entry.date);
+    rejected.delete(entry.date);
+    if (entry.status === "matched") {
+      matched.add(entry.date);
+    } else if (entry.status === "rejected") {
+      rejected.add(entry.date);
+    } else {
+      pending.add(entry.date);
+    }
+  }
+
+  const next: MainEventsVerificationDates = {
+    matched: [...matched].sort((a, b) => a.localeCompare(b)),
+    pending: [...pending].sort((a, b) => a.localeCompare(b)),
+    rejected: [...rejected].sort((a, b) => a.localeCompare(b)),
+  };
+
+  await db
+    .update(mainEventsCheckCache)
+    .set({
+      verificationDates: next,
+      updatedAt: new Date(),
+    })
+    .where(eq(mainEventsCheckCache.normalizedLeaf, normalizedLeaf));
+
+  for (const entry of opts.updates) {
+    if (verificationStatusRequiresDayLock(entry.status)) {
+      await tryLockDay(entry.date);
+    }
+  }
+
+  return next;
 }
 
 export async function loadMainEventsDismissals(leaf: string): Promise<MainEventsDismissals> {
@@ -201,6 +305,32 @@ export async function loadCachedMainEvents(leaf: string): Promise<CachedMainEven
   return parseCachedRow(row);
 }
 
+export type MainEventsCacheEntry = {
+  leaf: string;
+  payload: CachedMainEventsPayload;
+  dismissals: MainEventsDismissals;
+  verification: MainEventsVerificationDates;
+};
+
+/** All valid cache rows for the current cache version (single query). */
+export async function loadAllValidMainEventsCacheEntries(): Promise<Map<string, MainEventsCacheEntry>> {
+  const rows = await db.select().from(mainEventsCheckCache);
+  const map = new Map<string, MainEventsCacheEntry>();
+
+  for (const row of rows) {
+    const payload = parseCachedRow(row);
+    if (!payload) continue;
+    map.set(row.normalizedLeaf, {
+      leaf: row.storylineLeaf,
+      payload,
+      dismissals: parseDismissals(row.dismissedDates),
+      verification: parseVerificationDates(row.verificationDates),
+    });
+  }
+
+  return map;
+}
+
 export async function saveCachedMainEvents(
   leaf: string,
   payload: Omit<CachedMainEventsPayload, "fetchedAt"> & { fetchedAt?: Date },
@@ -218,6 +348,7 @@ export async function saveCachedMainEvents(
       notes: payload.notes ?? null,
       canonicalDates: payload.canonical,
       skippedCanonical: payload.skippedCanonical,
+      verificationDates: { ...EMPTY_MAIN_EVENTS_VERIFICATION_DATES },
       fetchedAt,
       updatedAt: fetchedAt,
     })
@@ -230,6 +361,7 @@ export async function saveCachedMainEvents(
         notes: payload.notes ?? null,
         canonicalDates: payload.canonical,
         skippedCanonical: payload.skippedCanonical,
+        verificationDates: { ...EMPTY_MAIN_EVENTS_VERIFICATION_DATES },
         fetchedAt,
         updatedAt: fetchedAt,
       },

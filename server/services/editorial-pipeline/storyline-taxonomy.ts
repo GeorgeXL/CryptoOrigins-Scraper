@@ -1,7 +1,14 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
 import { historicalNewsAnalyses, pageTopics, topics } from "@shared/schema";
-import { TOPIC_HIERARCHY_LEAVES, TOPIC_HIERARCHY_ROOTS, topicGroupForLeaf } from "@shared/topic-hierarchy";
+import {
+  TOPIC_HIERARCHY,
+  TOPIC_HIERARCHY_LEAVES,
+  TOPIC_HIERARCHY_ROOTS,
+  topicGroupForLeaf,
+} from "@shared/topic-hierarchy";
+import { resolveStorylineLeafLabel } from "@shared/topic-hierarchy-migration";
+import { topicLabelsFromRow } from "./tools";
 
 type StorylineInput = {
   title?: string | null;
@@ -20,12 +27,16 @@ const KNOWN_NEW_STORYLINES: Record<string, { parent: string; sortOrder: number }
 const ROOT_STORYLINE_LABELS = new Set([
   ...TOPIC_HIERARCHY_ROOTS.map(canonicalLabel),
   "macroeconomics",
+  "macro & policy",
+  "crypto policy & regulation",
   "regulation & policy",
   "companies & infrastructure",
+  "companies & adoption",
+  "web3 & other crypto",
+  "other crypto",
   "people",
   "culture & narrative",
   "security & crime",
-  "web3 & other crypto",
 ]);
 
 const KNOWN_LEAF_STORYLINE_LABELS = new Set(TOPIC_HIERARCHY_LEAVES.map(canonicalLabel));
@@ -108,19 +119,20 @@ const STORYLINE_LEAF_TRIGGERS: Partial<Record<(typeof TOPIC_HIERARCHY_LEAVES)[nu
     "spending",
     "funding",
   ],
-  "Bitcoin price action": ["price", "rally", "crash", "traders", "bitcoin", "btc", "bear", "bull"],
+  "Bitcoin price & cycles": ["price", "rally", "crash", "traders", "bitcoin", "btc", "bear", "bull", "cycle"],
   "Banking stress": ["bank", "shares", "collapse", "bailout", "failure", "rescue"],
   "Labor market": ["unemployment", "strike", "union", "labor", "labour", "jobs"],
-  "Housing": ["mortgage", "housing", "fannie", "freddie"],
-  "Fraud and scams": ["fraud", "scam", "bribery", "corruption", "ponzi"],
-  "Monetary policy": ["inflation", "interest", "federal reserve", "fed", "monetary"],
-  "Payment processors": ["paypal", "bitpay", "merchant", "payment processor", "credit card"],
-  "DeFi": ["defi", "uniswap", "aave", "lending protocol"],
+  Housing: ["mortgage", "housing", "fannie", "freddie"],
+  "Enforcement & crime": ["fraud", "scam", "bribery", "corruption", "ponzi", "seizure", "arrest", "indictment"],
+  "Monetary policy & rates": ["inflation", "interest", "federal reserve", "fed", "monetary", "central bank", "qe"],
+  "Bitcoin adoption": ["paypal", "bitpay", "merchant", "payment processor", "credit card", "donations", "retailer"],
+  DeFi: ["defi", "uniswap", "aave", "lending protocol"],
   "Halving events": ["halving", "halvening", "block reward"],
-  "Protocol development": ["bitcoin-qt", "bitcoind", "protocol", "client", "release", "bugfix", "bug fix"],
-  "Wallet development": ["wallet", "bitcoin-qt", "self-custody", "custody"],
-  "Trading activity": ["trading", "trade", "trades", "expansion", "euros", "pounds", "francs"],
-  "Exchanges": ["exchange", "trading platform", "binance", "coinbase", "kraken"],
+  "Protocol & upgrades": ["bitcoin-qt", "bitcoind", "protocol", "client", "release", "bugfix", "bug fix", "bip", "segwit", "taproot"],
+  "Wallets & self-custody": ["wallet", "bitcoin-qt", "self-custody", "custody", "trezor", "ledger"],
+  Exchanges: ["exchange", "trading platform", "binance", "coinbase", "kraken", "mt.gox", "bitfinex"],
+  "Institutional Bitcoin & flows": ["blackrock", "fidelity", "institutional", "custody", "inflows", "liquidity", "microstrategy", "treasury"],
+  "Smart contracts & L1s": ["ethereum", "smart contract", "solana", "cardano", "polkadot", "layer 1", "altcoin"],
 };
 
 function pickBestStorylineLeaf(corpus: string): string | null {
@@ -184,13 +196,13 @@ function matchStorylinePatterns(corpus: string): string[] {
     addUnique(out, "Politics and elections");
   }
   if (/\b(bitcoin-qt|bitcoin qt|bitcoind)\b/.test(corpus)) {
-    addUnique(out, "Protocol development");
+    addUnique(out, "Protocol & upgrades");
   }
   if (
     /\b(critical fix|bug fix|bugfix|improvements?|stability|user experience)\b/.test(corpus) &&
     /\b(bitcoin-qt|bitcoin qt|bitcoind|v0\.|version \d+\.\d+)\b/.test(corpus)
   ) {
-    addUnique(out, "Protocol development");
+    addUnique(out, "Protocol & upgrades");
   }
 
   if (/\b(halving|halvening|block reward|subsidy)\b/.test(corpus)) {
@@ -206,32 +218,32 @@ function matchStorylinePatterns(corpus: string): string[] {
     /\b(doublespend|double-spend|double spend|cryptographic proof|byzantine generals)\b/.test(corpus) &&
     /\b(bitcoin|btc|satoshi|blockchain)\b/.test(corpus)
   ) {
-    addUnique(out, "Protocol development");
+    addUnique(out, "Protocol & upgrades");
   }
   if (/\b(canaan|bitmain|marathon|riot|mining company|mining companies)\b/.test(corpus)) {
-    addUnique(out, "Mining companies");
+    addUnique(out, "Bitcoin mining");
   }
   if (
     /\b(bitcoin trading|trading in|allows? trading|trade bitcoin|trading platform|trading desk)\b/.test(corpus) ||
     (/\b(trading|trade|trades|expansion)\b/.test(corpus) && /\b(bitcoin|btc)\b/.test(corpus))
   ) {
-    addUnique(out, "Trading activity");
+    addUnique(out, "Bitcoin price & cycles");
   }
   if (
     /\b(mining|miner|miners|hashrate|difficulty|proof of work|proof-of-work)\b/.test(corpus) &&
     /\b(bitcoin|btc|hashrate|block reward|mining pool|asic|proof of work|proof-of-work)\b/.test(corpus) &&
     !/\b(police|parliamentary|inquiry|investigation|credit rating)\b/.test(corpus)
   ) {
-    addUnique(out, "Mining evolution");
+    addUnique(out, "Bitcoin mining");
   }
   if (/\b(mining pool|poolin|antpool|f2pool|slush pool)\b/.test(corpus)) {
-    addUnique(out, "Mining pools");
+    addUnique(out, "Bitcoin mining");
   }
   if (/\b(solana|cardano|avalanche|polkadot|cosmos|near protocol|algorand|tezos|layer 1|layer-1|l1 network)\b/.test(corpus)) {
-    addUnique(out, "Layer 1 networks");
+    addUnique(out, "Smart contracts & L1s");
   }
   if (/\b(ethereum|smart contract|smart contracts)\b/.test(corpus) && !/\bbuy\b.{0,80}\bethereum\b/.test(corpus)) {
-    addUnique(out, "Ethereum and smart contracts");
+    addUnique(out, "Smart contracts & L1s");
   }
   if (/\b(defi|decentralized finance|aave|uniswap|maker|compound|curve|yearn|andre cronje|portal|e-mode|emode|lending protocol)\b/.test(corpus)) {
     addUnique(out, "DeFi");
@@ -246,37 +258,37 @@ function matchStorylinePatterns(corpus: string): string[] {
     addUnique(out, "Derivatives");
   }
   if (/\b(price|momentum|traders?|bottom|top|rally|crash|sell[- ]?off|breaks? down|downtrend|trading volume|market cap|all[- ]?time high|ath|bear market|bull market|whales?|moving average|bullish|bearish)\b/.test(corpus)) {
-    addUnique(out, "Bitcoin price action");
+    addUnique(out, "Bitcoin price & cycles");
   }
   if (/\b(bitcoin|btc)\b/.test(corpus) && /\b(support|resistance)\b/.test(corpus)) {
-    addUnique(out, "Bitcoin price action");
+    addUnique(out, "Bitcoin price & cycles");
   }
   if (/\b(cycle|post-halving|market cycle|four[- ]year|bottom indicator|classic bottom)\b/.test(corpus)) {
-    addUnique(out, "Market cycles");
+    addUnique(out, "Bitcoin price & cycles");
   }
   if (/\b(etf|exchange-traded|trust|fund|investment product|grayscale)\b/.test(corpus)) {
     addUnique(out, "ETFs and investment products");
   }
   if (/\b(liquidity|flows?|inflows?|outflows?)\b/.test(corpus)) {
-    addUnique(out, "Liquidity and flows");
+    addUnique(out, "Institutional Bitcoin & flows");
   }
   if (/\b(bitcoin core|core developer|maintainer)\b/.test(corpus)) {
-    addUnique(out, "Bitcoin Core");
+    addUnique(out, "Protocol & upgrades");
   }
   if (/\b(bip|taproot|segwit|soft fork|hard fork|upgrade|protocol|utreexo|utxo set|p2p encryption)\b/.test(corpus)) {
-    addUnique(out, "BIPs and upgrades");
+    addUnique(out, "Protocol & upgrades");
   }
   if (/\b(lightning|layer 2|layer-2|scaling|sidechain)\b/.test(corpus)) {
     addUnique(out, "Scaling and Layer 2");
   }
   if (/\b(node|nodes|full node|infrastructure|utreexo|utxo set|sync bitcoin)\b/.test(corpus)) {
-    addUnique(out, "Node infrastructure");
+    addUnique(out, "Protocol & upgrades");
   }
   if (/\b(wallet|self-custody|self custody|custody|private key|seed phrase)\b/.test(corpus)) {
-    addUnique(out, "Wallet development");
+    addUnique(out, "Wallets & self-custody");
   }
   if (/\b(paypal|bitpay|gocoin|merchant|merchants|retailer|retailers|store|stores|payment processor|payment processors|bitcoin atm|atm|cash purchases?|donations?|credit cards?|debit cards?|buy bitcoin|buy cryptocurrency|card purchases?)\b/.test(corpus)) {
-    addUnique(out, "Payment processors");
+    addUnique(out, "Bitcoin adoption");
   }
   if (/\b(exchange|binance|coinbase|kraken|bitfinex|ftx|mt\.?\s*gox|bitstamp|bitbank)\b/.test(corpus)) {
     addUnique(out, "Exchanges");
@@ -285,7 +297,7 @@ function matchStorylinePatterns(corpus: string): string[] {
     addUnique(out, "Housing");
   }
   if (/\b(blackrock|fidelity|jpmorgan|goldman|bank|building society|fannie mae|freddie mac|financial institution|institutional)\b/.test(corpus)) {
-    addUnique(out, "Financial institutions");
+    addUnique(out, "Institutional Bitcoin & flows");
   }
   if (/\b(bitlicense|money transmitter|licens(e|ing)|regulat|compliance|policy|law|legal|court|lawsuit)\b/.test(corpus)) {
     addUnique(out, "Securities regulation");
@@ -306,10 +318,10 @@ function matchStorylinePatterns(corpus: string): string[] {
     addUnique(out, "Politics and elections");
   }
   if (/\b(inflation|cpi|interest rate|federal reserve|fed|monetary policy)\b/.test(corpus)) {
-    addUnique(out, "Monetary policy");
+    addUnique(out, "Monetary policy & rates");
   }
   if (/\b(central bank|ecb|bank of england|boj|pboc)\b/.test(corpus)) {
-    addUnique(out, "Central banks");
+    addUnique(out, "Monetary policy & rates");
   }
   if (/\b(aib|bank shares?|shares collapse|shareholders?|banking crisis|bank rescue|bank bailout|failed bank|bank failure)\b/.test(corpus)) {
     addUnique(out, "Banking stress");
@@ -327,16 +339,16 @@ function matchStorylinePatterns(corpus: string): string[] {
     addUnique(out, "FX and currencies");
   }
   if (/\b(hack|exploit|breach|stolen|theft|ronin|bridge exploit|bridge hack)\b/.test(corpus)) {
-    addUnique(out, "Hacks and exploits");
+    addUnique(out, "Exchanges");
   }
   if (/\b(fraud|scam|ponzi|corruption|anti-corruption|bribery|bribes?)\b/.test(corpus)) {
-    addUnique(out, "Fraud and scams");
+    addUnique(out, "Enforcement & crime");
   }
   if (/\b(fake|counterfeit|forged|bogus)\b/.test(corpus) && /\b(bond|treasury|securities?|banknote)\b/.test(corpus)) {
-    addUnique(out, "Fraud and scams");
+    addUnique(out, "Enforcement & crime");
   }
   if (/\b(mafia|counterfeit bonds?|fake bonds?|forged bonds?)\b/.test(corpus)) {
-    addUnique(out, "Fraud and scams");
+    addUnique(out, "Enforcement & crime");
   }
   if (/\b(credit rating agencies?|rating agencies?|moody'?s|standard & poor|s&p|fitch ratings?)\b/.test(corpus)) {
     addUnique(out, "Securities regulation");
@@ -364,7 +376,7 @@ function matchStorylinePatterns(corpus: string): string[] {
     addUnique(out, "Developer ecosystem");
   }
   if (/\b(privacy|encryption|p2p encryption|self-custody|self custody)\b/.test(corpus)) {
-    addUnique(out, "Privacy and self-custody");
+    addUnique(out, "Wallets & self-custody");
   }
   if (/\b(wikileaks|censor|censorship|speech|free speech)\b/.test(corpus)) {
     addUnique(out, "Censorship resistance");
@@ -467,15 +479,75 @@ export function inferStorylineLabels(input: StorylineInput): string[] {
   return inferStorylineLabelsFromCorpus(corpusFrom(input), input.modelTopics);
 }
 
+async function ensureGroupTopic(groupName: string, existing: TopicRow[]): Promise<TopicRow | null> {
+  const key = canonicalLabel(groupName);
+  const direct = existing.find((t) => canonicalLabel(t.name) === key);
+  if (direct) return direct;
+
+  const groupIndex = TOPIC_HIERARCHY.findIndex((group) => canonicalLabel(group.name) === key);
+  if (groupIndex < 0) return null;
+
+  const inserted = await db
+    .insert(topics)
+    .values({
+      name: groupName,
+      slug: slugify(groupName),
+      parentTopicId: null,
+      sortOrder: groupIndex * 100,
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  if (inserted[0]) return inserted[0];
+
+  const refreshed = await db.select().from(topics);
+  return refreshed.find((t) => canonicalLabel(t.name) === key) ?? null;
+}
+
 async function ensureStorylineTopic(label: string, existing: TopicRow[]): Promise<TopicRow | null> {
   const key = canonicalLabel(label);
   const direct = existing.find((t) => canonicalLabel(t.name) === key || canonicalLabel(t.slug ?? "") === slugify(label));
   if (direct) return direct;
 
+  if (KNOWN_LEAF_STORYLINE_LABELS.has(key)) {
+    const parentName = topicGroupForLeaf(label);
+    if (!parentName) return null;
+
+    let parent = existing.find((t) => canonicalLabel(t.name) === canonicalLabel(parentName));
+    if (!parent) {
+      parent = (await ensureGroupTopic(parentName, existing)) ?? undefined;
+      if (parent) existing.push(parent);
+    }
+    if (!parent) return null;
+
+    const group = TOPIC_HIERARCHY.find((entry) => entry.name === parentName);
+    const leafIndex = group?.leaves.indexOf(label) ?? 0;
+
+    const inserted = await db
+      .insert(topics)
+      .values({
+        name: label,
+        slug: `${slugify(parent.name)}-${slugify(label)}`,
+        parentTopicId: parent.id,
+        sortOrder: leafIndex,
+      })
+      .onConflictDoNothing()
+      .returning();
+
+    if (inserted[0]) return inserted[0];
+
+    const refreshed = await db.select().from(topics);
+    return refreshed.find((t) => canonicalLabel(t.name) === key) ?? null;
+  }
+
   const known = KNOWN_NEW_STORYLINES[key];
   if (!known) return null;
 
-  const parent = existing.find((t) => canonicalLabel(t.name) === canonicalLabel(known.parent));
+  let parent = existing.find((t) => canonicalLabel(t.name) === canonicalLabel(known.parent));
+  if (!parent) {
+    parent = (await ensureGroupTopic(known.parent, existing)) ?? undefined;
+    if (parent) existing.push(parent);
+  }
   if (!parent) return null;
 
   const inserted = await db
@@ -493,6 +565,73 @@ async function ensureStorylineTopic(label: string, existing: TopicRow[]): Promis
 
   const refreshed = await db.select().from(topics);
   return refreshed.find((t) => canonicalLabel(t.name) === key) ?? null;
+}
+
+/** Ensure all hierarchy groups and leaves exist in `topics`. */
+export async function ensureTopicHierarchySeeded(): Promise<void> {
+  const existing = await db.select().from(topics);
+
+  for (const group of TOPIC_HIERARCHY) {
+    const parent = await ensureGroupTopic(group.name, existing);
+    if (parent && !existing.some((t) => t.id === parent.id)) existing.push(parent);
+
+    for (const leaf of group.leaves) {
+      const topic = await ensureStorylineTopic(leaf, existing);
+      if (topic && !existing.some((t) => t.id === topic.id)) existing.push(topic);
+    }
+  }
+}
+
+/** Sync `page_topics` from each day's primary `topic_categories` label. */
+export async function backfillPageTopicsFromCategories(dryRun = false): Promise<{
+  scanned: number;
+  linked: number;
+  skipped: number;
+}> {
+  const stats = { scanned: 0, linked: 0, skipped: 0 };
+  await ensureTopicHierarchySeeded();
+
+  const rows = await db
+    .select({
+      id: historicalNewsAnalyses.id,
+      date: historicalNewsAnalyses.date,
+      topicCategories: historicalNewsAnalyses.topicCategories,
+    })
+    .from(historicalNewsAnalyses);
+
+  const allTopics = await db.select().from(topics);
+
+  for (const row of rows) {
+    stats.scanned += 1;
+    const labels = topicLabelsFromRow(row.topicCategories);
+    const label = labels[0] ? resolveStorylineLeafLabel(labels[0]) ?? labels[0] : "";
+    if (!label) {
+      stats.skipped += 1;
+      continue;
+    }
+
+    const topic = await ensureStorylineTopic(label, allTopics);
+    if (!topic) {
+      stats.skipped += 1;
+      continue;
+    }
+    if (!allTopics.some((t) => t.id === topic.id)) allTopics.push(topic);
+
+    if (dryRun) {
+      stats.linked += 1;
+      continue;
+    }
+
+    await db.delete(pageTopics).where(eq(pageTopics.analysisId, row.id));
+    await db.insert(pageTopics).values({
+      analysisId: row.id,
+      topicId: topic.id,
+      isPrimary: true,
+    });
+    stats.linked += 1;
+  }
+
+  return stats;
 }
 
 export async function syncStorylineAssignmentsForDate(date: string, labels: string[]): Promise<string[]> {

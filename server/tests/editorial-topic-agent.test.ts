@@ -9,7 +9,7 @@ import {
 
 test("canonicalTopicLeaf accepts exact and group-form labels", () => {
   assert.equal(canonicalTopicLeaf("Labor market"), "Labor market");
-  assert.equal(canonicalTopicLeaf("Macro & Policy › Labor market"), "Labor market");
+  assert.equal(canonicalTopicLeaf("Macroeconomy › Labor market"), "Labor market");
   assert.equal(canonicalTopicLeaf("not a real leaf"), null);
 });
 

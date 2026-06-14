@@ -104,10 +104,179 @@ export type MainEventsCacheOverview = {
   totalLeaves: number;
   cachedCount: number;
   uncachedLeaves: string[];
+  preparedLeaves: string[];
 };
+
+export type VerificationLockAction = "locked" | "unlocked" | "pending";
+
+export type VerificationLockOutcome = {
+  date: string;
+  action: VerificationLockAction;
+  reason: string;
+};
+
+export type MainEventsLeafStatus = {
+  leaf: string;
+  group: string | null;
+  status: "matched" | "pending";
+  pendingReason: "not_prepared" | "needs_review" | null;
+  geminiCached: boolean;
+  canonicalCount: number;
+  matchedCount: number;
+  misplacedCount: number;
+  missingCount: number;
+  extraCount: number;
+  verificationPendingCount: number;
+  corpusCount: number;
+  fetchedAt: string | null;
+};
+
+export type MainEventsLeavesStatusOverview = {
+  totalLeaves: number;
+  matchedCount: number;
+  pendingCount: number;
+  matchedLeaves: MainEventsLeafStatus[];
+  pendingLeaves: MainEventsLeafStatus[];
+};
+
+export type MainEventsAlignmentMismatch = {
+  date: string;
+  kind: "matched" | "misplaced";
+  geminiLeaf: string;
+  geminiLeafLabel: string;
+  geminiEvent: string;
+  dbLeaf: string;
+  dbLeafLabel: string;
+  recommendedLeaf: string | null;
+  recommendedLeafLabel: string | null;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  summaryPreview: string;
+};
+
+export type MainEventsAlignmentReport = {
+  scanned: number;
+  aligned: number;
+  mismatches: MainEventsAlignmentMismatch[];
+  pending: number;
+  skippedLeaves: string[];
+  locked: number;
+  unlocked: number;
+  lockActions: VerificationLockOutcome[];
+  verificationMatched: number;
+  verificationPending: number;
+};
+
+export type MainEventsReviewDecision = "accepted" | "rejected" | "pending";
+
+export type MainEventsReviewDbStatus = "in_db" | "missing" | "wrong_leaf" | "untagged";
+
+export type MainEventsReviewItem = {
+  date: string;
+  event: string;
+  importance: "landmark" | "major" | "notable";
+  sourceUrl?: string;
+  dbStatus: MainEventsReviewDbStatus;
+  dbSummary?: string;
+  wrongLeafLabel?: string;
+  isLocked?: boolean;
+  reviewStatus: "pending" | "accepted" | "rejected";
+};
+
+export type MainEventsReviewQueue = {
+  leaf: string;
+  leafLabel: string;
+  items: MainEventsReviewItem[];
+  counts: {
+    pending: number;
+    accepted: number;
+    rejected: number;
+    total: number;
+  };
+};
+
+export async function fetchMainEventsReviewQueue(leaf: string): Promise<MainEventsReviewQueue> {
+  const res = await fetch(`/api/main-events-check/review/${encodeURIComponent(leaf)}`);
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export async function setMainEventsReviewDecision(opts: {
+  leaf: string;
+  date: string;
+  decision: MainEventsReviewDecision;
+}): Promise<MainEventsReviewQueue> {
+  const res = await fetch("/api/main-events-check/review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
 
 export async function fetchMainEventsCacheOverview(): Promise<MainEventsCacheOverview> {
   const res = await fetch("/api/main-events-check/cache-overview");
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export async function fetchMainEventsLeavesStatus(): Promise<MainEventsLeavesStatusOverview> {
+  const res = await fetch("/api/main-events-check/leaves-status");
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export type MainEventsSummaryAlignmentMismatch = {
+  date: string;
+  geminiLeaf: string;
+  geminiLeafLabel: string;
+  geminiEvent: string;
+  dbSummaryPreview: string;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  tokenOverlap: number;
+};
+
+export type MainEventsSummaryAlignmentReport = {
+  scanned: number;
+  aligned: number;
+  mismatches: MainEventsSummaryAlignmentMismatch[];
+  pending: number;
+  skippedLeaves: string[];
+  locked: number;
+  unlocked: number;
+  lockActions: VerificationLockOutcome[];
+  verificationMatched: number;
+  verificationPending: number;
+};
+
+export async function verifyMainEventsTopicAlignment(opts?: {
+  leaf?: string;
+  maxItems?: number;
+  applyLockPolicy?: boolean;
+  persistResults?: boolean;
+}): Promise<MainEventsAlignmentReport> {
+  const res = await fetch("/api/main-events-check/verify-alignment", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts ?? {}),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json();
+}
+
+export async function verifyMainEventsSummaryAlignment(opts?: {
+  leaf?: string;
+  maxItems?: number;
+  applyLockPolicy?: boolean;
+  persistResults?: boolean;
+}): Promise<MainEventsSummaryAlignmentReport> {
+  const res = await fetch("/api/main-events-check/verify-summaries", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts ?? {}),
+  });
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
 }

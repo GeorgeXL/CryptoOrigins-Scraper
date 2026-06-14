@@ -70,7 +70,15 @@ class HealthMonitor {
     const startTime = Date.now();
     try {
       const provider = aiService.getProvider(providerName);
-      const isHealthy = await provider.healthCheck();
+      let isHealthy = false;
+      let healthError: string | undefined;
+
+      try {
+        isHealthy = await provider.healthCheck();
+      } catch (error: any) {
+        healthError = error?.message || 'Health check failed';
+      }
+
       const responseTime = Date.now() - startTime;
 
       if (isHealthy) {
@@ -80,15 +88,25 @@ class HealthMonitor {
           lastChecked: new Date().toISOString(),
           responseTime
         };
-      } else {
+      }
+
+      if (providerName === 'perplexity' && healthError?.includes('429')) {
         return {
           name: provider.getName(),
-          status: 'outage',
+          status: 'degraded',
           lastChecked: new Date().toISOString(),
-          error: 'Health check failed',
+          error: 'Rate limited (batch may be active)',
           responseTime
         };
       }
+
+      return {
+        name: provider.getName(),
+        status: 'outage',
+        lastChecked: new Date().toISOString(),
+        error: healthError || 'Health check failed',
+        responseTime
+      };
     } catch (error: any) {
       return {
         name: providerName,

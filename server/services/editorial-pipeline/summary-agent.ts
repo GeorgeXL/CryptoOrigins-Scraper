@@ -238,3 +238,90 @@ export async function regenerateSummaryWithAgent(date: string): Promise<{
 
   return { ok: false, message: "Regeneration failed to produce 100–110 character summary after 3 attempts" };
 }
+
+/** Expand an existing too-short summary in place (no article regen required). */
+export async function expandShortSummaryWithAgent(date: string): Promise<{
+  ok: boolean;
+  summaryLength?: number;
+  message?: string;
+}> {
+  if (!isSummaryAgentEnabled()) {
+    return { ok: false, message: "Summary Agent disabled (OPENAI_API_KEY missing or SUMMARY_AGENT_DISABLED=1)" };
+  }
+
+  const { storage } = await import("../../storage");
+  const analysis = await storage.getAnalysisByDate(date);
+  if (!analysis) return { ok: false, message: `No analysis row for ${date}` };
+
+  let summary = normalizeEditorialSummaryText(String(analysis.summary ?? "").trim());
+  const initialIssue = evaluateSummaryQuality(summary);
+  if (!initialIssue || initialIssue.code !== "too_short") {
+    return { ok: false, message: initialIssue?.message ?? "Summary is not too short" };
+  }
+
+  const { resolveKnownEventContext } = await import("./known-event-context");
+  const knownEvent = await resolveKnownEventContext(date);
+
+  let articleSnippet = "";
+  if (isValidPipelineTopArticleId(analysis.topArticleId)) {
+    const { resolveStoredWinningArticle } = await import("./run");
+    const resolved = resolveStoredWinningArticle({
+      topArticleId: analysis.topArticleId,
+      tieredArticles: analysis.tieredArticles,
+      analyzedArticles: analysis.analyzedArticles,
+      winningTier: analysis.winningTier,
+    });
+    if (resolved) {
+      articleSnippet = `${resolved.article.title}\n${resolved.article.summary ?? ""}`.slice(0, 500);
+    }
+  }
+
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const model = getModelForAgent("SummaryAgent");
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    for (let round = 0; round < 4; round += 1) {
+      const length = summary.length;
+      if (length >= 100 && length <= 110) {
+        await storage.updateAnalysis(date, { summary });
+        return { ok: true, summaryLength: length };
+      }
+      if (length >= 100) break;
+
+      const need = 100 - length;
+      const userPayload = JSON.stringify({
+        calendar_date: date,
+        current_summary: summary,
+        current_length: length,
+        add_about: need,
+        known_event_reference: knownEvent.isKnownEvent ? knownEvent.referenceText : null,
+        article_snippet: articleSnippet || null,
+      });
+
+      const completion = await openai.chat.completions.create({
+        model,
+        temperature: 0.2,
+        max_completion_tokens: 180,
+        messages: [
+          {
+            role: "system",
+            content:
+              "Expand the timeline one-line summary to exactly 100-110 characters. Keep the same event. Active voice, no date tokens, no trailing period, capitalize Bitcoin and other proper names. Return ONLY the expanded summary text.",
+          },
+          { role: "user", content: userPayload },
+        ],
+      });
+
+      summary = normalizeEditorialSummaryText(completion.choices[0]?.message?.content ?? "");
+      if (!summary) break;
+    }
+
+    const quality = evaluateSummaryQuality(summary);
+    if (!quality) {
+      await storage.updateAnalysis(date, { summary });
+      return { ok: true, summaryLength: summary.length };
+    }
+  }
+
+  return { ok: false, message: "Expansion failed to produce 100–110 character summary after 3 attempts" };
+}

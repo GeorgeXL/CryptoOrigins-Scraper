@@ -15,6 +15,56 @@ function getNextDayMidnightTimestamp(searchDate: string): string {
   return nextDay.toISOString().split('T')[0] + 'T00:00:00.000Z';
 }
 
+const BITCOIN_NEWS_DOMAINS = [
+  "coindesk.com",
+  "cointelegraph.com",
+  "theblock.co",
+  "decrypt.co",
+  "reuters.com",
+  "bloomberg.com",
+  "wsj.com",
+  "ft.com",
+  "nytimes.com",
+  "bbc.com",
+  "bbc.co.uk",
+  "cnbc.com",
+  "apnews.com",
+];
+
+const CRYPTO_NEWS_DOMAINS = [
+  ...BITCOIN_NEWS_DOMAINS,
+  "techcrunch.com",
+  "fortune.com",
+  "forbes.com",
+];
+
+const MACRO_NEWS_DOMAINS = [
+  "reuters.com",
+  "apnews.com",
+  "bbc.com",
+  "bbc.co.uk",
+  "nytimes.com",
+  "washingtonpost.com",
+  "wsj.com",
+  "ft.com",
+  "bloomberg.com",
+  "cnbc.com",
+  "economist.com",
+  "fortune.com",
+  "forbes.com",
+  "aljazeera.com",
+];
+
+function exaDaySystemPrompt(date: string, tier: "bitcoin" | "crypto" | "macro"): string {
+  const scope =
+    tier === "bitcoin"
+      ? "Bitcoin-only news"
+      : tier === "crypto"
+        ? "broader cryptocurrency and Web3 news"
+        : "global macroeconomics and major financial/political news";
+  return `Find news articles published exactly on ${date}. Scope: ${scope}. The event must have happened on ${date}, not before or after. Reject Wikipedia, YouTube, explainers, retrospectives, anniversary pieces, and "on this day" pages. Prefer Reuters, AP, BBC, NYT, WSJ, Bloomberg, CoinDesk, and similar recognised outlets.`;
+}
+
 export class HierarchicalSearchService {
   
   
@@ -38,15 +88,17 @@ export class HierarchicalSearchService {
       // Note: We no longer pre-log here to avoid duplicate entries in the API monitor.
       
       const result = await exaService.searchAndContents(
-        "bitcoin news, ecosystem updates, halvings, important days",
+        `Important Bitcoin news published on ${date}: protocol, mining, price, adoption, regulation`,
         {
-          type: "neural",
           category: "news",
           startPublishedDate: `${date}T00:00:00.000Z`,
           endPublishedDate: `${date}T23:59:59.999Z`,
           excludeText: [getNextDayMidnightTimestamp(date)],
+          includeDomains: BITCOIN_NEWS_DOMAINS,
+          numResults: 10,
+          systemPrompt: exaDaySystemPrompt(date, "bitcoin"),
           summary: {
-            query: "Create 50 words summary"
+            query: `Summarise the dated Bitcoin news event from ${date} in about 50 words`
           }
         },
         {
@@ -94,15 +146,17 @@ export class HierarchicalSearchService {
       // Note: We no longer pre-log here to avoid duplicate entries in the API monitor.
       
       const result = await exaService.searchAndContents(
-        "important cryptocurrency web3 news, no predictions or analysis",
+        `Important cryptocurrency or Web3 news published on ${date}`,
         {
-          type: "neural",
           category: "news",
           startPublishedDate: `${date}T00:00:00.000Z`,
           endPublishedDate: `${date}T23:59:59.999Z`,
           excludeText: [getNextDayMidnightTimestamp(date)],
+          includeDomains: CRYPTO_NEWS_DOMAINS,
+          numResults: 10,
+          systemPrompt: exaDaySystemPrompt(date, "crypto"),
           summary: {
-            query: "Create 50 words summary"
+            query: `Summarise the dated crypto/Web3 news event from ${date} in about 50 words`
           }
         },
         {
@@ -150,17 +204,18 @@ export class HierarchicalSearchService {
       // Note: We no longer pre-log here to avoid duplicate entries in the API monitor.
       
       const result = await exaService.searchAndContents(
-        "important financial political news",
+        `Important global financial or political news published on ${date}`,
         {
-          type: "neural",
           category: "news",
           startPublishedDate: `${date}T00:00:00.000Z`,
           endPublishedDate: `${date}T23:59:59.999Z`,
           excludeText: [getNextDayMidnightTimestamp(date)],
+          includeDomains: MACRO_NEWS_DOMAINS,
+          numResults: 10,
+          systemPrompt: exaDaySystemPrompt(date, "macro"),
           summary: {
-            query: "Create 50 words summary"
-          },
-          includeDomains: ["news.bbc.co.uk", "bbc.com", "reuters.com", "washingtonpost.com", "nytimes.com", "cnn.com", "wsj.com", "ft.com", "bloomberg.com", "forbes.com", "economist.com", "fortune.com", "aljazeera.com"]
+            query: `Summarise the dated macro news event from ${date} in about 50 words`
+          }
         },
         {
           context: 'macro-tier-search',

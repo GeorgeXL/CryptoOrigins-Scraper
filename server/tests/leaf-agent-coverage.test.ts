@@ -78,8 +78,8 @@ test("splitCoverageByDismissals hides dismissed rows and locked misplaced rows",
         date: "2009-01-12",
         event: "First transaction",
         importance: "landmark" as const,
-        currentLeaf: "Bitcoin price action",
-        currentLeafLabel: "Bitcoin › Bitcoin price action",
+        currentLeaf: "Bitcoin price & cycles",
+        currentLeafLabel: "Bitcoin › Bitcoin price & cycles",
         summary: "Satoshi sends BTC",
         isLocked: false,
       },
@@ -147,7 +147,7 @@ test("crossCheckLeafCoverage splits matched, missing, misplaced, and extra", () 
   assert.equal(result.matched.length, 0);
   assert.equal(result.misplaced.length, 2);
   assert.equal(result.misplaced.some((row) => row.date === "2009-01-12"), true);
-  assert.equal(result.misplaced.find((row) => row.date === "2009-01-12")?.currentLeaf, "Bitcoin price action");
+  assert.equal(result.misplaced.find((row) => row.date === "2009-01-12")?.currentLeaf, "Bitcoin price & cycles");
   assert.equal(result.missing.length, 1);
   assert.equal(result.missing[0]?.date, "2024-04-20");
   assert.equal(result.missing[0]?.sourceUrl, undefined);

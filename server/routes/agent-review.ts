@@ -498,6 +498,8 @@ router.post("/api/agent/pipeline/run", async (req, res) => {
       (value: unknown): value is string => typeof value === "string" && isIsoDate(value.trim()),
     );
 
+    const ignoreDayLock = req.body?.ignoreDayLock === true;
+
     const out = await startEditorialPipelineRun({
       dateFrom,
       dateTo,
@@ -505,6 +507,7 @@ router.post("/api/agent/pipeline/run", async (req, res) => {
       requestedBy: "admin-ui",
       checkScopes,
       ...(targetDates.length > 0 ? { targetDates } : {}),
+      ...(ignoreDayLock ? { ignoreDayLock: true } : {}),
     });
 
     res.json({
@@ -692,7 +695,7 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
       statusFilter === "approved" || statusFilter === "rejected"
         ? [desc(humanReviewQueue.reviewedAt), asc(humanReviewQueue.createdAt)]
         : statusFilter === "pending"
-          ? [desc(humanReviewQueue.priority), asc(humanReviewQueue.createdAt)]
+          ? [asc(humanReviewQueue.eventDate), asc(humanReviewQueue.createdAt)]
           : [desc(humanReviewQueue.eventDate), desc(humanReviewQueue.createdAt)];
 
     const whereParts = [];

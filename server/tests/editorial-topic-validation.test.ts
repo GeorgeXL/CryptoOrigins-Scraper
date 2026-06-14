@@ -24,12 +24,12 @@ test("invalidTopicReasons rejects broad legacy topics", () => {
 });
 
 test("invalidTopicReasons accepts a single hierarchy leaf", () => {
-  assert.deepEqual(invalidTopicReasons(["Bitcoin price action"]), []);
+  assert.deepEqual(invalidTopicReasons(["Bitcoin price & cycles"]), []);
 });
 
 test("evaluateTopicHierarchy surfaces single-topic rule", () => {
-  const out = evaluateTopicHierarchy(["market", "Bitcoin price action"]);
-  assert.deepEqual(out.normalizedTopics, ["market", "bitcoin price action"]);
+  const out = evaluateTopicHierarchy(["market", "Bitcoin price & cycles"]);
+  assert.deepEqual(out.normalizedTopics, ["market", "bitcoin price & cycles"]);
   assert.ok(out.issues.includes("More than one topic assigned"));
 });
 
@@ -48,6 +48,6 @@ test("proposes topic fix for legacy single market topic", () => {
   const topic = proposals.find((p) => p.kind === "set_topic_categories");
   assert.ok(topic);
   if (topic && topic.kind === "set_topic_categories") {
-    assert.deepEqual(topic.proposed, ["Bitcoin price action"]);
+    assert.deepEqual(topic.proposed, ["Bitcoin price & cycles"]);
   }
 });

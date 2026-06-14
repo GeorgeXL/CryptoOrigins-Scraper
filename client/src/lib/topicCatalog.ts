@@ -1,5 +1,6 @@
 import type { CategoryData } from "@/components/TagsSidebar";
 import { TOPIC_HIERARCHY } from "@shared/topic-hierarchy";
+import { resolveStorylineLeafLabel } from "@shared/topic-hierarchy-migration";
 
 /** Prefix for topic selections in `selectedEntities` (distinct from `category::tagName`). */
 export const TOPIC_ENTITY_PREFIX = "topic::";
@@ -221,6 +222,37 @@ function findTopicLabelInCatalog(
   return null;
 }
 
+/** Canonical hierarchy leaf for a Topics sidebar selection (`topic::…` or `narratives::…`). */
+export function resolveSelectedTopicLeafFromSelection(
+  selectedEntities: Set<string>,
+  catalogData: {
+    entitiesByCategory: Record<string, CategoryData[]>;
+  } | null,
+): string | null {
+  if (selectedEntities.size !== 1) return null;
+  const selectionKey = Array.from(selectedEntities)[0];
+  if (selectionKey.startsWith(TOPIC_ENTITY_PREFIX)) {
+    if (!catalogData) return null;
+    return findTopicLabelInCatalog(selectionKey, catalogData.entitiesByCategory);
+  }
+  const [category, name] = selectionKey.split("::");
+  if (category === "narratives" && name?.trim()) return name.trim();
+  return null;
+}
+
+/** Whether an analysis belongs to the selected hierarchy leaf (matches sidebar counts). */
+export function analysisMatchesTopicLeaf(
+  analysis: { topic_categories?: unknown },
+  leaf: string,
+): boolean {
+  const target = canonicalTopicName(leaf);
+  for (const label of extractTopicLabelsFromCategories(analysis.topic_categories)) {
+    const resolved = resolveStorylineLeafLabel(label) ?? label;
+    if (canonicalTopicName(resolved) === target) return true;
+  }
+  return false;
+}
+
 /** Display name for the single selected storyline in the Topics sidebar. */
 export function resolveTopicLabelFromSelection(
   selectedEntities: Set<string>,
@@ -229,7 +261,5 @@ export function resolveTopicLabelFromSelection(
   } | null,
 ): string | null {
   if (!catalogData || selectedEntities.size !== 1) return null;
-  const selectionKey = Array.from(selectedEntities)[0];
-  if (!selectionKey.startsWith(TOPIC_ENTITY_PREFIX)) return null;
-  return findTopicLabelInCatalog(selectionKey, catalogData.entitiesByCategory);
+  return resolveSelectedTopicLeafFromSelection(selectedEntities, catalogData);
 }

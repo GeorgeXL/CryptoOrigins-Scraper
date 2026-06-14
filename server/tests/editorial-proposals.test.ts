@@ -230,7 +230,7 @@ test("proposes redo_summary only when weak AND top article id is valid", () => {
 
   const weakWithoutArticle = buildCorrectionProposals({
     date: "2024-04-02",
-    summary: "Analysis failed.",
+    summary: "Bitcoin rises on heavy volume across major exchanges worldwide",
     topArticleId: "none",
     isOrphan: false,
     isFlagged: false,
@@ -239,7 +239,37 @@ test("proposes redo_summary only when weak AND top article id is valid", () => {
     legacyTags: [],
   });
   assert.equal(weakWithoutArticle.find((p) => p.kind === "redo_summary"), undefined);
+  assert.ok(weakWithoutArticle.find((p) => p.kind === "expand_summary"));
+});
+
+test("proposes expand_summary for too-short summary even with valid article", () => {
+  const tooShortWithArticle = buildCorrectionProposals({
+    date: "2010-04-27",
+    summary: "Bitcoin rises on heavy volume across major exchanges worldwide today",
+    topArticleId: "https://example.com/bitcoin-volume",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Bitcoin"],
+    topicCategories: ["Bitcoin price & cycles"],
+    legacyTags: [],
+  });
+  assert.equal(tooShortWithArticle.find((p) => p.kind === "redo_summary"), undefined);
+  assert.ok(tooShortWithArticle.find((p) => p.kind === "expand_summary"));
+});
+
+test("proposes edit_summary for weak summary that is too long without article", () => {
+  const weakWithoutArticle = buildCorrectionProposals({
+    date: "2024-04-03",
+    summary: "x".repeat(111),
+    topArticleId: "none",
+    isOrphan: false,
+    isFlagged: false,
+    tagsVersion2: ["Bitcoin"],
+    topicCategories: ["industry-news"],
+    legacyTags: [],
+  });
   assert.ok(weakWithoutArticle.find((p) => p.kind === "edit_summary"));
+  assert.equal(weakWithoutArticle.find((p) => p.kind === "expand_summary"), undefined);
 });
 
 test("clean day produces empty proposal list", () => {
@@ -251,7 +281,7 @@ test("clean day produces empty proposal list", () => {
     isOrphan: false,
     isFlagged: false,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["Bitcoin price action"],
+    topicCategories: ["Bitcoin price & cycles"],
     legacyTags: [{ name: "Bitcoin" }],
   });
   assert.equal(proposals.length, 0);
@@ -439,15 +469,15 @@ test("replaces mixed old and new topics with one valid hierarchy leaf", () => {
     isOrphan: false,
     isFlagged: false,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["technology", "Bitcoin price action"],
+    topicCategories: ["technology", "Bitcoin price & cycles"],
     legacyTags: [],
     articleText: "Bitcoin price rises as traders watch support levels and renewed market momentum.",
   });
   const topic = proposals.find((p) => p.kind === "set_topic_categories");
   assert.ok(topic);
   if (topic && topic.kind === "set_topic_categories") {
-    assert.deepEqual(topic.current, ["technology", "Bitcoin price action"]);
-    assert.deepEqual(topic.proposed, ["Bitcoin price action"]);
+    assert.deepEqual(topic.current, ["technology", "Bitcoin price & cycles"]);
+    assert.deepEqual(topic.proposed, ["Bitcoin price & cycles"]);
   }
 });
 
@@ -479,7 +509,7 @@ test("keeps exactly one valid hierarchy leaf when it matches the summary", () =>
     isOrphan: false,
     isFlagged: false,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["Bitcoin price action"],
+    topicCategories: ["Bitcoin price & cycles"],
     legacyTags: [],
     articleText: "Bitcoin price rises as traders watch support levels and renewed market momentum.",
   });

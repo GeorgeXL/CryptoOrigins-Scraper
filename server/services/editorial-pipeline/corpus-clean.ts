@@ -62,6 +62,8 @@ const ALWAYS_AUTO_KINDS = new Set<CorrectionProposal["kind"]>([
   "merge_redundant_tags",
   /** Same winning article — Summary Agent regen is trusted; no operator gate. */
   "redo_summary",
+  /** Too-short line without article regen — expand in place to 100–110 chars. */
+  "expand_summary",
 ]);
 
 const DUPLICATE_STRONG_THRESHOLDS: Array<{ j: number; sharedTags: number; sharedTopics?: number }> = [

@@ -95,6 +95,7 @@ async function main() {
         maxDaysToConsider: 1,
         requestedBy: "smoke-quality-check-agents",
         checkScopes: action.checkScopes,
+        ignoreDayLock: true,
       });
       logCheck(`${tabId} live pipeline started`, !!out.runId, `${out.runId} · ${Date.now() - started}ms`);
     } catch (error) {

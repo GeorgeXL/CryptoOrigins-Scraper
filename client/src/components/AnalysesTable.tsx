@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Loader2, Tag, Check, X, RefreshCw, FileText, ChevronDown, Lock, LockOpen, AlertTriangle } from "lucide-react";
+import { formatTopicLeafWithGroup } from "@shared/topic-hierarchy";
 import { parseIsLocked } from "@/lib/parseIsLocked";
 import { fetchPendingAgentQueueByDates } from "@/lib/pendingAgentQueue";
 import {
@@ -44,6 +45,8 @@ export interface HistoricalNewsAnalysis {
   isManualOverride?: boolean;
    isFlagged?: boolean;
   isLocked?: boolean;
+  googleCheckHappened?: "yes" | "no" | "uncertain" | null;
+  googleCheckCheckedAt?: string | null;
 }
 
 interface CategoryData {
@@ -71,6 +74,21 @@ interface BulkActionsConfig {
   onSelectAllMatching?: () => void;
   onClearSelection?: () => void;
 }
+
+export type AnalysisRowAnnotation = {
+  storylineFit?: {
+    status: "ok" | "mismatch" | "uncertain";
+    reason?: string;
+    suggestedLeaves?: string[];
+  };
+};
+
+export type GoogleCheckSummary = {
+  yes: number;
+  no: number;
+  uncertain: number;
+  unverified: number;
+};
 
 interface AnalysesTableProps {
   analyses: HistoricalNewsAnalysis[];
@@ -101,6 +119,8 @@ interface AnalysesTableProps {
   getRowHref?: (analysis: HistoricalNewsAnalysis) => string;
   onOpenInNewTab?: (analysis: HistoricalNewsAnalysis) => void;
   onToggleFlag?: (analysis: HistoricalNewsAnalysis) => void;
+  rowAnnotations?: Record<string, AnalysisRowAnnotation>;
+  googleCheckSummary?: GoogleCheckSummary | null;
 }
 
 export function AnalysesTable({
@@ -129,6 +149,8 @@ export function AnalysesTable({
   getRowHref,
   onOpenInNewTab,
   onToggleFlag,
+  rowAnnotations,
+  googleCheckSummary,
 }: AnalysesTableProps) {
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -234,9 +256,9 @@ export function AnalysesTable({
     <div className="space-y-4">
       {/* Top Controls: Select All and Per page */}
       {totalCount > 0 && (showSelectAll || onPageSizeChange) && (
-        <div className="flex items-center justify-between mb-2 pb-2">
-          {showSelectAll && showCheckbox && (
-            <div className="flex items-center space-x-4">
+        <div className="flex items-center justify-between gap-4 mb-2 pb-2">
+          {showSelectAll && showCheckbox ? (
+            <div className="flex items-center space-x-4 shrink-0">
               <div className="flex items-center space-x-2">
                 <Checkbox
                   checked={allPageSelected || selectAllMatching}
@@ -248,10 +270,46 @@ export function AnalysesTable({
                 </span>
               </div>
             </div>
+          ) : (
+            <div className="shrink-0" />
+          )}
+
+          {googleCheckSummary ? (
+            <div className="flex flex-1 flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden />
+                {googleCheckSummary.yes} happened
+              </span>
+              {googleCheckSummary.no > 0 ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" aria-hidden />
+                  {googleCheckSummary.no} didn&apos;t happen
+                </span>
+              ) : null}
+              {googleCheckSummary.uncertain > 0 ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-hidden />
+                  {googleCheckSummary.uncertain} uncertain
+                </span>
+              ) : null}
+              {googleCheckSummary.unverified === 0 ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden />
+                  all verified
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground/40" aria-hidden />
+                  {googleCheckSummary.unverified} not verified
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex-1" />
           )}
           
-          {onPageSizeChange && (
-            <div className="flex items-center space-x-3">
+          {onPageSizeChange ? (
+            <div className="flex items-center space-x-3 shrink-0">
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-muted-foreground">Per page:</span>
                 <Select
@@ -273,6 +331,8 @@ export function AnalysesTable({
                 </Select>
               </div>
             </div>
+          ) : (
+            <div className="shrink-0" />
           )}
         </div>
       )}
@@ -441,7 +501,70 @@ export function AnalysesTable({
                   )}
                 </TableCell>
                 <TableCell>
-                  <p className="text-sm text-foreground/90">{analysis.summary}</p>
+                  <div className="space-y-1.5">
+                    <p className="text-sm text-foreground/90">{analysis.summary}</p>
+                    {(() => {
+                      const annotation = rowAnnotations?.[analysis.date];
+                      const fit = annotation?.storylineFit;
+                      const googleHappened = analysis.googleCheckHappened;
+                      if (!fit && !googleHappened) return null;
+
+                      return (
+                        <div className="space-y-1.5">
+                          {fit && fit.status !== "ok" ? (
+                            <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.04] p-2">
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-400">
+                                {fit.status === "mismatch" ? "May not belong here" : "Storyline uncertain"}
+                              </p>
+                              {fit.reason ? (
+                                <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{fit.reason}</p>
+                              ) : null}
+                              {fit.suggestedLeaves && fit.suggestedLeaves.length > 0 ? (
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  {fit.suggestedLeaves.map((leaf) => (
+                                    <span
+                                      key={`${analysis.date}-${leaf}`}
+                                      className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-200"
+                                    >
+                                      {formatTopicLeafWithGroup(leaf)}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {googleHappened ? (
+                            <span
+                              className={
+                                googleHappened === "yes"
+                                  ? "inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400"
+                                  : googleHappened === "uncertain"
+                                    ? "inline-flex items-center gap-1 text-[11px] font-medium text-amber-400"
+                                    : "inline-flex items-center gap-1 text-[11px] font-medium text-red-400"
+                              }
+                            >
+                              {googleHappened === "yes" ? (
+                                <>
+                                  <Check className="h-3 w-3" aria-hidden />
+                                  Happened
+                                </>
+                              ) : googleHappened === "uncertain" ? (
+                                <>
+                                  <AlertTriangle className="h-3 w-3" aria-hidden />
+                                  Couldn&apos;t verify
+                                </>
+                              ) : (
+                                <>
+                                  <X className="h-3 w-3" aria-hidden />
+                                  Didn&apos;t happen
+                                </>
+                              )}
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </TableCell>
                 <TableCell>
                   {analysis.tags_version2 && analysis.tags_version2.length > 0 ? (

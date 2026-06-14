@@ -11,6 +11,8 @@ import {
   tagMetadata,
   tags,
   pagesAndTags,
+  pageTopics,
+  topics,
   type User, 
   type InsertUser,
   type HistoricalNewsAnalysis,
@@ -36,8 +38,13 @@ import {
   type PagesAndTags,
   type InsertPagesAndTags,
 } from "@shared/schema";
+import { syncStorylineAssignmentsForDate } from "./services/editorial-pipeline/storyline-taxonomy";
 import { db } from "./db";
 import { eq, desc, asc, and, or, gte, lte, count, sql, inArray } from "drizzle-orm";
+import {
+  analysisEligibleForDayLock,
+  analysisHasStorylineTopic,
+} from "@shared/storyline-topic-eligibility";
 
 
 export interface IStorage {
@@ -50,6 +57,7 @@ export interface IStorage {
   getAnalysisByDate(date: string): Promise<HistoricalNewsAnalysis | undefined>;
   getAnalysesByDateRange(startDate: string, endDate: string): Promise<HistoricalNewsAnalysis[]>;
   getAnalysesByDates(dates: string[]): Promise<HistoricalNewsAnalysis[]>;
+  getAnalysesForStorylineLeaf(leafName: string): Promise<HistoricalNewsAnalysis[]>;
   createAnalysis(analysis: InsertHistoricalNewsAnalysis): Promise<HistoricalNewsAnalysis>;
   updateAnalysis(date: string, analysis: Partial<InsertHistoricalNewsAnalysis>): Promise<HistoricalNewsAnalysis>;
   deleteAnalysis(date: string): Promise<void>;
@@ -197,6 +205,20 @@ export class DatabaseStorage implements IStorage {
       .orderBy(asc(historicalNewsAnalyses.date));
   }
 
+  async getAnalysesForStorylineLeaf(leafName: string): Promise<HistoricalNewsAnalysis[]> {
+    if (!leafName.trim()) return [];
+
+    const rows = await db
+      .select({ analysis: historicalNewsAnalyses })
+      .from(historicalNewsAnalyses)
+      .innerJoin(pageTopics, eq(pageTopics.analysisId, historicalNewsAnalyses.id))
+      .innerJoin(topics, eq(topics.id, pageTopics.topicId))
+      .where(eq(topics.name, leafName))
+      .orderBy(asc(historicalNewsAnalyses.date));
+
+    return rows.map((row) => row.analysis);
+  }
+
   async createAnalysis(analysis: InsertHistoricalNewsAnalysis): Promise<HistoricalNewsAnalysis> {
     const [newAnalysis] = await db
       .insert(historicalNewsAnalyses)
@@ -207,6 +229,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateAnalysis(date: string, analysis: Partial<InsertHistoricalNewsAnalysis>): Promise<HistoricalNewsAnalysis> {
+    const existing = await this.getAnalysisByDate(date);
+
     // Simple update - only update fields that are provided
     const updateData: Record<string, any> = {
       lastAnalyzed: new Date(),
@@ -242,6 +266,17 @@ export class DatabaseStorage implements IStorage {
     if (analysis.perplexityApproved !== undefined) updateData.perplexityApproved = analysis.perplexityApproved;
     if (analysis.perplexityVerdict !== undefined) updateData.perplexityVerdict = analysis.perplexityVerdict;
     if (analysis.factCheckVerdict !== undefined) updateData.factCheckVerdict = analysis.factCheckVerdict;
+    if (analysis.googleCheckHappened !== undefined) updateData.googleCheckHappened = analysis.googleCheckHappened;
+    if (analysis.googleCheckCheckedAt !== undefined) updateData.googleCheckCheckedAt = analysis.googleCheckCheckedAt;
+
+    const nextTopics =
+      analysis.topicCategories !== undefined ? analysis.topicCategories : existing?.topicCategories;
+    if (analysis.topicCategories !== undefined && !analysisHasStorylineTopic(analysis.topicCategories)) {
+      updateData.isLocked = false;
+    }
+    if (analysis.isLocked === true && !analysisEligibleForDayLock(nextTopics)) {
+      updateData.isLocked = false;
+    }
 
     const [updatedAnalysis] = await db
       .update(historicalNewsAnalyses)
@@ -288,6 +323,40 @@ export class DatabaseStorage implements IStorage {
       .set(data)
       .where(eq(historicalNewsAnalyses.date, date))
       .returning();
+    return updatedAnalysis;
+  }
+
+  async updateAnalysisGoogleCheck(
+    date: string,
+    data: {
+      googleCheckHappened: "yes" | "no" | "uncertain";
+      googleCheckCheckedAt: Date;
+    },
+  ): Promise<HistoricalNewsAnalysis> {
+    const existing = await this.getAnalysisByDate(date);
+    const patch: Record<string, unknown> = { ...data };
+
+    if (data.googleCheckHappened === "yes") {
+      if (analysisEligibleForDayLock(existing?.topicCategories)) {
+        patch.isLocked = true;
+      } else {
+        patch.isLocked = false;
+      }
+    } else {
+      patch.isLocked = false;
+      patch.topicCategories = [];
+    }
+
+    const [updatedAnalysis] = await db
+      .update(historicalNewsAnalyses)
+      .set(patch)
+      .where(eq(historicalNewsAnalyses.date, date))
+      .returning();
+
+    if (data.googleCheckHappened !== "yes") {
+      await syncStorylineAssignmentsForDate(date, []);
+    }
+
     return updatedAnalysis;
   }
 
@@ -861,6 +930,7 @@ export class DatabaseStorage implements IStorage {
       tieredArticles: historicalNewsAnalyses.tieredArticles,
       analyzedArticles: historicalNewsAnalyses.analyzedArticles,
       isFlagged: historicalNewsAnalyses.isFlagged,
+      isLocked: historicalNewsAnalyses.isLocked,
       flagReason: historicalNewsAnalyses.flagReason,
       flaggedAt: historicalNewsAnalyses.flaggedAt,
       factCheckVerdict: historicalNewsAnalyses.factCheckVerdict,
@@ -874,6 +944,8 @@ export class DatabaseStorage implements IStorage {
       perplexityCorrectDateText: historicalNewsAnalyses.perplexityCorrectDateText,
       perplexityCitations: historicalNewsAnalyses.perplexityCitations,
       perplexityCheckedAt: historicalNewsAnalyses.perplexityCheckedAt,
+      googleCheckHappened: historicalNewsAnalyses.googleCheckHappened,
+      googleCheckCheckedAt: historicalNewsAnalyses.googleCheckCheckedAt,
       reVerified: historicalNewsAnalyses.reVerified,
       reVerifiedAt: historicalNewsAnalyses.reVerifiedAt,
       reVerificationDate: historicalNewsAnalyses.reVerificationDate,

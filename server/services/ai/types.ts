@@ -43,6 +43,13 @@ export interface IAiProvider {
   // Final Analysis verification (Gemini and Perplexity)
   verifyEventDate?(summary: string, date: string): Promise<{ approved: boolean; reasoning: string }>;
 
+  /** Homepage / day-page Google check — OpenAI (web_search), Gemini, or Perplexity. */
+  verifyHomepageEvent?(
+    summary: string,
+    date: string,
+    topicLeaf?: string | null,
+  ): Promise<{ happened: "yes" | "no" | "uncertain" }>;
+
   /** Batch calendar check — returns dates where the event did not occur on/near that day. */
   verifyCalendarDates?(
     entries: Array<{ date: string; summary: string }>,
@@ -80,6 +87,8 @@ export interface CompletionOptions {
   stop?: string[];
   context?: string; // Optional context for API monitoring
   purpose?: string; // Optional purpose description for API monitoring
+  /** Perplexity only — defaults to true for generateCompletion. */
+  returnCitations?: boolean;
 }
 
 export interface JsonCompletionOptions<T> extends CompletionOptions {

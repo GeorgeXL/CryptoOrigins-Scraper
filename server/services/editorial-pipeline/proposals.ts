@@ -12,6 +12,7 @@ import { normalizeTagList, normalizeTagValue } from "./tools";
 import { formatTagAddRationale, formatTagDropRationale } from "./agent-reason";
 import type { CorrectionProposal } from "./review-package";
 import {
+  evaluateSummaryQuality,
   isEditorialSummaryWeak,
   isRoundupArticleContent,
   isRoundupMultiStorySummary,
@@ -355,10 +356,25 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
   const roundupSource = summaryFromWeeklyRoundup(input);
 
   // 4. Fix summary when it is outside the hard 100-110 character target.
-  //    Article-backed days can regenerate from the winner. Known/manual days
-  //    without a winner stay in human review with an inline summary edit.
+  //    Too-short lines expand in place (same event). Article-backed days with
+  //    other weak signals regenerate from the winner. Known/manual days without
+  //    a winner stay in human review with an inline summary edit.
   if (isEditorialSummaryWeak(summary) || input.summaryAgentNeedsRegen || roundupSource) {
-    if (isValidPipelineTopArticleId(input.topArticleId)) {
+    const qualityIssue = evaluateSummaryQuality(summary);
+    const tooShort = qualityIssue?.code === "too_short";
+
+    if (tooShort && summary.length > 0) {
+      out.push({
+        id: buildId(input.date, "expand_summary"),
+        kind: "expand_summary",
+        currentSummary: summary,
+        rationale: roundupSource
+          ? "Weekly roundup summary — expand to one dated event (100–110 chars)."
+          : input.knownEvent?.isKnownEvent
+            ? "Expand summary using the canonical reference (100–110 chars)."
+            : "Expand summary in place (100–110 chars).",
+      });
+    } else if (isValidPipelineTopArticleId(input.topArticleId)) {
       out.push({
         id: buildId(input.date, "redo_summary"),
         kind: "redo_summary",

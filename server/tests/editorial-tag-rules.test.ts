@@ -313,7 +313,7 @@ test("2020-03-04 does not propose Chinese miners when china is already tagged", 
   assert.equal(add, undefined);
 });
 
-test("2012-03-14 Bitcoin-Qt release maps to Bitcoin › Protocol development", () => {
+test("2012-03-14 Bitcoin-Qt release maps to Bitcoin › Protocol & upgrades", () => {
   const proposals = buildCorrectionProposals({
     date: "2012-03-14",
     summary:
@@ -329,8 +329,8 @@ test("2012-03-14 Bitcoin-Qt release maps to Bitcoin › Protocol development", (
   const topic = proposals.find((p) => p.kind === "set_topic_categories");
   assert.ok(topic);
   if (topic && topic.kind === "set_topic_categories") {
-    assert.deepEqual(topic.proposed, ["Protocol development"]);
-    assert.match(topic.rationale, /Bitcoin › Protocol development/);
+    assert.deepEqual(topic.proposed, ["Protocol & upgrades"]);
+    assert.match(topic.rationale, /Bitcoin › Protocol & upgrades/);
   }
 });
 

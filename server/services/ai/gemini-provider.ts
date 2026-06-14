@@ -1,4 +1,8 @@
 
+import {
+  buildHomepageGoogleCheckPrompt,
+  HOMEPAGE_GOOGLE_CHECK_SYSTEM_PROMPT,
+} from "../../../shared/google-check-prompts";
 import { IAiProvider, CompletionOptions, CompletionResult, JsonCompletionOptions } from "./types";
 import { GoogleGenAI } from "@google/genai";
 import { apiMonitor } from "../api-monitor";
@@ -321,6 +325,62 @@ Return JSON: {"approved": boolean, "reasoning": string}`;
         status: 'error',
         duration: Date.now() - startTime,
         error: (error as Error).message
+      });
+      throw error;
+    }
+  }
+
+  async verifyHomepageEvent(
+    summary: string,
+    date: string,
+    _topicLeaf?: string | null,
+  ): Promise<{ happened: "yes" | "no" | "uncertain" }> {
+    const startTime = Date.now();
+    const requestId = apiMonitor.logRequest({
+      service: "gemini",
+      endpoint: "/models/generateContent",
+      method: "POST",
+      status: "pending",
+      context: "homepage-google-check",
+      date,
+      purpose: "Verify homepage summary with Google",
+      requestData: { model: this.defaultModel },
+    });
+
+    try {
+      const prompt = buildHomepageGoogleCheckPrompt(summary, date);
+
+      const schema = z.object({
+        happened: z.enum(["yes", "no", "uncertain"]),
+      });
+
+      const result = await this.generateJson<{ happened: "yes" | "no" | "uncertain" }>({
+        prompt,
+        systemPrompt: HOMEPAGE_GOOGLE_CHECK_SYSTEM_PROMPT,
+        model: this.defaultModel,
+        schema: schema as any,
+        maxTokens: 128,
+        temperature: 0.1,
+        context: "homepage-google-check",
+        purpose: `Verify ${date}`,
+      });
+
+      apiMonitor.updateRequest(requestId, {
+        status: "success",
+        duration: Date.now() - startTime,
+        responseSize: JSON.stringify(result).length,
+        responseData: {
+          happened: result.happened,
+          date,
+        },
+      });
+
+      return result;
+    } catch (error) {
+      apiMonitor.updateRequest(requestId, {
+        status: "error",
+        duration: Date.now() - startTime,
+        error: (error as Error).message,
       });
       throw error;
     }

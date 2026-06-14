@@ -71,7 +71,7 @@ interface TagsSidebarProps {
   qualityCheckItems?: QualityCheckItem[];
   selectedQualityCheck?: string | null;
   onQualityCheckSelect?: (id: string) => void;
-  // VeriBadge props
+  // Google Check sidebar props (legacy prop names retained)
   veriBadgeItems?: QualityCheckItem[];
   selectedVeriBadge?: string | null;
   onVeriBadgeSelect?: (id: string) => void;
@@ -305,7 +305,7 @@ export function TagsSidebar({
 
         {veriBadgeItems && veriBadgeItems.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>VeriBadge</SidebarGroupLabel>
+            <SidebarGroupLabel>Google Check</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {veriBadgeItems.map((item) => (

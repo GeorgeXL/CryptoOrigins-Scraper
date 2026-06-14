@@ -861,14 +861,18 @@ export default function MonthView() {
 
       const results = await response.json();
       
-      console.log(`🎯 Google Check completed: ${results.validDays} valid, ${results.incorrectDays} incorrect, ${results.cannotVerifyDays} cannot verify`);
-      
+      const uncertainNote =
+        (results.uncertainDays ?? 0) > 0 ? ` · ${results.uncertainDays} unverified` : "";
+      console.log(
+        `🎯 Google Check completed: ${results.yesDays} happened, ${results.noDays} didn't happen${uncertainNote}`,
+      );
+
       setGoogleResults(results);
       setGoogleAffectedDates(new Set(results.affectedDates));
 
       toast({
         title: "Google verification completed",
-        description: `${results.validDays} valid, ${results.incorrectDays} incorrect, ${results.cannotVerifyDays} cannot verify`,
+        description: `${results.yesDays} happened · ${results.noDays} didn't${uncertainNote}`,
       });
 
     } catch (error: any) {
@@ -885,7 +889,7 @@ export default function MonthView() {
 
   // Helper function to get Google verification result for a specific date
   const getGoogleVerification = (date: string) => {
-    return googleResults?.results?.[date]?.assessment;
+    return googleResults?.results?.[date]?.happened;
   };
 
   if (isLoading) {
@@ -1239,22 +1243,16 @@ export default function MonthView() {
                                     )}
 
                                     {/* Google Verification Badge */}
-                                    {googleVerification === 'Valid' && (
+                                    {googleVerification === "yes" && (
                                       <Badge variant="default" className="text-xs bg-green-100 text-green-800">
                                         <SiGoogle className="w-3 h-3 mr-1" />
-                                        Google ✓
+                                        Happened
                                       </Badge>
                                     )}
-                                    {googleVerification === 'Incorrect' && (
+                                    {googleVerification === "no" && (
                                       <Badge variant="destructive" className="text-xs">
                                         <SiGoogle className="w-3 h-3 mr-1" />
-                                        Google ✗
-                                      </Badge>
-                                    )}
-                                    {googleVerification === 'Cannot Verify' && (
-                                      <Badge variant="secondary" className="text-xs bg-yellow-100 text-yellow-800">
-                                        <SiGoogle className="w-3 h-3 mr-1" />
-                                        Google ?
+                                        Didn&apos;t happen
                                       </Badge>
                                     )}
                                   </div>
@@ -1613,18 +1611,14 @@ export default function MonthView() {
           <CardContent>
             <div className="space-y-4">
               {/* Summary Stats */}
-              <div className="grid grid-cols-4 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600">{googleResults.validDays}</div>
-                  <div className="text-sm text-green-600">Valid</div>
+                  <div className="text-2xl font-bold text-green-600">{googleResults.yesDays}</div>
+                  <div className="text-sm text-green-600">Happened</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-red-600">{googleResults.incorrectDays}</div>
-                  <div className="text-sm text-red-600">Incorrect</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-yellow-600">{googleResults.cannotVerifyDays}</div>
-                  <div className="text-sm text-yellow-600">Cannot Verify</div>
+                  <div className="text-2xl font-bold text-red-600">{googleResults.noDays}</div>
+                  <div className="text-sm text-red-600">Didn&apos;t happen</div>
                 </div>
                 <div className="text-center">
                   <div className="text-2xl font-bold text-blue-600">{googleResults.totalDays}</div>
@@ -1635,27 +1629,26 @@ export default function MonthView() {
               {/* Accuracy Overview */}
               <div className="bg-white rounded-lg p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-blue-700">Accuracy Score</span>
+                  <span className="text-sm font-medium text-blue-700">Verified rate</span>
                   <span className="text-lg font-bold text-blue-800">
-                    {Math.round((googleResults.validDays / googleResults.totalDays) * 100)}%
+                    {Math.round((googleResults.yesDays / googleResults.totalDays) * 100)}%
                   </span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div 
                     className="bg-gradient-to-r from-green-400 to-blue-500 h-2 rounded-full" 
-                    style={{ width: `${(googleResults.validDays / googleResults.totalDays) * 100}%` }}
+                    style={{ width: `${(googleResults.yesDays / googleResults.totalDays) * 100}%` }}
                   ></div>
                 </div>
               </div>
 
-              {/* Affected Dates */}
-              {googleResults.incorrectDays > 0 && (
+              {googleResults.noDays > 0 && (
                 <div className="space-y-2">
-                  <h4 className="font-semibold text-red-800">❌ Incorrect Summaries ({googleResults.incorrectDays} dates):</h4>
+                  <h4 className="font-semibold text-red-800">Didn&apos;t happen ({googleResults.noDays} dates):</h4>
                   <div className="flex flex-wrap gap-2">
                     {Array.from(googleAffectedDates).filter(date => {
                       const verification = getGoogleVerification(date);
-                      return verification === 'Incorrect';
+                      return verification === "no";
                     }).map(date => (
                       <Link key={date} href={`/day/${date}`}>
                         <Badge variant="destructive" className="cursor-pointer hover:bg-red-600">
@@ -1667,31 +1660,13 @@ export default function MonthView() {
                 </div>
               )}
 
-              {googleResults.cannotVerifyDays > 0 && (
+              {googleResults.yesDays > 0 && (
                 <div className="space-y-2">
-                  <h4 className="font-semibold text-yellow-800">⚠️ Cannot Verify ({googleResults.cannotVerifyDays} dates):</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {Array.from(googleAffectedDates).filter(date => {
-                      const verification = getGoogleVerification(date);
-                      return verification === 'Cannot Verify';
-                    }).map(date => (
-                      <Link key={date} href={`/day/${date}`}>
-                        <Badge variant="secondary" className="cursor-pointer hover:bg-gray-300">
-                          {date}
-                        </Badge>
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {googleResults.validDays > 0 && (
-                <div className="space-y-2">
-                  <h4 className="font-semibold text-green-800">✅ Valid Summaries ({googleResults.validDays} dates):</h4>
+                  <h4 className="font-semibold text-green-800">Happened ({googleResults.yesDays} dates):</h4>
                   <div className="flex flex-wrap gap-2">
                     {Object.keys(googleResults.results).filter(date => {
                       const verification = getGoogleVerification(date);
-                      return verification === 'Valid';
+                      return verification === "yes";
                     }).map(date => (
                       <Link key={date} href={`/day/${date}`}>
                         <Badge variant="secondary" className="bg-green-100 text-green-800 cursor-pointer hover:bg-green-200">

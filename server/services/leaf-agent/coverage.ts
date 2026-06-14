@@ -1,3 +1,4 @@
+import type { HistoricalNewsAnalysis } from "@shared/schema";
 import { aiService } from "../ai";
 import { setDayLocked, isDayLocked } from "../day-lock";
 import { storage } from "../../storage";
@@ -9,14 +10,17 @@ import {
   MAIN_EVENTS_CHECK_MAX_DATES,
   MAIN_EVENTS_CHECK_CACHE_VERSION,
 } from "../../../shared/leaf-agent-config";
+import { mainEventsLeafPromptRules } from "../../../shared/main-events-leaf-prompts";
 import {
   TOPIC_HIERARCHY,
   TOPIC_HIERARCHY_LEAVES,
   formatTopicLeafWithGroup,
   topicGroupForLeaf,
 } from "../../../shared/topic-hierarchy";
+import { resolveStorylineLeafLabel } from "../../../shared/topic-hierarchy-migration";
 import {
   getMainEventsGeminiCacheMeta,
+  loadAllValidMainEventsCacheEntries,
   loadCachedMainEvents,
   loadMainEventsDismissals,
   resolveMainEventsGeminiModel,
@@ -157,22 +161,49 @@ export function normalizeCanonicalDates(
 
 export function displayLeafFromNormalized(normalizedTopic: string | undefined): string {
   if (!normalizedTopic) return "Untagged";
-  return (
+  const resolved =
     TOPIC_HIERARCHY_LEAVES.find((leaf) => normalizeTopicValue(leaf) === normalizedTopic) ??
-    normalizedTopic
-  );
+    resolveStorylineLeafLabel(normalizedTopic);
+  return resolved ?? normalizedTopic;
 }
 
 export async function loadAnalysisIndex(): Promise<LeafDatabaseRow[]> {
   const analyses = await storage.getAllAnalyses();
   return analyses
-    .map((row) => ({
-      date: row.date,
-      summary: (row.summary ?? "").trim(),
-      isLocked: Boolean(row.isLocked),
-      topics: topicLabelsFromRow(row.topicCategories),
-    }))
+    .map((row) => mapAnalysisToLeafRow(row))
     .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function mapAnalysisToLeafRow(row: HistoricalNewsAnalysis): LeafDatabaseRow {
+  return {
+    date: row.date,
+    summary: (row.summary ?? "").trim(),
+    isLocked: Boolean(row.isLocked),
+    topics: topicLabelsFromRow(row.topicCategories),
+  };
+}
+
+/** Loads only corpus rows + canonical-date rows (not the full analysis table). */
+export async function loadAnalysisIndexForLeafCrossCheck(
+  leaf: string,
+  canonicalDates: string[],
+): Promise<LeafDatabaseRow[]> {
+  const [corpusAnalyses, dateAnalyses] = await Promise.all([
+    storage.getAnalysesForStorylineLeaf(leaf),
+    storage.getAnalysesByDates(canonicalDates),
+  ]);
+
+  const byDate = new Map<string, LeafDatabaseRow>();
+  for (const row of dateAnalyses) {
+    byDate.set(row.date, mapAnalysisToLeafRow(row));
+  }
+  for (const row of corpusAnalyses) {
+    if (!byDate.has(row.date)) {
+      byDate.set(row.date, mapAnalysisToLeafRow(row));
+    }
+  }
+
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export function corpusForLeaf(allRows: LeafDatabaseRow[], leaf: string): LeafCorpusRow[] {
@@ -291,7 +322,7 @@ export function splitCoverageByDismissals(
   };
 }
 
-function buildCachedCoverageResult(
+export function buildCachedCoverageResult(
   leaf: string,
   allRows: LeafDatabaseRow[],
   cached: CachedMainEventsPayload,
@@ -334,11 +365,16 @@ export type MainEventsCheckSnapshot = {
 
 export async function getMainEventsCheckSnapshot(leafInput: string): Promise<MainEventsCheckSnapshot> {
   const leaf = resolveStorylineLeaf(leafInput);
-  const [cached, dismissals, allRows] = await Promise.all([
+  const [cached, dismissals] = await Promise.all([
     loadCachedMainEvents(leaf),
     loadMainEventsDismissals(leaf),
-    loadAnalysisIndex(),
   ]);
+  const allRows = cached
+    ? await loadAnalysisIndexForLeafCrossCheck(
+        leaf,
+        cached.canonical.map((entry) => entry.date),
+      )
+    : [];
   const corpus = corpusForLeaf(allRows, leaf);
   const geminiCache = cached
     ? {
@@ -378,6 +414,7 @@ async function fetchCanonicalDatesFromGemini(
 ): Promise<CanonicalDatesResponse> {
   const group = topicGroupForLeaf(leaf);
   const groupMeta = TOPIC_HIERARCHY.find((g) => g.name === group);
+  const leafRules = mainEventsLeafPromptRules(leaf);
   const gemini = aiService.getProvider("gemini");
 
   const systemPrompt = `You are a Bitcoin/crypto timeline curator. List historically important calendar dates for ONE homepage storyline leaf.
@@ -386,11 +423,17 @@ Only include dates from ${LEAF_AGENT_CORPUS_START_DATE} through ${LEAF_AGENT_COR
 Every date MUST be an exact calendar day in YYYY-MM-DD form — never use XX placeholders or month-only dates.
 Prefer landmark moments editors would expect on a daily timeline — not every minor news item.
 For each date include source_url: one reputable public link supporting the date and label. ${MAIN_EVENTS_SOURCE_URL_GUIDANCE}
+Include: ${leafRules.include}
+Exclude: ${leafRules.exclude}
 Respond ONLY with valid JSON matching the schema.`;
 
   const userPrompt = `Storyline group: ${group ?? "Unknown"}
 Group description: ${groupMeta?.description ?? ""}
 Storyline leaf: ${leaf}
+
+Leaf rules:
+- Include: ${leafRules.include}
+- Exclude: ${leafRules.exclude}
 
 Return the main canonical dates for this leaf (between ${LEAF_AGENT_CORPUS_START_DATE} and ${LEAF_AGENT_CORPUS_END_DATE} only). Include every landmark you can verify, up to ${maxDates} dates if needed.
 For each date include one reputable source URL (news article, official announcement, or encyclopedia) that supports the date and event label. Use web search to find the best link.
@@ -475,23 +518,122 @@ export async function getMainEventsCacheOverview(): Promise<{
   totalLeaves: number;
   cachedCount: number;
   uncachedLeaves: string[];
+  preparedLeaves: string[];
 }> {
+  const cacheByLeaf = await loadAllValidMainEventsCacheEntries();
   const uncachedLeaves: string[] = [];
-  let cachedCount = 0;
+  const preparedLeaves: string[] = [];
 
   for (const leaf of TOPIC_HIERARCHY_LEAVES) {
-    const cached = await loadCachedMainEvents(leaf);
-    if (cached) {
-      cachedCount += 1;
-    } else {
+    if (!cacheByLeaf.has(normalizeTopicValue(leaf))) {
       uncachedLeaves.push(leaf);
+    } else {
+      preparedLeaves.push(leaf);
     }
   }
 
   return {
     totalLeaves: TOPIC_HIERARCHY_LEAVES.length,
-    cachedCount,
+    cachedCount: preparedLeaves.length,
     uncachedLeaves,
+    preparedLeaves,
+  };
+}
+
+export type MainEventsLeafStatus = {
+  leaf: string;
+  group: string | null;
+  status: "matched" | "pending";
+  pendingReason: "not_prepared" | "needs_review" | null;
+  geminiCached: boolean;
+  canonicalCount: number;
+  matchedCount: number;
+  misplacedCount: number;
+  missingCount: number;
+  extraCount: number;
+  verificationPendingCount: number;
+  corpusCount: number;
+  fetchedAt: string | null;
+};
+
+export type MainEventsLeavesStatusOverview = {
+  totalLeaves: number;
+  matchedCount: number;
+  pendingCount: number;
+  matchedLeaves: MainEventsLeafStatus[];
+  pendingLeaves: MainEventsLeafStatus[];
+};
+
+export async function getMainEventsLeavesStatus(): Promise<MainEventsLeavesStatusOverview> {
+  const [allRows, cacheByLeaf] = await Promise.all([
+    loadAnalysisIndex(),
+    loadAllValidMainEventsCacheEntries(),
+  ]);
+
+  const matchedLeaves: MainEventsLeafStatus[] = [];
+  const pendingLeaves: MainEventsLeafStatus[] = [];
+
+  for (const leaf of TOPIC_HIERARCHY_LEAVES) {
+    const normalized = normalizeTopicValue(leaf);
+    const cacheEntry = cacheByLeaf.get(normalized);
+    const corpusCount = corpusForLeaf(allRows, leaf).length;
+
+    if (!cacheEntry) {
+      pendingLeaves.push({
+        leaf,
+        group: topicGroupForLeaf(leaf) ?? null,
+        status: "pending",
+        pendingReason: "not_prepared",
+        geminiCached: false,
+        canonicalCount: 0,
+        matchedCount: 0,
+        misplacedCount: 0,
+        missingCount: 0,
+        extraCount: 0,
+        verificationPendingCount: 0,
+        corpusCount,
+        fetchedAt: null,
+      });
+      continue;
+    }
+
+    const preview = buildCachedCoverageResult(
+      leaf,
+      allRows,
+      cacheEntry.payload,
+      cacheEntry.dismissals,
+    );
+    const openIssues =
+      preview.misplaced.length + preview.missing.length + cacheEntry.verification.pending.length;
+    const row: MainEventsLeafStatus = {
+      leaf,
+      group: topicGroupForLeaf(leaf) ?? null,
+      status: openIssues === 0 ? "matched" : "pending",
+      pendingReason: openIssues === 0 ? null : "needs_review",
+      geminiCached: true,
+      canonicalCount: preview.canonicalCount,
+      matchedCount: preview.matched.length,
+      misplacedCount: preview.misplaced.length,
+      missingCount: preview.missing.length,
+      extraCount: preview.extra.length,
+      verificationPendingCount: cacheEntry.verification.pending.length,
+      corpusCount: preview.corpusCount,
+      fetchedAt: cacheEntry.payload.fetchedAt.toISOString(),
+    };
+
+    if (row.status === "matched") {
+      matchedLeaves.push(row);
+    } else {
+      pendingLeaves.push(row);
+    }
+  }
+
+  return {
+    totalLeaves: TOPIC_HIERARCHY_LEAVES.length,
+    matchedCount: matchedLeaves.length,
+    pendingCount: pendingLeaves.length,
+    matchedLeaves,
+    pendingLeaves,
   };
 }
 
@@ -807,7 +949,10 @@ export async function previewLeafCoverageCheck(leafInput: string): Promise<LeafC
   if (!cached) {
     throw new Error("No cached main events list for this leaf");
   }
-  const allRows = await loadAnalysisIndex();
+  const allRows = await loadAnalysisIndexForLeafCrossCheck(
+    leaf,
+    cached.canonical.map((entry) => entry.date),
+  );
   return buildCachedCoverageResult(leaf, allRows, cached, dismissals);
 }
 

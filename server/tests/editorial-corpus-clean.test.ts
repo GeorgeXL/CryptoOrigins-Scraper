@@ -54,6 +54,19 @@ test("redo_summary stays automatic (same-article regen)", () => {
   assert.equal(manual.length, 0);
 });
 
+test("expand_summary stays automatic", () => {
+  const expand: CorrectionProposal = {
+    id: "e",
+    kind: "expand_summary",
+    currentSummary: "Short summary",
+    rationale: "Expand summary in place (100–110 chars).",
+  };
+  const { automatic, manual } = splitCorrectionProposalsForAutoApply([expand]);
+  assert.equal(automatic.length, 1);
+  assert.equal(automatic[0]?.kind, "expand_summary");
+  assert.equal(manual.length, 0);
+});
+
 test("edit_summary stays manual", () => {
   const edit: CorrectionProposal = {
     id: "e",

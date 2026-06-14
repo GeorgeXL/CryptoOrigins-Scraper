@@ -49,6 +49,8 @@ export const historicalNewsAnalyses = pgTable("historical_news_analyses", {
   perplexityCorrectDateText: text("perplexity_correct_date_text"), // NEW: Handles complex date strings like "2023-05-07 to 2023-05-09"
   perplexityCitations: jsonb("perplexity_citations"), // Array of source URLs from Perplexity
   perplexityCheckedAt: timestamp("perplexity_checked_at"),
+  googleCheckHappened: text("google_check_happened"), // 'yes', 'no', 'uncertain'
+  googleCheckCheckedAt: timestamp("google_check_checked_at"),
   // Re-verification fields: When Perplexity finds a different date, re-analyze using that date
   reVerified: boolean("re_verified").default(false), // Has this been re-analyzed with corrected date?
   reVerifiedAt: timestamp("re_verified_at"), // When re-verification occurred
@@ -69,6 +71,7 @@ export const historicalNewsAnalyses = pgTable("historical_news_analyses", {
   confidenceScoreIdx: index("idx_historical_news_confidence").on(table.confidenceScore),
   sentimentScoreIdx: index("idx_historical_news_sentiment").on(table.sentimentScore),
   factCheckVerdictIdx: index("idx_historical_news_fact_check_verdict").on(table.factCheckVerdict),
+  googleCheckHappenedIdx: index("idx_historical_news_google_check_happened").on(table.googleCheckHappened),
 }));
 
 export const manualNewsEntries = pgTable("manual_news_entries", {
@@ -336,10 +339,20 @@ export const mainEventsCheckCache = pgTable("main_events_check_cache", {
   canonicalDates: jsonb("canonical_dates").notNull(),
   skippedCanonical: jsonb("skipped_canonical").notNull().default([]),
   dismissedDates: jsonb("dismissed_dates").notNull().default({ misplaced: [], missing: [], extra: [] }),
+  verificationDates: jsonb("verification_dates").notNull().default({ matched: [], pending: [] }),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   normalizedLeafUq: uniqueIndex("idx_main_events_check_cache_normalized_leaf").on(table.normalizedLeaf),
+}));
+
+/** Operator resolution when the same date is proposed on multiple leaves' Gemini lists. */
+export const mainEventsCrossLeafAssignments = pgTable("main_events_cross_leaf_assignments", {
+  date: date("date").primaryKey(),
+  ownerLeaf: text("owner_leaf").notNull(),
+  assignedAt: timestamp("assigned_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  ownerLeafIdx: index("idx_main_events_cross_leaf_owner").on(table.ownerLeaf),
 }));
 
 // Human review queue for final editorial approval (mandatory gate)

@@ -7,11 +7,18 @@ import {
   getLeafCorpusStats,
   getMainEventsCacheOverview,
   getMainEventsCheckSnapshot,
+  getMainEventsLeavesStatus,
   previewLeafCoverageCheck,
   runLeafCoverageCheck,
   setMainEventsDismissal,
 } from "../services/leaf-agent/coverage";
-import type { MainEventsDismissCategory } from "@shared/leaf-agent-config";
+import {
+  getMainEventsReviewQueue,
+  setMainEventsReviewDecision,
+} from "../services/leaf-agent/review-queue";
+import { verifyMainEventsTopicAlignment } from "../services/leaf-agent/topic-alignment-agent";
+import { verifyMainEventsSummaryAlignment } from "../services/leaf-agent/summary-alignment-agent";
+import type { MainEventsDismissCategory, MainEventsReviewDecision } from "@shared/leaf-agent-config";
 
 const router = Router();
 
@@ -63,6 +70,68 @@ router.get("/api/main-events-check/cache-overview", async (_req, res) => {
   }
 });
 
+router.get("/api/main-events-check/leaves-status", async (_req, res) => {
+  try {
+    const overview = await getMainEventsLeavesStatus();
+    res.json(overview);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load leaves status";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/api/main-events-check/review/:leaf", async (req, res) => {
+  try {
+    const queue = await getMainEventsReviewQueue(decodeURIComponent(req.params.leaf ?? ""));
+    res.json(queue);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load review queue";
+    const status =
+      message.includes("No cached main events list")
+        ? 404
+        : message.includes("Unknown") || message.includes("Ambiguous")
+          ? 400
+          : 500;
+    res.status(status).json({ error: message });
+  }
+});
+
+const REVIEW_DECISIONS = new Set<MainEventsReviewDecision>(["accepted", "rejected", "pending"]);
+
+router.post("/api/main-events-check/review", async (req, res) => {
+  try {
+    const leaf = typeof req.body?.leaf === "string" ? req.body.leaf.trim() : "";
+    const date = typeof req.body?.date === "string" ? req.body.date.trim() : "";
+    const decision = req.body?.decision;
+
+    if (!leaf) {
+      res.status(400).json({ error: "leaf is required" });
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.status(400).json({ error: "date must be YYYY-MM-DD" });
+      return;
+    }
+    if (!REVIEW_DECISIONS.has(decision)) {
+      res.status(400).json({ error: "decision must be accepted, rejected, or pending" });
+      return;
+    }
+
+    const queue = await setMainEventsReviewDecision({ leaf, date, decision });
+    res.json(queue);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to update review decision";
+    const status =
+      message.includes("No main events check saved") ||
+      message.includes("No cached main events list")
+        ? 404
+        : message.includes("Unknown") || message.includes("Ambiguous")
+          ? 400
+          : 500;
+    res.status(status).json({ error: message });
+  }
+});
+
 router.post("/api/main-events-check/cache-gemini", async (req, res) => {
   try {
     const leaf = typeof req.body?.leaf === "string" ? req.body.leaf.trim() : "";
@@ -77,6 +146,62 @@ router.post("/api/main-events-check/cache-gemini", async (req, res) => {
     res.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to cache Gemini list";
+    const status =
+      message.includes("Unknown") ||
+      message.includes("Ambiguous") ||
+      message.includes("GEMINI") ||
+      message.includes("GOOGLE_API_KEY")
+        ? 400
+        : 500;
+    res.status(status).json({ error: message });
+  }
+});
+
+router.post("/api/main-events-check/verify-alignment", async (req, res) => {
+  try {
+    const leaf = typeof req.body?.leaf === "string" ? req.body.leaf.trim() : undefined;
+    const maxItems =
+      typeof req.body?.maxItems === "number" && Number.isFinite(req.body.maxItems)
+        ? req.body.maxItems
+        : undefined;
+
+    const report = await verifyMainEventsTopicAlignment({
+      leaf,
+      maxItems,
+      applyLockPolicy: req.body?.applyLockPolicy !== false,
+      persistResults: req.body?.persistResults !== false,
+    });
+    res.json(report);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to verify topic alignment";
+    const status =
+      message.includes("Unknown") ||
+      message.includes("Ambiguous") ||
+      message.includes("GEMINI") ||
+      message.includes("GOOGLE_API_KEY")
+        ? 400
+        : 500;
+    res.status(status).json({ error: message });
+  }
+});
+
+router.post("/api/main-events-check/verify-summaries", async (req, res) => {
+  try {
+    const leaf = typeof req.body?.leaf === "string" ? req.body.leaf.trim() : undefined;
+    const maxItems =
+      typeof req.body?.maxItems === "number" && Number.isFinite(req.body.maxItems)
+        ? req.body.maxItems
+        : undefined;
+
+    const report = await verifyMainEventsSummaryAlignment({
+      leaf,
+      maxItems,
+      applyLockPolicy: req.body?.applyLockPolicy !== false,
+      persistResults: req.body?.persistResults !== false,
+    });
+    res.json(report);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to verify summary alignment";
     const status =
       message.includes("Unknown") ||
       message.includes("Ambiguous") ||

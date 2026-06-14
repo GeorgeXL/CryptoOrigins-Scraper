@@ -531,6 +531,14 @@ export function consolidateDuplicateQueueRows(rows: AgentsV2QueueRow[]): AgentsV
   return out;
 }
 
+export function sortQueueRowsByEventDate(rows: AgentsV2QueueRow[]): AgentsV2QueueRow[] {
+  return [...rows].sort((a, b) => {
+    const byDate = a.date.localeCompare(b.date);
+    if (byDate !== 0) return byDate;
+    return a.id.localeCompare(b.id);
+  });
+}
+
 export function consolidateQueueRows(rows: AgentsV2QueueRow[]): AgentsV2QueueRow[] {
-  return consolidateDuplicateQueueRows(groupCalendarQueueRows(rows));
+  return sortQueueRowsByEventDate(consolidateDuplicateQueueRows(groupCalendarQueueRows(rows)));
 }

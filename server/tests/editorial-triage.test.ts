@@ -36,7 +36,7 @@ test("triageExistingDay flags missing winning article even when summary and taxo
     totalArticlesFetched: 12,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: ["Bitcoin price action"],
+    topicCategories: ["Bitcoin price & cycles"],
     tagLinkCount: 1,
   });
   assert.equal(item.route, "existing_needs_correction");
@@ -100,7 +100,7 @@ test("triageExistingDay routes too-long summary to correction when article + tax
     totalArticlesFetched: 4,
     confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
-    topicCategories: [{ name: "Bitcoin price action" }],
+    topicCategories: [{ name: "Bitcoin price & cycles" }],
     tagLinkCount: 1,
   });
   assert.equal(item.route, "existing_needs_correction");

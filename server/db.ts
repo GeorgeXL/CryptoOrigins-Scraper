@@ -31,6 +31,26 @@ if (!databaseUrl) {
 let poolInstance: pg.Pool | null = null;
 let dbInstance: ReturnType<typeof drizzle> | null = null;
 
+function isPerplexityScriptProcess(): boolean {
+  if (process.env.PERPLEXITY_SCRIPT === "1") return true;
+  if (process.env.CLEANUP_LEAF?.trim()) return true;
+  return process.argv.some((arg) => /run-perplexity/i.test(arg));
+}
+
+/** Keep batch/coordinator/leaf workers from exhausting Supabase connection slots. */
+function resolveMaxConnections(isServerless: boolean): number {
+  if (isServerless) return 2;
+
+  const envRaw = process.env.PERPLEXITY_SCRIPT_POOL_SIZE?.trim();
+  if (envRaw) {
+    const parsed = Number(envRaw);
+    if (Number.isFinite(parsed) && parsed >= 1) return Math.floor(parsed);
+  }
+
+  if (isPerplexityScriptProcess()) return 1;
+  return 15;
+}
+
 function getDbInstance() {
   if (dbInstance) {
     return dbInstance;
@@ -42,7 +62,7 @@ function getDbInstance() {
 
   try {
     const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
-    const maxConnections = isServerless ? 2 : 15;
+    const maxConnections = resolveMaxConnections(isServerless);
 
     console.log(`🔧 LAZY INIT: Creating database pool (serverless: ${isServerless}, max: ${maxConnections})...`);
 
