@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../db";
-import { historicalNewsAnalyses, pageTopics, topics } from "@shared/schema";
+import { historicalNewsAnalyses } from "@shared/schema";
 import {
   TOPIC_HIERARCHY,
   TOPIC_HIERARCHY_LEAVES,
@@ -17,8 +17,6 @@ type StorylineInput = {
   tags?: string[];
   modelTopics?: string[];
 };
-
-type TopicRow = typeof topics.$inferSelect;
 
 const KNOWN_NEW_STORYLINES: Record<string, { parent: string; sortOrder: number }> = {
   "halving events": { parent: "Bitcoin", sortOrder: 95 },
@@ -55,15 +53,6 @@ const BROAD_MODEL_STORYLINE_LABELS = new Set([
   "regulation",
   "technology",
 ]);
-
-function slugify(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/&/g, "and")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 function canonicalLabel(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -479,127 +468,19 @@ export function inferStorylineLabels(input: StorylineInput): string[] {
   return inferStorylineLabelsFromCorpus(corpusFrom(input), input.modelTopics);
 }
 
-async function ensureGroupTopic(groupName: string, existing: TopicRow[]): Promise<TopicRow | null> {
-  const key = canonicalLabel(groupName);
-  const direct = existing.find((t) => canonicalLabel(t.name) === key);
-  if (direct) return direct;
-
-  const groupIndex = TOPIC_HIERARCHY.findIndex((group) => canonicalLabel(group.name) === key);
-  if (groupIndex < 0) return null;
-
-  const inserted = await db
-    .insert(topics)
-    .values({
-      name: groupName,
-      slug: slugify(groupName),
-      parentTopicId: null,
-      sortOrder: groupIndex * 100,
-    })
-    .onConflictDoNothing()
-    .returning();
-
-  if (inserted[0]) return inserted[0];
-
-  const refreshed = await db.select().from(topics);
-  return refreshed.find((t) => canonicalLabel(t.name) === key) ?? null;
-}
-
-async function ensureStorylineTopic(label: string, existing: TopicRow[]): Promise<TopicRow | null> {
-  const key = canonicalLabel(label);
-  const direct = existing.find((t) => canonicalLabel(t.name) === key || canonicalLabel(t.slug ?? "") === slugify(label));
-  if (direct) return direct;
-
-  if (KNOWN_LEAF_STORYLINE_LABELS.has(key)) {
-    const parentName = topicGroupForLeaf(label);
-    if (!parentName) return null;
-
-    let parent = existing.find((t) => canonicalLabel(t.name) === canonicalLabel(parentName));
-    if (!parent) {
-      parent = (await ensureGroupTopic(parentName, existing)) ?? undefined;
-      if (parent) existing.push(parent);
-    }
-    if (!parent) return null;
-
-    const group = TOPIC_HIERARCHY.find((entry) => entry.name === parentName);
-    const leafIndex = group?.leaves.indexOf(label) ?? 0;
-
-    const inserted = await db
-      .insert(topics)
-      .values({
-        name: label,
-        slug: `${slugify(parent.name)}-${slugify(label)}`,
-        parentTopicId: parent.id,
-        sortOrder: leafIndex,
-      })
-      .onConflictDoNothing()
-      .returning();
-
-    if (inserted[0]) return inserted[0];
-
-    const refreshed = await db.select().from(topics);
-    return refreshed.find((t) => canonicalLabel(t.name) === key) ?? null;
-  }
-
-  const known = KNOWN_NEW_STORYLINES[key];
-  if (!known) return null;
-
-  let parent = existing.find((t) => canonicalLabel(t.name) === canonicalLabel(known.parent));
-  if (!parent) {
-    parent = (await ensureGroupTopic(known.parent, existing)) ?? undefined;
-    if (parent) existing.push(parent);
-  }
-  if (!parent) return null;
-
-  const inserted = await db
-    .insert(topics)
-    .values({
-      name: label,
-      slug: `${slugify(parent.name)}-${slugify(label)}`,
-      parentTopicId: parent.id,
-      sortOrder: known.sortOrder,
-    })
-    .onConflictDoNothing()
-    .returning();
-
-  if (inserted[0]) return inserted[0];
-
-  const refreshed = await db.select().from(topics);
-  return refreshed.find((t) => canonicalLabel(t.name) === key) ?? null;
-}
-
-/** Ensure all hierarchy groups and leaves exist in `topics`. */
-export async function ensureTopicHierarchySeeded(): Promise<void> {
-  const existing = await db.select().from(topics);
-
-  for (const group of TOPIC_HIERARCHY) {
-    const parent = await ensureGroupTopic(group.name, existing);
-    if (parent && !existing.some((t) => t.id === parent.id)) existing.push(parent);
-
-    for (const leaf of group.leaves) {
-      const topic = await ensureStorylineTopic(leaf, existing);
-      if (topic && !existing.some((t) => t.id === topic.id)) existing.push(topic);
-    }
-  }
-}
-
-/** Sync `page_topics` from each day's primary `topic_categories` label. */
+/** Report how many rows have topic_categories (no page_topics mirror). */
 export async function backfillPageTopicsFromCategories(dryRun = false): Promise<{
   scanned: number;
   linked: number;
   skipped: number;
 }> {
   const stats = { scanned: 0, linked: 0, skipped: 0 };
-  await ensureTopicHierarchySeeded();
 
   const rows = await db
     .select({
-      id: historicalNewsAnalyses.id,
-      date: historicalNewsAnalyses.date,
       topicCategories: historicalNewsAnalyses.topicCategories,
     })
     .from(historicalNewsAnalyses);
-
-  const allTopics = await db.select().from(topics);
 
   for (const row of rows) {
     stats.scanned += 1;
@@ -609,25 +490,6 @@ export async function backfillPageTopicsFromCategories(dryRun = false): Promise<
       stats.skipped += 1;
       continue;
     }
-
-    const topic = await ensureStorylineTopic(label, allTopics);
-    if (!topic) {
-      stats.skipped += 1;
-      continue;
-    }
-    if (!allTopics.some((t) => t.id === topic.id)) allTopics.push(topic);
-
-    if (dryRun) {
-      stats.linked += 1;
-      continue;
-    }
-
-    await db.delete(pageTopics).where(eq(pageTopics.analysisId, row.id));
-    await db.insert(pageTopics).values({
-      analysisId: row.id,
-      topicId: topic.id,
-      isPrimary: true,
-    });
     stats.linked += 1;
   }
 
@@ -642,24 +504,18 @@ export async function syncStorylineAssignmentsForDate(date: string, labels: stri
     .limit(1);
   if (!analysis) return [];
 
-  const allTopics = await db.select().from(topics);
-  const linked: TopicRow[] = [];
+  const linked: string[] = [];
   for (const label of labels.slice(0, 1)) {
-    const topic = await ensureStorylineTopic(label, [...allTopics, ...linked]);
-    if (topic) linked.push(topic);
+    const resolved = resolveStorylineLeafLabel(label) ?? label;
+    if (resolved.trim()) linked.push(resolved.trim());
   }
 
-  await db.delete(pageTopics).where(eq(pageTopics.analysisId, analysis.id));
-  if (linked.length === 0) return [];
+  await db
+    .update(historicalNewsAnalyses)
+    .set({ topicCategories: linked })
+    .where(eq(historicalNewsAnalyses.date, date));
 
-  await db.insert(pageTopics).values(
-    linked.map((topic, index) => ({
-      analysisId: analysis.id,
-      topicId: topic.id,
-      isPrimary: index === 0,
-    })),
-  );
-  return linked.map((t) => t.name);
+  return linked;
 }
 
 export async function ensureTopicCategoryAndStorylineLinks(date: string, labels: string[]): Promise<string[]> {

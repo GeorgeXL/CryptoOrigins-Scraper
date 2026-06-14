@@ -9,9 +9,6 @@ test("triageExistingDay marks empty day for low-content records", () => {
     analysisId: "11111111-1111-4111-8111-111111111111",
     summary: "",
     isFlagged: false,
-    isOrphan: true,
-    totalArticlesFetched: 0,
-    confidenceScore: 42,
   });
 
   assert.equal(item.route, "empty_day");
@@ -22,7 +19,7 @@ test("triageExistingDay marks empty day for low-content records", () => {
   const tagIdx = item.requiredAgents.indexOf("TagConsistencyAgent");
   const fIdx = item.requiredAgents.indexOf("FinalEditorAgent");
   assert.ok(sumIdx >= 0 && dupIdx > sumIdx && dIdx > dupIdx && tagIdx > dIdx && fIdx > tagIdx);
-  assert.ok(item.reasons.some((r) => r.includes("orphan")));
+  assert.ok(item.reasons.some((r) => r.toLowerCase().includes("winning article") || r.includes("article pool")));
 });
 
 test("triageExistingDay flags missing winning article even when summary and taxonomy look fine", () => {
@@ -32,9 +29,6 @@ test("triageExistingDay flags missing winning article even when summary and taxo
     summary: "x".repeat(104),
     topArticleId: "none",
     isFlagged: false,
-    isOrphan: false,
-    totalArticlesFetched: 12,
-    confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
     topicCategories: ["Bitcoin price & cycles"],
     tagLinkCount: 1,
@@ -50,9 +44,6 @@ test("triageExistingDay marks healthy record as existing_ok", () => {
     summary: "x".repeat(105),
     topArticleId: "article-top-1",
     isFlagged: false,
-    isOrphan: false,
-    totalArticlesFetched: 8,
-    confidenceScore: 88,
     tagsVersion2: ["Bitcoin", "ETF"],
     topicCategories: [{ name: "Bitcoin adoption" }],
     tagLinkCount: 2,
@@ -75,9 +66,6 @@ test("triageExistingDay routes weak summary to existing_needs_correction when ar
     summary: "Short manual blurb.", // <80 chars → weak, but story is operator-curated
     topArticleId: "pizza-milestone-article",
     isFlagged: false,
-    isOrphan: false,
-    totalArticlesFetched: 4,
-    confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
     topicCategories: [{ name: "Early Bitcoin history" }],
     tagLinkCount: 1,
@@ -96,9 +84,6 @@ test("triageExistingDay routes too-long summary to correction when article + tax
     summary: "x".repeat(111),
     topArticleId: "article-1",
     isFlagged: false,
-    isOrphan: false,
-    totalArticlesFetched: 4,
-    confidenceScore: 90,
     tagsVersion2: ["Bitcoin"],
     topicCategories: [{ name: "Bitcoin price & cycles" }],
     tagLinkCount: 1,
@@ -117,9 +102,6 @@ test("triageExistingDay accepts known manual event without fetched articles when
     topArticleId: null,
     isManualOverride: true,
     isFlagged: false,
-    isOrphan: false,
-    totalArticlesFetched: 0,
-    confidenceScore: 90,
     tagsVersion2: ["Bitcoin", "Pizza Day"],
     topicCategories: [{ name: "Bitcoin adoption" }],
     tagLinkCount: 1,
@@ -136,9 +118,6 @@ test("triageExistingDay routes old broad topics to correction even when tags exi
     summary: "x".repeat(106),
     topArticleId: "article-1",
     isFlagged: false,
-    isOrphan: false,
-    totalArticlesFetched: 4,
-    confidenceScore: 90,
     tagsVersion2: ["Democrats"],
     topicCategories: ["economic", "institutional"],
     tagLinkCount: 1,
@@ -157,9 +136,6 @@ test("triageExistingDay routes known manual event with invalid summary to correc
     topArticleId: null,
     isManualOverride: true,
     isFlagged: false,
-    isOrphan: false,
-    totalArticlesFetched: 0,
-    confidenceScore: 90,
     tagsVersion2: ["Bitcoin", "Pizza Day"],
     topicCategories: [{ name: "Bitcoin adoption" }],
     tagLinkCount: 1,
@@ -176,9 +152,6 @@ test("triageExistingDay routes to existing_needs_correction when summary ok but 
     summary: "x".repeat(104),
     topArticleId: "pizza-milestone-article",
     isFlagged: false,
-    isOrphan: false,
-    totalArticlesFetched: 1,
-    confidenceScore: 90,
     tagsVersion2: [],
     topicCategories: [],
     tags: [],

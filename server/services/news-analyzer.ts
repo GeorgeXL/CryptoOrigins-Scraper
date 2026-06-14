@@ -122,19 +122,16 @@ export class NewsAnalyzerService {
           summary: result.summary,
           topArticleId: result.topArticleId,
           isManualOverride: false,
-          aiProvider: result.aiProvider,
           reasoning: result.reasoning,
-          confidenceScore: result.confidenceScore.toString(),
-          sentimentScore: result.sentimentScore.toString(),
-          sentimentLabel: result.sentimentLabel,
           topicCategories: result.topicCategories,
-          duplicateArticleIds: result.duplicateArticleIds,
-          totalArticlesFetched: result.totalArticlesFetched,
-          uniqueArticlesAnalyzed: result.uniqueArticlesAnalyzed,
           winningTier: result.winningTier,
           tieredArticles: result.tieredArticles,
+          analyzedArticles: [
+            ...(result.tieredArticles.bitcoin || []),
+            ...(result.tieredArticles.crypto || []),
+            ...(result.tieredArticles.macro || []),
+          ],
           articleTags: {
-            // Basic tags structure to match schema expectations
             totalArticles: result.totalArticlesFetched,
             topSources: {},
             duplicatesFound: result.duplicateArticleIds.length,
@@ -148,9 +145,9 @@ export class NewsAnalyzerService {
               version: '3.0-multi-provider',
               tierUsed: result.winningTier,
               winningTier: result.winningTier,
-              analyzedArticles: [] // Should be filled if needed
-            }
-          }
+              analyzedArticles: [],
+            },
+          },
         };
 
         const existingAnalysis = await storage.getAnalysisByDate(date);

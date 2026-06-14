@@ -22,51 +22,44 @@ export function FlagButton({ date, isFlagged, flagReason, type, entryId, classNa
   const [isUpdating, setIsUpdating] = useState(false);
   const { toast } = useToast();
   
-  // Use a ref to track if we're already processing to prevent multiple calls
   const processingRef = React.useRef(false);
 
   const handleToggleFlag = async (flagged: boolean, newReason?: string) => {
-    // Prevent multiple simultaneous flag operations using both state and ref
     if (isUpdating || processingRef.current) {
-      console.log('Flag operation already in progress, skipping');
       return;
     }
     
     processingRef.current = true;
     setIsUpdating(true);
-    console.log(`Flag operation starting for ${date}: ${flagged ? 'flagging' : 'unflagging'}`);
     
     try {
       const endpoint = type === 'analysis' 
-        ? `/api/analysis/flag/${date}`
+        ? `/api/analysis/date/${date}/flag`
         : `/api/manual-entries/flag/${entryId}`;
       
+      const body =
+        type === 'analysis'
+          ? { isFlagged: flagged }
+          : { isFlagged: flagged, flagReason: flagged ? newReason : null };
+
       const response = await fetch(endpoint, {
-        method: 'PATCH',
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          isFlagged: flagged,
-          flagReason: flagged ? newReason : null,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
         throw new Error('Failed to update flag');
       }
 
-      // Invalidate relevant caches
       await queryClient.invalidateQueries({ queryKey: ['/api/analysis'] });
       await queryClient.invalidateQueries({ queryKey: ['/api/manual-entries'] });
-      // Also invalidate specific date query
       await queryClient.invalidateQueries({ queryKey: [`/api/analysis/date/${date}`] });
-      // Invalidate year data to update monthly/yearly views
       const year = new Date(date).getFullYear();
       await queryClient.invalidateQueries({ queryKey: [`/api/analysis/year/${year}`] });
-      // Invalidate the year filter query used by YearListView
       await queryClient.invalidateQueries({ queryKey: [`/api/analysis/filter?startDate=${year}-01-01&endDate=${year}-12-31`] });
-      // Invalidate month data for MonthView
       const month = new Date(date).getMonth() + 1;
       const monthStr = month.toString().padStart(2, '0');
       await queryClient.invalidateQueries({ queryKey: [`/api/analysis/month/${year}/${monthStr}`] });
@@ -94,6 +87,28 @@ export function FlagButton({ date, isFlagged, flagReason, type, entryId, classNa
   const handleRemoveFlag = () => {
     handleToggleFlag(false);
   };
+
+  if (type === 'analysis') {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className={`p-1 h-6 w-6 hover:bg-slate-100 transition-colors ${className || ''}`}
+        disabled={isUpdating}
+        onClick={(e) => {
+          e.stopPropagation();
+          handleToggleFlag(!isFlagged);
+        }}
+        title={isFlagged ? 'Flagged for attention' : 'Flag for attention'}
+      >
+        {isFlagged ? (
+          <Flag className="h-4 w-4 text-red-500 fill-red-500" />
+        ) : (
+          <FlagOff className="h-4 w-4 text-gray-400 hover:text-red-500" />
+        )}
+      </Button>
+    );
+  }
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
@@ -133,7 +148,6 @@ export function FlagButton({ date, isFlagged, flagReason, type, entryId, classNa
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               onKeyDown={(e) => {
-                // Prevent any accidental submissions
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   e.stopPropagation();

@@ -1,6 +1,7 @@
 import { and, asc, count, eq, gte, inArray, lte } from "drizzle-orm";
 import { db } from "../../db";
-import { historicalNewsAnalyses, manualNewsEntries, pagesAndTags, canonicalMilestones } from "@shared/schema";
+import { historicalNewsAnalyses, manualNewsEntries, canonicalMilestones } from "@shared/schema";
+import type { TieredArticles } from "@shared/schema";
 import type { TriageItem } from "./contracts";
 import { triageItemSchema } from "./contracts";
 import { evaluateSummaryQuality, isValidPipelineTopArticleId } from "./editorial-quality";
@@ -46,45 +47,28 @@ function topicCategoryNames(raw: unknown): string[] {
   return out;
 }
 
-
-function legacyTagNames(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
-  for (const entry of raw) {
-    if (typeof entry === "string") {
-      const v = entry.trim();
-      if (v) out.push(v);
-    } else if (entry && typeof entry === "object") {
-      const name = (entry as { name?: unknown }).name;
-      if (typeof name === "string" && name.trim()) out.push(name.trim());
-    }
-  }
-  return out;
-}
-
-function isPlaceholderLegacyTag(name: string): boolean {
-  const key = name.trim().toLowerCase();
-  return key === "no tag" || key === "notag" || key === "untagged";
-}
-
-function meaningfulLegacyTagsLen(v: unknown): number {
-  return legacyTagNames(v).filter((name) => !isPlaceholderLegacyTag(name)).length;
+function tieredArticleCount(raw: unknown): number {
+  if (!raw || typeof raw !== "object") return 0;
+  const tiers = raw as TieredArticles;
+  return (
+    (Array.isArray(tiers.bitcoin) ? tiers.bitcoin.length : 0) +
+    (Array.isArray(tiers.crypto) ? tiers.crypto.length : 0) +
+    (Array.isArray(tiers.macro) ? tiers.macro.length : 0)
+  );
 }
 
 /**
- * True when we have no positive taxonomy signal (normalized tags, topic categories, legacy tags, or join rows).
+ * True when we have no positive taxonomy signal (normalized tags, topic categories, or join rows).
  * If no tag-related fields were passed at all (unit tests), returns false so behaviour stays backward-compatible.
  */
 function editorialTaxonomyMissing(input: {
   tagsVersion2?: unknown;
   topicCategories?: unknown;
-  tags?: unknown;
   tagLinkCount?: number | null;
 }): boolean {
   const anyFieldProvided =
     input.tagsVersion2 !== undefined ||
     input.topicCategories !== undefined ||
-    input.tags !== undefined ||
     input.tagLinkCount !== undefined;
   if (!anyFieldProvided) return false;
 
@@ -93,7 +77,6 @@ function editorialTaxonomyMissing(input: {
 
   if (tagsVersion2Len(input.tagsVersion2) > 0) return false;
   if (topicCategoriesLen(input.topicCategories) > 0) return false;
-  if (meaningfulLegacyTagsLen(input.tags) > 0) return false;
   if (typeof input.tagLinkCount === "number" && input.tagLinkCount > 0) return false;
   return true;
 }
@@ -105,18 +88,14 @@ export function triageExistingDay(input: {
   topArticleId?: string | null;
   isManualOverride?: boolean | null;
   isFlagged: boolean | null;
-  isOrphan: boolean | null;
-  totalArticlesFetched: number | null;
-  confidenceScore: string | number | null;
+  tieredArticles?: unknown;
   tagsVersion2?: unknown;
   topicCategories?: unknown;
-  tags?: unknown;
   tagLinkCount?: number | null;
   manualEntryCount?: number | null;
   milestoneLabel?: string | null;
 }): TriageItem {
   const reasons: string[] = [];
-  const totalArticlesFetched = Number(input.totalArticlesFetched ?? 0);
   const taxonomyMissing = editorialTaxonomyMissing(input);
   const summaryIssue = evaluateSummaryQuality(input.summary);
   const hasManualEventSignal =
@@ -125,7 +104,8 @@ export function triageExistingDay(input: {
     Boolean(input.milestoneLabel?.trim()) ||
     String(input.topArticleId ?? "").trim().startsWith("manual-") ||
     String(input.topArticleId ?? "").trim().startsWith("known-");
-  const hasValidArticleWinner = totalArticlesFetched > 0 && isValidPipelineTopArticleId(input.topArticleId);
+  const hasValidArticleWinner = isValidPipelineTopArticleId(input.topArticleId);
+  const hasStoredArticles = tieredArticleCount(input.tieredArticles) > 0;
   const hasKnownManualEvent =
     hasManualEventSignal &&
     String(input.summary ?? "").trim().length > 0 &&
@@ -133,13 +113,13 @@ export function triageExistingDay(input: {
   const hasUsableEventSource = hasValidArticleWinner || hasKnownManualEvent;
 
   if (input.isFlagged) reasons.push("Day is flagged");
-  if (input.isOrphan) reasons.push("Day marked as orphan");
-  if (totalArticlesFetched === 0 && !hasKnownManualEvent) reasons.push("No fetched articles");
+  if (!hasValidArticleWinner && !hasKnownManualEvent && !hasStoredArticles) {
+    reasons.push("No winning article or stored article pool for this day");
+  }
   if (summaryIssue) reasons.push(summaryIssue.message);
   if (!isValidPipelineTopArticleId(input.topArticleId) && !hasKnownManualEvent) {
     reasons.push("No winning article selected (top_article_id missing or placeholder)");
   }
-  if (Number(input.confidenceScore ?? 0) < 60) reasons.push("Low confidence score");
   if (taxonomyMissing) {
     reasons.push(
       input.tagsVersion2 !== undefined && tagsVersion2Len(input.tagsVersion2) === 0
@@ -170,7 +150,9 @@ export function triageExistingDay(input: {
    */
   const summaryRedoViable = Boolean(summaryIssue) && hasUsableEventSource;
   const missingEventSource = !hasUsableEventSource;
-  const useEmptyDayPath = missingEventSource && (totalArticlesFetched === 0 || Boolean(summaryIssue));
+  const useEmptyDayPath =
+    missingEventSource &&
+    (!String(input.summary ?? "").trim() || Boolean(summaryIssue));
 
   const route = useEmptyDayPath ? "empty_day" : "existing_needs_correction";
 
@@ -232,22 +214,18 @@ export async function retriageSingleExistingDate(date: string): Promise<TriageIt
       topArticleId: historicalNewsAnalyses.topArticleId,
       isManualOverride: historicalNewsAnalyses.isManualOverride,
       isFlagged: historicalNewsAnalyses.isFlagged,
-      isOrphan: historicalNewsAnalyses.isOrphan,
-      totalArticlesFetched: historicalNewsAnalyses.totalArticlesFetched,
-      confidenceScore: historicalNewsAnalyses.confidenceScore,
+      tieredArticles: historicalNewsAnalyses.tieredArticles,
       tagsVersion2: historicalNewsAnalyses.tagsVersion2,
       topicCategories: historicalNewsAnalyses.topicCategories,
-      tags: historicalNewsAnalyses.tags,
     })
     .from(historicalNewsAnalyses)
     .where(eq(historicalNewsAnalyses.date, date))
     .limit(1);
   if (!existing) return null;
 
-  const [cntRow] = await db
-    .select({ n: count() })
-    .from(pagesAndTags)
-    .where(eq(pagesAndTags.analysisId, existing.id));
+  const tagLinkCount = Array.isArray(existing.tagsVersion2)
+    ? existing.tagsVersion2.filter((x) => typeof x === "string" && x.trim().length > 0).length
+    : 0;
   const [manualRow] = await db
     .select({ n: count() })
     .from(manualNewsEntries)
@@ -265,13 +243,10 @@ export async function retriageSingleExistingDate(date: string): Promise<TriageIt
     topArticleId: existing.topArticleId,
     isManualOverride: existing.isManualOverride,
     isFlagged: existing.isFlagged,
-    isOrphan: existing.isOrphan,
-    totalArticlesFetched: existing.totalArticlesFetched,
-    confidenceScore: existing.confidenceScore,
+    tieredArticles: existing.tieredArticles,
     tagsVersion2: existing.tagsVersion2,
     topicCategories: existing.topicCategories,
-    tags: existing.tags,
-    tagLinkCount: Number(cntRow?.n ?? 0),
+    tagLinkCount,
     manualEntryCount: Number(manualRow?.n ?? 0),
     milestoneLabel: milestoneRow?.label ?? null,
   });
@@ -290,31 +265,20 @@ export async function triageRange(opts: {
       topArticleId: historicalNewsAnalyses.topArticleId,
       isManualOverride: historicalNewsAnalyses.isManualOverride,
       isFlagged: historicalNewsAnalyses.isFlagged,
-      isOrphan: historicalNewsAnalyses.isOrphan,
-      totalArticlesFetched: historicalNewsAnalyses.totalArticlesFetched,
-      confidenceScore: historicalNewsAnalyses.confidenceScore,
+      tieredArticles: historicalNewsAnalyses.tieredArticles,
       tagsVersion2: historicalNewsAnalyses.tagsVersion2,
       topicCategories: historicalNewsAnalyses.topicCategories,
-      tags: historicalNewsAnalyses.tags,
     })
     .from(historicalNewsAnalyses)
     .where(and(gte(historicalNewsAnalyses.date, opts.dateFrom), lte(historicalNewsAnalyses.date, opts.dateTo)))
     .orderBy(asc(historicalNewsAnalyses.date));
 
-  const analysisIds = rows.map((r) => r.id);
   const linkCountByAnalysis = new Map<string, number>();
-  if (analysisIds.length) {
-    const agg = await db
-      .select({
-        analysisId: pagesAndTags.analysisId,
-        n: count(),
-      })
-      .from(pagesAndTags)
-      .where(inArray(pagesAndTags.analysisId, analysisIds))
-      .groupBy(pagesAndTags.analysisId);
-    for (const row of agg) {
-      linkCountByAnalysis.set(row.analysisId, Number(row.n));
-    }
+  for (const row of rows) {
+    const n = Array.isArray(row.tagsVersion2)
+      ? row.tagsVersion2.filter((x) => typeof x === "string" && x.trim().length > 0).length
+      : 0;
+    linkCountByAnalysis.set(row.id, n);
   }
   const manualCountByDate = new Map<string, number>();
   const milestoneLabelByDate = new Map<string, string>();
@@ -389,12 +353,9 @@ export async function triageRange(opts: {
         topArticleId: existing.topArticleId,
         isManualOverride: existing.isManualOverride,
         isFlagged: existing.isFlagged,
-        isOrphan: existing.isOrphan,
-        totalArticlesFetched: existing.totalArticlesFetched,
-        confidenceScore: existing.confidenceScore,
+        tieredArticles: existing.tieredArticles,
         tagsVersion2: existing.tagsVersion2,
         topicCategories: existing.topicCategories,
-        tags: existing.tags,
         tagLinkCount: linkCountByAnalysis.get(existing.id) ?? 0,
         manualEntryCount: manualCountByDate.get(existing.date) ?? 0,
         milestoneLabel: milestoneLabelByDate.get(existing.date) ?? null,

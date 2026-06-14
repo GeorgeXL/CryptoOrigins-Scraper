@@ -7,10 +7,7 @@ import {
   extractTopicLabelsFromCategories,
   resolveSelectedTopicLeafFromSelection,
   resolveTopicLabelFromSelection,
-  TOPIC_ENTITY_PREFIX,
   type AnalysisTopicRow,
-  type PageTopicRow,
-  type TopicRow,
 } from "../../client/src/lib/topicCatalog";
 
 test("extractTopicLabelsFromCategories reads strings and objects", () => {
@@ -20,18 +17,13 @@ test("extractTopicLabelsFromCategories reads strings and objects", () => {
   assert.deepEqual(extractTopicLabelsFromCategories([{ label: "Mining evolution" }]), ["Mining evolution"]);
 });
 
-test("buildTopicCatalogData merges page_topics and analysis topic_categories", () => {
-  const topics: TopicRow[] = [
-    { id: "t-price", name: "Bitcoin price & cycles", parent_topic_id: null },
-    { id: "t-adopt", name: "Bitcoin adoption", parent_topic_id: null },
-  ];
-  const pageTopics: PageTopicRow[] = [{ analysis_id: "a1", topic_id: "t-price" }];
+test("buildTopicCatalogData counts analyses from topic_categories", () => {
   const analysisTopics: AnalysisTopicRow[] = [
     { id: "a2", topic_categories: ["Bitcoin adoption"] },
     { id: "a1", topic_categories: ["Bitcoin price & cycles"] },
   ];
 
-  const catalog = buildTopicCatalogData(topics, pageTopics, analysisTopics);
+  const catalog = buildTopicCatalogData(analysisTopics);
   assert.ok(catalog);
   const narratives = catalog!.entitiesByCategory.narratives;
   const markets = narratives.find((g) => g.name === "Markets");
@@ -45,11 +37,10 @@ test("buildTopicCatalogData merges page_topics and analysis topic_categories", (
 });
 
 test("resolveTopicLabelFromSelection returns one storyline label", () => {
-  const topics: TopicRow[] = [{ id: "t-price", name: "Bitcoin price & cycles", parent_topic_id: null }];
-  const catalog = buildTopicCatalogData(topics, [], []);
+  const catalog = buildTopicCatalogData([]);
   assert.ok(catalog);
 
-  const selection = new Set([`${TOPIC_ENTITY_PREFIX}t-price`]);
+  const selection = new Set(["narratives::Bitcoin price & cycles"]);
   assert.equal(resolveTopicLabelFromSelection(selection, catalog), "Bitcoin price & cycles");
   assert.equal(resolveTopicLabelFromSelection(new Set(["bitcoin::Bitcoin"]), catalog), null);
 });

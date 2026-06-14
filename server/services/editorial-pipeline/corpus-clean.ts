@@ -58,7 +58,6 @@ export type CorpusDayEvaluation = {
 };
 
 const ALWAYS_AUTO_KINDS = new Set<CorrectionProposal["kind"]>([
-  "clear_orphan_flag",
   "merge_redundant_tags",
   /** Same winning article — Summary Agent regen is trusted; no operator gate. */
   "redo_summary",
@@ -396,11 +395,10 @@ export async function evaluateCorpusDay(date: string): Promise<CorpusDayEvaluati
       date,
       summary: row.summary,
       topArticleId: row.topArticleId,
-      isOrphan: row.isOrphan,
       isFlagged: row.isFlagged,
       tagsVersion2: row.tagsVersion2,
       topicCategories: row.topicCategories,
-      legacyTags: row.tags,
+      legacyTags: null,
       articleText,
       canonicalTagIndex,
       suppressedGroundedTags: row.suppressedTagSuggestions,

@@ -25,45 +25,19 @@ class PerplexityCleanerService {
 
     try {
       const contradictedAnalysis = await storage.getAnalysisByDate(contradictedDate);
-      if (!contradictedAnalysis || contradictedAnalysis.perplexityVerdict !== 'contradicted') {
+      if (!contradictedAnalysis || contradictedAnalysis.googleCheckHappened !== 'no') {
         throw new Error(`No contradicted analysis found for ${contradictedDate}`);
       }
 
-      const correctDateText = contradictedAnalysis.perplexityCorrectDateText;
-
-      // Validate correctDateText is a valid date format before using it
-      let validCorrectDate: string | null = null;
-      if (correctDateText) {
-        // Check if it's a valid date format (YYYY-MM-DD or contains YYYY-MM-DD)
-        const dateMatch = correctDateText.match(/\d{4}-\d{2}-\d{2}/);
-        if (dateMatch) {
-          validCorrectDate = dateMatch[0];
-        } else {
-          console.log(`[PerplexityCleaner] Invalid date format in correctDateText: "${correctDateText}", will find new event instead`);
-        }
-      }
-
-      if (validCorrectDate) {
-        // Case 1: A corrected date is suggested - compare summaries and decide
-        await this.handleContradictionWithCorrection(contradictedAnalysis, validCorrectDate);
-        apiMonitor.updateRequest(monitorId, { status: 'success', duration: Date.now() - startTime });
-        return { 
-          success: true, 
-          message: `Successfully resolved contradiction for ${contradictedDate} with corrected date ${correctDateText}`,
-          updatedDate: contradictedDate,
-          newTier: 'resolved'
-        };
-      } else {
-        // Case 2: No corrected date, just find a new event for the original date
-        await this.findAndAssignNewEvent(contradictedAnalysis, 'No correct date provided');
-        apiMonitor.updateRequest(monitorId, { status: 'success', duration: Date.now() - startTime });
-        return { 
-          success: true, 
-          message: `Successfully resolved contradiction for ${contradictedDate} by finding new event`,
-          updatedDate: contradictedDate,
-          newTier: 'resolved'
-        };
-      }
+      // Legacy perplexityCorrectDateText column removed — always find a new event for the date.
+      await this.findAndAssignNewEvent(contradictedAnalysis, 'Google check marked event as did not happen');
+      apiMonitor.updateRequest(monitorId, { status: 'success', duration: Date.now() - startTime });
+      return {
+        success: true,
+        message: `Successfully resolved contradiction for ${contradictedDate} by finding new event`,
+        updatedDate: contradictedDate,
+        newTier: 'resolved',
+      };
     } catch (error) {
       const errorMessage = (error as Error).message;
       apiMonitor.updateRequest(monitorId, { 
@@ -96,45 +70,12 @@ class PerplexityCleanerService {
         date: correctDateText,
         summary: contradictedAnalysis.summary,
         reasoning: `Summary moved from contradicted date ${contradictedAnalysis.date}. Original reasoning: ${contradictedAnalysis.reasoning || 'N/A'}`,
-        isManualOverride: false, // AI-driven automated cleanup, not manual entry
+        isManualOverride: false,
         topArticleId: null,
-        aiProvider: 'openai',
-        articleTags: null,
-        confidenceScore: null,
-        sentimentScore: null,
-        sentimentLabel: null,
-        topicCategories: null,
-        duplicateArticleIds: null,
-        totalArticlesFetched: 0,
-        uniqueArticlesAnalyzed: 0,
-        tierUsed: null,
-        winningTier: null,
-        tieredArticles: contradictedAnalysis.tieredArticles as any,
-        analyzedArticles: null,
-        isFlagged: false,
-        flagReason: null,
-        factCheckVerdict: null,
-        factCheckConfidence: null,
-        factCheckReasoning: null,
-        factCheckedAt: null,
-        perplexityVerdict: 'verified',
-        perplexityConfidence: null,
-        perplexityReasoning: `Summary moved from contradicted date ${contradictedAnalysis.date}.`,
-        perplexityCorrectDate: null,
-        perplexityCorrectDateText: null,
-        perplexityCitations: null,
-        perplexityCheckedAt: new Date(),
-        reVerified: false,
-        reVerifiedAt: null,
-        reVerificationDate: null,
-        reVerificationSummary: null,
-        reVerificationTier: null,
-        reVerificationArticles: null,
-        reVerificationReasoning: null,
-        reVerificationStatus: null,
-        reVerificationWinner: null,
-        tags: [],
-        tagsVersion2: [],
+        tieredArticles: contradictedAnalysis.tieredArticles as TieredArticles,
+        tagsVersion2: contradictedAnalysis.tagsVersion2 ?? [],
+        googleCheckHappened: 'yes',
+        googleCheckCheckedAt: new Date(),
       };
 
       await storage.createAnalysis(newAnalysisForCorrectDate);
@@ -304,9 +245,9 @@ class PerplexityCleanerService {
     await storage.updateAnalysis(analysis.date, {
       summary: 'No significant date-specific event found after cleaning contradicted entry.',
       reasoning: 'Contradicted entry removed. Perplexity validation found no articles describing actual events on this date (only general overviews/analysis articles) after checking Bitcoin, Crypto, and Macro tiers.',
-      isManualOverride: false, // AI-driven automated cleanup, not manual entry
-      perplexityVerdict: 'verified',
-      perplexityReasoning: 'Contradiction resolved, but no date-specific events found after validating all tiers (cached and fresh articles).'
+      isManualOverride: false,
+      googleCheckHappened: 'yes',
+      googleCheckCheckedAt: new Date(),
     });
   }
 
@@ -438,10 +379,9 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
     await storage.updateAnalysis(analysis.date, {
       summary: finalSummary,
       reasoning: `New event chosen by Perplexity/OpenAI after resolving contradiction. ${validationReasoning}. Original article URL: ${article.url}`,
-      isManualOverride: false, // AI-driven automated cleanup, not manual entry
-      perplexityVerdict: 'verified',
-      perplexityReasoning: `Original event was incorrect. New date-specific event selected from ${tier} tier: ${finalSummary}`,
-      perplexityCorrectDateText: null, // Clear the incorrect suggestion
+      isManualOverride: false,
+      googleCheckHappened: 'yes',
+      googleCheckCheckedAt: new Date(),
       topArticleId: article.id,
       tierUsed: tier,
     });

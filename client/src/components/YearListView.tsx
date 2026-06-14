@@ -16,11 +16,8 @@ interface Analysis {
   id: string;
   date: string;
   summary: string;
-  confidence: number;
-  sentiment: number;
   isManualOverride: boolean;
   isFlagged?: boolean;
-  flagReason?: string;
 }
 
 interface YearProgress {
@@ -125,8 +122,6 @@ export default function YearListView({ year }: YearListViewProps) {
             <div className="flex items-center text-xs font-medium text-slate-500 border-b border-slate-200 pb-2 mb-4">
               <div className="w-24">Date</div>
               <div className="flex-1 px-4">Summary</div>
-              <div className="w-20 text-center">Sentiment</div>
-              <div className="w-20 text-center">Confidence</div>
               <div className="w-20 text-center">Actions</div>
             </div>
 
@@ -137,7 +132,6 @@ export default function YearListView({ year }: YearListViewProps) {
 
               const dateObj = parseISO(date);
               const isToday = date === new Date().toISOString().split('T')[0];
-              const SentimentIcon = isAnalyzed ? getSentimentIcon(analysis.sentiment || 0) : Minus;
               
               return (
                 <div
@@ -178,36 +172,6 @@ export default function YearListView({ year }: YearListViewProps) {
                         </div>
                       )}
                     </div>
-
-                    {/* Sentiment */}
-                    <div className="w-20 text-center">
-                      {isAnalyzed ? (
-                        <div className={`
-                          inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium
-                          ${getSentimentColor(analysis.sentiment || 0)}
-                        `}>
-                          <SentimentIcon className="w-3 h-3" />
-                          <span>{(analysis.sentiment || 0).toFixed(1)}</span>
-                        </div>
-                      ) : (
-                        <div className="text-xs text-slate-400">
-                          --
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Confidence */}
-                    <div className="w-20 text-center">
-                      {isAnalyzed ? (
-                        <div className="text-sm font-medium text-slate-900">
-                          {(analysis.confidence || 0).toFixed(0)}%
-                        </div>
-                      ) : (
-                        <div className="text-xs text-slate-400">
-                          --
-                        </div>
-                      )}
-                    </div>
                   </Link>
 
                   {/* Actions - separate from main clickable area */}
@@ -217,7 +181,6 @@ export default function YearListView({ year }: YearListViewProps) {
                         <FlagButton
                           date={date}
                           isFlagged={analysis.isFlagged || false}
-                          flagReason={analysis.flagReason}
                           type="analysis"
                         />
                       )}

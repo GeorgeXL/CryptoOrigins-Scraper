@@ -4,9 +4,7 @@ import { storage } from "../storage";
 import { newsAnalyzer } from "../services/news-analyzer";
 import { exaService } from "../services/exa";
 import { type ArticleData } from "@shared/schema";
-import { periodDetector } from "../services/period-detector";
 import { hierarchicalSearch } from "../services/hierarchical-search";
-import { insertHistoricalNewsAnalysisSchema, insertManualNewsEntrySchema, insertEventBatchSchema, insertBatchEventSchema, type InsertHistoricalNewsAnalysis, type HistoricalNewsAnalysis, type EventBatch, type BatchEvent } from "@shared/schema";
 
 import { cacheManager } from "../services/cache-manager";
 
@@ -14,8 +12,6 @@ import { healthMonitor } from "../services/health-monitor";
 import { createErrorResponse } from "../utils/error-handler";
 import { apiMonitor } from "../services/api-monitor";
 import { qualityChecker } from "../services/quality-checker";
-import { batchProcessor } from "../services/batch-processor";
-import { conflictClusterer } from "../services/conflict-clusterer";
 import { perplexityCleaner } from "../services/perplexity-cleaner";
 import { entityExtractor } from "../services/entity-extractor";
 import { sql } from "drizzle-orm";

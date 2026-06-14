@@ -60,11 +60,8 @@ interface MonthData {
   analyses: Array<{
     date: string;
     summary: string;
-
     hasManualEntry: boolean;
-    confidenceScore: number;
     isFlagged?: boolean;
-    flagReason?: string;
     isManualOverride?: boolean;
     tieredArticles?: any;
     analyzedArticles?: any;
@@ -145,7 +142,7 @@ export default function MonthView() {
       // Fetch all analyses for the current month
       const { data: analyses, error: analysesError } = await supabase
         .from("historical_news_analyses")
-        .select("date, summary, is_manual_override, confidence_score, is_flagged, flag_reason, tiered_articles, analyzed_articles")
+        .select("date, summary, is_manual_override, is_flagged, tiered_articles, analyzed_articles, top_article_id")
         .gte("date", startDate)
         .lte("date", endDate)
         .order("date", { ascending: true });
@@ -173,9 +170,7 @@ export default function MonthView() {
           date: a.date,
           summary: a.summary,
           hasManualEntry: a.is_manual_override,
-          confidenceScore: parseFloat(a.confidence_score || '0'),
           isFlagged: a.is_flagged,
-          flagReason: a.flag_reason,
           tieredArticles: a.tiered_articles,
           analyzedArticles: a.analyzed_articles,
           isManualOverride: a.is_manual_override,
@@ -1210,10 +1205,6 @@ export default function MonthView() {
                                       </Badge>
                                     )}
 
-                                    <Badge variant="secondary" className="text-xs">
-                                      {Math.round(parseFloat(analysis?.confidenceScore?.toString() || '0'))}% confidence
-                                    </Badge>
-
                                     {/* Quality Badges */}
                                     {analysis?.summary && (
                                       <>
@@ -1270,7 +1261,6 @@ export default function MonthView() {
                             <FlagButton
                               date={date}
                               isFlagged={analysis?.isFlagged || false}
-                              flagReason={analysis?.flagReason}
                               type="analysis"
                             />
                             <Link href={`/day/${date}?from=month`}>

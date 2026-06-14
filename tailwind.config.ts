@@ -88,12 +88,22 @@ export default {
   				'50%': {
   					boxShadow: '0 0 30px rgba(59, 130, 246, 0.8), 0 0 60px rgba(59, 130, 246, 0.6), 0 0 90px rgba(59, 130, 246, 0.4), 0 0 120px rgba(59, 130, 246, 0.2)'
   				}
+  			},
+  			'flag-fill-ltr': {
+  				from: { clipPath: 'inset(0 100% 0 0)' },
+  				to: { clipPath: 'inset(0 0 0 0)' }
+  			},
+  			'flag-unfill-rtl': {
+  				from: { clipPath: 'inset(0 0 0 0)' },
+  				to: { clipPath: 'inset(0 100% 0 0)' }
   			}
   		},
   		animation: {
   			'accordion-down': 'accordion-down 0.2s ease-out',
   			'accordion-up': 'accordion-up 0.2s ease-out',
-  			'glow-pulse': 'glow-pulse 2s ease-in-out infinite'
+  			'glow-pulse': 'glow-pulse 2s ease-in-out infinite',
+  			'flag-fill-ltr': 'flag-fill-ltr 0.36s ease-in-out forwards',
+  			'flag-unfill-rtl': 'flag-unfill-rtl 0.36s ease-in-out forwards'
   		}
   	}
   },

@@ -19,6 +19,7 @@ test("every quality-check tab has an agent action", () => {
     "untagged",
     "flagged",
     "no-topic",
+    "google-yes-no-topic",
     "multi-topic",
     "missing-months",
     "too-short",

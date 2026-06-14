@@ -1,6 +1,6 @@
 import { and, count, eq, gte, lte, ne } from "drizzle-orm";
 import { db } from "../../db";
-import { canonicalMilestones, historicalNewsAnalyses, pagesAndTags } from "@shared/schema";
+import { canonicalMilestones, historicalNewsAnalyses } from "@shared/schema";
 import { NewsAnalyzerService } from "../news-analyzer";
 
 const newsAnalyzer = new NewsAnalyzerService();
@@ -457,8 +457,6 @@ export type ExistingDay = {
   summary: string;
   topArticleId: string | null;
   isFlagged: boolean | null;
-  isOrphan: boolean | null;
-  confidenceScore: string | null;
 };
 
 export async function getExistingDay(date: string): Promise<ExistingDay | null> {
@@ -469,8 +467,6 @@ export async function getExistingDay(date: string): Promise<ExistingDay | null> 
       summary: historicalNewsAnalyses.summary,
       topArticleId: historicalNewsAnalyses.topArticleId,
       isFlagged: historicalNewsAnalyses.isFlagged,
-      isOrphan: historicalNewsAnalyses.isOrphan,
-      confidenceScore: historicalNewsAnalyses.confidenceScore,
     })
     .from(historicalNewsAnalyses)
     .where(eq(historicalNewsAnalyses.date, date))
@@ -484,7 +480,6 @@ export type DayTaxonomyRow = {
   summary: string;
   tagsVersion2: string[] | null;
   topicCategories: unknown;
-  tags: unknown;
   articleTags: unknown;
 };
 
@@ -496,7 +491,6 @@ export async function getDayTaxonomy(date: string): Promise<DayTaxonomyRow | nul
       summary: historicalNewsAnalyses.summary,
       tagsVersion2: historicalNewsAnalyses.tagsVersion2,
       topicCategories: historicalNewsAnalyses.topicCategories,
-      tags: historicalNewsAnalyses.tags,
       articleTags: historicalNewsAnalyses.articleTags,
     })
     .from(historicalNewsAnalyses)
@@ -511,14 +505,12 @@ export async function getTagCoverageForDate(date: string): Promise<{
   tagsVersion2Count: number;
   topicCategoriesCount: number;
   legacyTagsCount: number;
-  pagesAndTagsCount: number;
 } | null> {
   const [row] = await db
     .select({
       id: historicalNewsAnalyses.id,
       tagsVersion2: historicalNewsAnalyses.tagsVersion2,
       topicCategories: historicalNewsAnalyses.topicCategories,
-      tags: historicalNewsAnalyses.tags,
     })
     .from(historicalNewsAnalyses)
     .where(eq(historicalNewsAnalyses.date, date))
@@ -530,19 +522,13 @@ export async function getTagCoverageForDate(date: string): Promise<{
       row.tagsVersion2.filter((x) => typeof x === "string" && x.trim().length > 0).length
     : 0;
   const tc = Array.isArray(row.topicCategories) ? row.topicCategories.length : 0;
-  const legacy = Array.isArray(row.tags) ? row.tags.length : 0;
-
-  const [cntRow] = await db
-    .select({ n: count() })
-    .from(pagesAndTags)
-    .where(eq(pagesAndTags.analysisId, row.id));
+  const legacy = 0;
 
   return {
     analysisId: row.id,
     tagsVersion2Count: v2,
     topicCategoriesCount: tc,
     legacyTagsCount: legacy,
-    pagesAndTagsCount: Number(cntRow?.n ?? 0),
   };
 }
 
@@ -556,8 +542,7 @@ export async function listCanonicalMilestonesInRange(dateFrom: string, dateTo: s
 // Wrapper around existing mature search/analyze pipeline (preserved path).
 export async function runExistingSearchAndSummaryForDate(date: string): Promise<{
   summary: string;
-  confidenceScore: number;
-  totalArticlesFetched: number;
+  articleCount: number;
 }> {
   const out = await newsAnalyzer.analyzeNewsForDate({
     date,
@@ -565,10 +550,10 @@ export async function runExistingSearchAndSummaryForDate(date: string): Promise<
     aiProvider: "openai",
     requestContext: { source: "editorial-pipeline-v2", requestId: `pipeline-${date}-${Date.now()}` },
   });
+  const articleCount = out.totalArticlesFetched || out.articles?.length || 0;
   return {
     summary: out.summary,
-    confidenceScore: out.confidenceScore,
-    totalArticlesFetched: out.totalArticlesFetched,
+    articleCount,
   };
 }
 
@@ -578,14 +563,10 @@ export async function getExistingVerificationSignals(date: string) {
     .select({
       id: historicalNewsAnalyses.id,
       date: historicalNewsAnalyses.date,
-      geminiApproved: historicalNewsAnalyses.geminiApproved,
-      perplexityApproved: historicalNewsAnalyses.perplexityApproved,
-      factCheckVerdict: historicalNewsAnalyses.factCheckVerdict,
-      factCheckConfidence: historicalNewsAnalyses.factCheckConfidence,
-      perplexityVerdict: historicalNewsAnalyses.perplexityVerdict,
-      perplexityConfidence: historicalNewsAnalyses.perplexityConfidence,
-      perplexityCitations: historicalNewsAnalyses.perplexityCitations,
-      confidenceScore: historicalNewsAnalyses.confidenceScore,
+      googleCheckHappened: historicalNewsAnalyses.googleCheckHappened,
+      googleCheckCheckedAt: historicalNewsAnalyses.googleCheckCheckedAt,
+      topArticleId: historicalNewsAnalyses.topArticleId,
+      isManualOverride: historicalNewsAnalyses.isManualOverride,
     })
     .from(historicalNewsAnalyses)
     .where(eq(historicalNewsAnalyses.date, date))

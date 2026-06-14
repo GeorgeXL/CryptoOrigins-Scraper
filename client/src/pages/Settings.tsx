@@ -76,10 +76,6 @@ export default function Settings() {
   const deletionOptions = [
     { id: 'analyses', label: 'Historical Bitcoin news analyses', endpoint: '/api/database/clear-analyses' },
     { id: 'manual-entries', label: 'Manual news entries and user data', endpoint: '/api/database/clear-manual-entries' },
-    { id: 'source-credibility', label: 'Source credibility settings', endpoint: '/api/database/clear-source-credibility' },
-    { id: 'spam-domains', label: 'Spam filters and blocked domains', endpoint: '/api/database/clear-spam-domains' },
-    { id: 'ai-prompts', label: 'AI prompts and system configurations', endpoint: '/api/database/clear-ai-prompts' },
-    { id: 'users', label: 'User authentication data', endpoint: '/api/database/clear-users' },
   ];
 
   // Selective deletion mutation
@@ -882,27 +878,19 @@ export default function Settings() {
                         <span>manual_news_entries</span>
                         <Badge variant="outline">User Data</Badge>
                       </div>
-                      <div className="flex justify-between">
-                        <span>users</span>
-                        <Badge variant="outline">Auth</Badge>
-                      </div>
                     </div>
                   </div>
                   
                   <div className="p-4 border rounded-lg">
-                    <h4 className="font-medium mb-2">Configuration Tables</h4>
+                    <h4 className="font-medium mb-2">Tag & Storyline Fields</h4>
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
-                        <span>source_credibility</span>
-                        <Badge variant="outline">Config</Badge>
+                        <span>topic_categories (on day rows)</span>
+                        <Badge variant="outline">Storylines</Badge>
                       </div>
                       <div className="flex justify-between">
-                        <span>spam_domains</span>
-                        <Badge variant="outline">Filter</Badge>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>ai_prompts</span>
-                        <Badge variant="outline">System</Badge>
+                        <span>tags_version2 (on day rows)</span>
+                        <Badge variant="outline">Entity tags</Badge>
                       </div>
                     </div>
                   </div>

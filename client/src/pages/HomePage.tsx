@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
@@ -8,7 +8,6 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
 import { useToggleFlag } from "@/hooks/useToggleFlag";
-import { TaggingDropdown } from "@/components/TaggingDropdown";
 import { 
   Dialog,
   DialogContent,
@@ -27,9 +26,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AnalysesTable, type AnalysisRowAnnotation, type GoogleCheckSummary } from "@/components/AnalysesTable";
+import { AnalysesTable, type AnalysisRowAnnotation, type GoogleCheckSummary, type HistoricalNewsAnalysis } from "@/components/AnalysesTable";
 import type { LogLine } from "@/lib/pipelineActivityLog";
-import { parseIsLocked } from "@/lib/parseIsLocked";
 import {
   Select,
   SelectContent,
@@ -37,110 +35,59 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { 
-  Tag, 
-  Search, 
-  Filter,
-  Calendar,
-  Building,
-  User,
-  Globe,
-  Coins,
+import {
+  Tag,
   ChevronDown,
-  ChevronRight,
-  Check,
-  Plus,
-  Minus,
-  X,
-  Building2,
-  Sparkles,
-  Hash,
   Copy,
-  ExternalLink,
-  Pencil,
-  Trash2,
   Bot,
-  StopCircle,
   Loader2,
-  RefreshCw,
-  FileText,
   FileSpreadsheet,
+  FileText,
+  RefreshCw,
+  StopCircle,
   Tags,
   MoreVertical,
+  Plus,
+  X,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { SiOpenai } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 import { Link } from "wouter";
-import { EditTagDialog } from "@/components/TagsManager/EditTagDialog";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
-import { DeleteDialog } from "@/components/TagsManager/DeleteDialog";
-import { getCategoryDisplayMeta } from "@shared/taxonomy";
+import { TaggingDropdown } from "@/components/TaggingDropdown";
 import { TagsSidebar } from "@/components/TagsSidebar";
-import {
-  SidebarProvider,
-} from "@/components/ui/sidebar";
-import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor, buildFilterTreeFromTags } from "@/utils/tagHelpers";
+import { SidebarProvider } from "@/components/ui/sidebar";
+import { getCategoryColor } from "@/utils/tagHelpers";
 import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
 import {
   analysisMatchesTopicLeaf,
   buildTopicCatalogData,
-  parseTopicIdsFromSelection,
   resolveSelectedTopicLeafFromSelection,
   resolveTopicLabelFromSelection,
-  selectionUsesTopicKeys,
   type AnalysisTopicRow,
-  type PageTopicRow,
-  type TopicRow,
 } from "@/lib/topicCatalog";
 import { fetchAllSupabaseRows } from "@/lib/supabaseBatch";
 import { downloadSummariesExcel } from "@/lib/exportSummariesExcel";
 import { PerplexityIcon } from "@/components/PerplexityIcon";
 import { analysisHasStorylineTopic } from "@shared/storyline-topic-eligibility";
+import {
+  useAnalysesBrowse,
+  filterUntaggedRow,
+} from "@/features/analyses-browse/useAnalysesBrowse";
+import { parseIsLocked } from "@/lib/parseIsLocked";
+import { PAGE_SIZE_OPTIONS, type AnalysesBrowseFilterState, type EntityTag, type RawAnalysisRow } from "@/features/analyses-browse/types";
+import {
+  AnalysesBrowseLayout,
+  AnalysesBrowseHeader,
+  AnalysesBrowseTableCard,
+  AnalysesBrowseBulkActions,
+} from "@/features/analyses-browse/AnalysesBrowseLayout";
 
 function isHomeDefaultBrowseView(showUntagged: boolean, selectedEntities: Set<string>): boolean {
   return !showUntagged && selectedEntities.size === 0;
 }
-
-// Main category type definition
-export type MainCategory = 
-  | 'bitcoin'
-  | 'money-economics'
-  | 'technology'
-  | 'organizations'
-  | 'people'
-  | 'regulation-law'
-  | 'markets-geography'
-  | 'education-community'
-  | 'crime-security'
-  | 'topics'
-  | 'miscellaneous';
-
-interface EntityTag {
-  name: string;
-  category: string;
-}
-
-// For tags_version2, we just have tag names as strings
-type TagName = string;
-
-interface HistoricalNewsAnalysis {
-  id?: string;
-  date: string;
-  summary: string;
-  tags?: EntityTag[] | null; // Old tags column (deprecated)
-  tags_version2?: string[] | null; // New tags column - array of tag names
-  topic_categories?: unknown;
-  tier?: number;
-  url?: string;
-  source_url?: string;
-  isManualOverride?: boolean;
-  isFlagged?: boolean;
-  googleCheckHappened?: "yes" | "no" | "uncertain" | null;
-}
-
-const PAGE_SIZE_OPTIONS = [50, 200, 500];
 
 function buildGoogleCheckSummary(
   analyses: Array<{ google_check_happened?: "yes" | "no" | "uncertain" | null }>,
@@ -160,361 +107,47 @@ export default function HomePage() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   
-  // View mode state - toggle between Keywords and Topics
-  const [viewMode, setViewMode] = useState<'keywords' | 'topics'>('keywords');
-  /** Left nav: storyline topics only (tags tab hidden). */
-  const [sidebarMenu, setSidebarMenu] = useState<'tags' | 'topics'>('topics');
-  const [pageSize, setPageSize] = useState(50);
-  
-  const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
-  const [showUntagged, setShowUntagged] = useState(false);
-  
-  // Date list state
-  const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
-  const [currentPage, setCurrentPage] = useState(1);
-  const [selectAllMatching, setSelectAllMatching] = useState(false);
-  
-  // Search and modal state
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const prevSearchRef = useRef<string>("");
+  const stateRef = useRef({
+    selectedEntities: new Set<string>(),
+    showUntagged: false,
+    searchQuery: "",
+    currentPage: 1,
+    pageSize: 50,
+  });
 
-  // Track previous search string to detect URL changes (start empty so we restore on first mount)
-  const prevSearchRef = useRef<string>('');
-  
-  // Use refs to store current state values for updateUrl function
-  const stateRef = useRef({ selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, sidebarMenu });
-  
-  // Update refs whenever state changes
-  useEffect(() => {
-    stateRef.current = { selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, sidebarMenu };
-  }, [selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, sidebarMenu]);
-
-  // Helper function to update URL when state changes
   const updateUrl = (updates: Partial<HomePageState>) => {
     const currentState: HomePageState = {
-      page: 'home',
+      page: "home",
       selectedEntities: updates.selectedEntities ?? stateRef.current.selectedEntities,
       showUntagged: updates.showUntagged ?? stateRef.current.showUntagged,
       searchQuery: updates.searchQuery ?? stateRef.current.searchQuery,
       currentPage: updates.currentPage ?? stateRef.current.currentPage,
       pageSize: updates.pageSize ?? stateRef.current.pageSize,
-      viewMode: updates.viewMode ?? stateRef.current.viewMode,
-      sidebarMenu: updates.sidebarMenu ?? stateRef.current.sidebarMenu,
+      viewMode: "topics",
+      sidebarMenu: "topics",
     };
-    // Build URL without 'from' parameter (only used when navigating to day view)
     const params = new URLSearchParams();
     if (currentState.selectedEntities.size > 0) {
-      params.set('entities', Array.from(currentState.selectedEntities).join(','));
+      params.set("entities", Array.from(currentState.selectedEntities).join(","));
     }
     if (currentState.showUntagged) {
-      params.set('untagged', '1');
+      params.set("untagged", "1");
     }
     if (currentState.searchQuery) {
-      params.set('search', currentState.searchQuery);
+      params.set("search", currentState.searchQuery);
     }
-    params.set('page', currentState.currentPage.toString());
-    params.set('pageSize', currentState.pageSize.toString());
-    params.set('viewMode', currentState.viewMode);
-    if (currentState.sidebarMenu === 'topics') {
-      params.set('sidebar', 'topics');
-    }
+    params.set("page", currentState.currentPage.toString());
+    params.set("pageSize", currentState.pageSize.toString());
     const query = params.toString();
-    const newUrl = `/${query ? `?${query}` : ''}`;
-    prevSearchRef.current = query ? `?${query}` : ''; // Update ref to prevent polling from resetting
+    const newUrl = `/${query ? `?${query}` : ""}`;
+    prevSearchRef.current = query ? `?${query}` : "";
     setLocation(newUrl, { replace: true });
   };
 
-  // Restore state from URL params on mount and when navigating back
-  useEffect(() => {
-    const checkAndRestore = () => {
-      const currentSearch = window.location.search;
-      
-      // Only restore if URL actually changed (to avoid resetting user actions)
-      if (currentSearch === prevSearchRef.current) {
-        return;
-      }
-      
-      prevSearchRef.current = currentSearch;
-      const urlParams = new URLSearchParams(currentSearch);
-      const restoredState = deserializePageState(urlParams);
-      if (restoredState && restoredState.page === 'home') {
-        const state = restoredState as HomePageState;
-        if (state.selectedEntities) setSelectedEntities(state.selectedEntities);
-        if (state.showUntagged !== undefined) setShowUntagged(state.showUntagged);
-        if (state.searchQuery) setSearchQuery(state.searchQuery);
-        if (state.currentPage) setCurrentPage(state.currentPage);
-        if (state.pageSize) setPageSize(state.pageSize);
-        if (state.viewMode) setViewMode(state.viewMode);
-        setSidebarMenu('topics');
-      }
-    };
-
-    // Check immediately on mount
-    checkAndRestore();
-
-    // Check more frequently for programmatic navigation (setLocation from wouter)
-    const interval = setInterval(checkAndRestore, 50);
-    
-    // Listen to popstate for browser back/forward
-    window.addEventListener('popstate', checkAndRestore);
-    
-    // Also listen to hashchange as fallback
-    window.addEventListener('hashchange', checkAndRestore);
-    
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('popstate', checkAndRestore);
-      window.removeEventListener('hashchange', checkAndRestore);
-    };
+  const onDebouncedSearchChange = useCallback((nextSearchQuery: string) => {
+    updateUrl({ searchQuery: nextSearchQuery, currentPage: 1 });
   }, []);
-
-  // New state for the copy dialog
-  const [showCopyDialog, setShowCopyDialog] = useState(false);
-  const [textToCopy, setTextToCopy] = useState("");
-  const [isExportingExcel, setIsExportingExcel] = useState(false);
-  const [rowAnnotations, setRowAnnotations] = useState<Record<string, AnalysisRowAnnotation>>({});
-  const [storylineFitRunning, setStorylineFitRunning] = useState(false);
-  const [googleCheckRunning, setGoogleCheckRunning] = useState(false);
-  const [checkLogLines, setCheckLogLines] = useState<LogLine[]>([]);
-  const checkLogScrollRef = useRef<HTMLDivElement | null>(null);
-
-  // State for edit/delete tag dialogs
-  const [showRenameDialog, setShowRenameDialog] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [tagToEdit, setTagToEdit] = useState<{ name: string; category: string; count: number; subcategoryPath?: string[] } | null>(null);
-
-  // Debounce search query - only update after user stops typing for 300ms
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearchQuery(searchQuery);
-      setCurrentPage(1); // Reset to first page when search changes
-      updateUrl({ searchQuery, currentPage: 1 });
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-  
-  // Bulk operations state
-  const [showBulkAdd, setShowBulkAdd] = useState(false);
-  const [showBulkRemove, setShowBulkRemove] = useState(false);
-  const [showManageTags, setShowManageTags] = useState(false);
-  const [bulkTagName, setBulkTagName] = useState("");
-  const [bulkTagCategory, setBulkTagCategory] = useState("crypto");
-  const { 
-    isReanalyzing, 
-    reanalyzeDates, 
-    redoSummaries,
-    cancelAnalysis,
-    selectionRequest,
-    isSelectionDialogOpen,
-    setIsSelectionDialogOpen,
-    confirmSelection,
-    progress
-  } = useBulkReanalyze();
-
-  // Fetch tags from Supabase directly
-  const { data: allTagsData, refetch: refetchFilterTree } = useQuery({
-    queryKey: ['supabase-all-tags'],
-    queryFn: async () => {
-      if (!supabase) return [];
-      const { data, error } = await supabase
-        .from('tags')
-        .select('*');
-      if (error) throw error;
-      return data || [];
-    },
-    staleTime: 0,
-    refetchOnMount: true
-  });
-
-  // Fetch labels
-  const { data: labelsData } = useQuery({
-    queryKey: ['supabase-labels'],
-    queryFn: async () => {
-      if (!supabase) return [];
-      const { data, error } = await supabase.from('subcategory_labels').select('*');
-      if (error) return [];
-      return data || [];
-    },
-    staleTime: Infinity
-  });
-
-  // Fetch counts from Supabase directly
-  const { data: countsData } = useQuery({
-    queryKey: ['supabase-counts'],
-    queryFn: async () => {
-      if (!supabase) return { taggedCount: 0, untaggedCount: 0, totalAnalyses: 0 };
-      
-      // Total analyses
-      const { count: totalAnalyses } = await supabase
-        .from('historical_news_analyses')
-        .select('*', { count: 'exact', head: true });
-        
-      return {
-        taggedCount: 0, 
-        untaggedCount: 0, 
-        totalAnalyses: totalAnalyses || 0
-      };
-    }
-  });
-
-  // Construct filter tree client-side
-  const hierarchyDataToUse = useMemo(() => {
-    if (!allTagsData) return null;
-    
-    const labelsMap = new Map<string, string>();
-    labelsData?.forEach(l => labelsMap.set(l.path, l.label));
-    
-    return buildFilterTreeFromTags(allTagsData as any, labelsMap);
-  }, [allTagsData, labelsData]);
-
-  // Mock catalogV2Data for existing code
-  const catalogV2Data = useMemo(() => ({
-    tags: allTagsData?.map(t => ({ name: t.name, count: t.usage_count })) || [],
-    taggedCount: countsData?.taggedCount || 0,
-    untaggedCount: countsData?.untaggedCount || 0,
-    totalAnalyses: countsData?.totalAnalyses || 0
-  }), [allTagsData, countsData]);
-
-  // Map main category names to display names (New 14-Category Taxonomy)
-  const categoryDisplayNames: Record<MainCategory, string> = {
-    'bitcoin': '🪙 Bitcoin',
-    'money-economics': '💰 Money & Economics',
-    'technology': '⚡ Technology Concepts',
-    'organizations': '🏢 Organizations & Companies',
-    'people': '👥 People',
-    'regulation-law': '⚖️ Regulation & Government',
-    'markets-geography': '🌍 Geography & Markets',
-    'education-community': '🎓 Education & Community',
-    'crime-security': '🔒 Crime & Security',
-    'topics': '🏷️ Topics & Themes',
-    'miscellaneous': '📝 Miscellaneous'
-  };
-
-  // Frontend grouping logic - Uses filter tree from normalized tags table
-  const catalogData = useMemo(() => {
-    if (!hierarchyDataToUse?.categories) return null;
-
-    const entitiesByCategory: Record<string, any[]> = {};
-    
-    // Process each main category directly from the backend response
-    hierarchyDataToUse.categories.forEach((category: any) => {
-      const categoryKey = category.category; 
-      
-      // Build subcategory structure with counts recursively
-      const buildSubcategoryDisplay = (node: any): any => {
-        const children: any[] = [];
-        let totalCount = node.totalTags || 0;
-        
-        // Process subcategories
-        if (node.subcategories && Object.keys(node.subcategories).length > 0) {
-          Object.values(node.subcategories).forEach((subcat: any) => {
-            const subResult = buildSubcategoryDisplay(subcat);
-            if (subResult) {
-              children.push(subResult);
-            }
-          });
-        }
-        
-        // Process tags at this level
-        if (node.tags && Array.isArray(node.tags)) {
-          node.tags.forEach((tag: any) => {
-            children.push({
-              name: tag.name,
-              category: categoryKey,
-              count: tag.usageCount || 0,
-              isTag: true
-            });
-          });
-        }
-        
-        // Sort children: subcategories first, then tags, both alphabetical
-        children.sort((a, b) => {
-          if (a.isTag && !b.isTag) return 1;
-          if (!a.isTag && b.isTag) return -1;
-          return a.name.localeCompare(b.name);
-        });
-        
-        if (children.length === 0) return null;
-        
-        return {
-          category: categoryKey,
-          name: node.name,
-          count: totalCount,
-          isParent: true,
-          children
-        };
-      };
-      
-      // Build category items
-      const categoryItems: any[] = [];
-      
-      // Add tags at the root of the category
-      if (category.tags && Array.isArray(category.tags)) {
-        category.tags.forEach((tag: any) => {
-          categoryItems.push({
-            name: tag.name,
-            category: categoryKey,
-            count: tag.usageCount || 0,
-            isTag: true
-          });
-        });
-      }
-      
-      // Add subcategories
-      if (category.subcategories) {
-        Object.values(category.subcategories).forEach((subcat: any) => {
-          const result = buildSubcategoryDisplay(subcat);
-          if (result) {
-            categoryItems.push(result);
-          }
-        });
-      }
-      
-      // Sort root items
-      categoryItems.sort((a, b) => {
-        if (a.isTag && !b.isTag) return 1;
-        if (!a.isTag && b.isTag) return -1;
-        return a.name.localeCompare(b.name);
-      });
-      
-      if (categoryItems.length > 0) {
-        entitiesByCategory[categoryKey] = categoryItems;
-      }
-    });
-    
-    return {
-      entitiesByCategory,
-      taggedCount: catalogV2Data?.taggedCount || 0,
-      untaggedCount: catalogV2Data?.untaggedCount || 0,
-      totalAnalyses: catalogV2Data?.totalAnalyses || 0
-    };
-  }, [catalogV2Data, hierarchyDataToUse]);
-
-  const { data: topicRows = [] } = useQuery({
-    queryKey: ["supabase-topics-rows"],
-    queryFn: async (): Promise<TopicRow[]> => {
-      if (!supabase) return [];
-      const { data, error } = await supabase
-        .from("topics")
-        .select("id, name, parent_topic_id, sort_order");
-      if (error) {
-        console.warn("[HomePage] topics:", error.message);
-        return [];
-      }
-      return (data ?? []) as TopicRow[];
-    },
-    staleTime: 60_000,
-  });
-
-  const { data: pageTopicRows = [] } = useQuery({
-    queryKey: ["supabase-page-topics-rows"],
-    queryFn: async (): Promise<PageTopicRow[]> =>
-      fetchAllSupabaseRows<PageTopicRow>("page_topics", "analysis_id, topic_id", {
-        orderBy: { column: "analysis_id", ascending: true },
-      }),
-    staleTime: 60_000,
-  });
 
   const { data: analysisTopicRows = [] } = useQuery({
     queryKey: ["supabase-analysis-topic-categories"],
@@ -526,288 +159,172 @@ export default function HomePage() {
   });
 
   const topicCatalogData = useMemo(
-    () => buildTopicCatalogData(topicRows, pageTopicRows, analysisTopicRows),
-    [topicRows, pageTopicRows, analysisTopicRows],
+    () => buildTopicCatalogData(analysisTopicRows),
+    [analysisTopicRows],
   );
 
-  // Tags sidebar catalog disabled — storyline topics only.
-  const sidebarCatalogData = topicCatalogData;
-  const defaultBrowseView = isHomeDefaultBrowseView(showUntagged, selectedEntities);
-  // Fetch filtered analyses with server-side filtering and pagination
-  const { data: analysesData, isLoading, refetch } = useQuery<{
-    analyses: HistoricalNewsAnalysis[];
-    pagination: {
-      currentPage: number;
-      pageSize: number;
-      totalCount: number;
-      totalPages: number;
-    };
-  }>({
-    queryKey: [
-      "supabase-tags-analyses",
-      sidebarMenu,
-      Array.from(selectedEntities).sort().join(","),
-      showUntagged,
-      defaultBrowseView,
-      debouncedSearchQuery,
-      currentPage,
-      pageSize,
-    ],
-    refetchOnMount: "always",
-    staleTime: 0,
-    queryFn: async () => {
-      if (!supabase) throw new Error("Supabase not configured");
-
-      // Build base query - use tags_version2 instead of tags
-      const needsTopicCategoryField =
-        defaultBrowseView ||
-        (sidebarMenu === "topics" && selectedEntities.size > 0 && !showUntagged);
-      const baseSelect =
-        "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked, google_check_happened, google_check_checked_at";
-      let query = supabase
-        .from("historical_news_analyses")
-        .select(
-          needsTopicCategoryField
-            ? `${baseSelect}, topic_categories`
-            : baseSelect,
-          { count: "exact" }
-        );
-
-      if (defaultBrowseView) {
-        query = query.eq("is_locked", true);
-      }
-
-      // Apply filters
-      if (showUntagged) {
-        // Filter for untagged: tags is null or empty array
-        // Since Supabase doesn't have a good way to filter for empty JSONB arrays,
-        // we'll fetch all and filter client-side
-        // query = query.or(`tags.is.null,tags.eq.[]`);
-      } else if (selectedEntities.size > 0) {
-        // Filter by selected entities
-        // We'll fetch all and filter client-side since JSONB array filtering is complex
-        // Don't apply any server-side filter here
-      }
-
-      if (debouncedSearchQuery) {
-        // Search in summary only (date is a date type, not text, so we can't use ilike on it directly)
-        // If you want to search by date, the user should type in YYYY-MM-DD format
-        query = query.ilike("summary", `%${debouncedSearchQuery}%`);
-      }
-
-      // Order by date
-      query = query.order("date", { ascending: false });
-
-      let analyses: any[] = [];
-      let totalCount: number | null = null;
-
-      // If we're doing client-side filtering (untagged or entity selection),
-      // we need to fetch ALL results to properly filter
-      const needsClientSideFiltering =
-        showUntagged || selectedEntities.size > 0 || defaultBrowseView;
-      
-      if (needsClientSideFiltering) {
-        // Fetch all results in batches
-        let allAnalyses: any[] = [];
-        let batchStart = 0;
-        const batchSize = 1000;
-        
-        while (true) {
-          const { data: batch, error } = await query.range(batchStart, batchStart + batchSize - 1);
-          if (error) throw error;
-          if (!batch || batch.length === 0) break;
-          
-          allAnalyses = allAnalyses.concat(batch);
-          if (batch.length < batchSize) break;
-          batchStart += batchSize;
-        }
-        
-        analyses = allAnalyses;
-        totalCount = allAnalyses.length;
-      } else {
-        // Apply pagination at the database level for non-filtered queries
-        const from = (currentPage - 1) * pageSize;
-        const to = from + pageSize - 1;
-        
-        query = query.range(from, to);
-      
-        const { data, error, count } = await query;
-        if (error) throw error;
-        
-        analyses = data || [];
-        totalCount = count;
-      }
-
-      console.log('📊 Analyses Query Result:', JSON.stringify({
-        analysesCount: analyses?.length,
-        totalCount,
-        showUntagged,
-        selectedEntitiesCount: selectedEntities.size,
-        needsClientSideFiltering,
-        firstAnalysisDate: analyses?.[0]?.date,
-        firstAnalysisTags: analyses?.[0]?.tags_version2
-      }, null, 2));
-
-      // Client-side filtering for untagged and entity selection (since JSONB array filtering is complex)
-      let filteredAnalyses = analyses || [];
-      
-      // Filter for untagged - check tags_version2
-      if (showUntagged) {
-        filteredAnalyses = filteredAnalyses.filter(analysis => 
-          !analysis.tags_version2 || analysis.tags_version2.length === 0
-        );
-      }
-
-      if (defaultBrowseView) {
-        filteredAnalyses = filteredAnalyses.filter((analysis) =>
-          analysisHasStorylineTopic(analysis.topic_categories),
-        );
-      }
-      
-      if (selectedEntities.size > 0 && !showUntagged) {
+  const browseFilterRow = useCallback(
+    (row: RawAnalysisRow, filters: AnalysesBrowseFilterState) => {
+      if (filters.showUntagged && !filterUntaggedRow(row)) return false;
+      const isDefault = isHomeDefaultBrowseView(filters.showUntagged, filters.selectedEntities);
+      if (isDefault && !analysisHasStorylineTopic(row.topic_categories)) return false;
+      if (filters.selectedEntities.size > 0 && !filters.showUntagged) {
         const selectedTopicLeaf = resolveSelectedTopicLeafFromSelection(
-          selectedEntities,
+          filters.selectedEntities,
           topicCatalogData,
         );
-        let pageTopicAnalysisIds: Set<string> | null = null;
-
-        if (sidebarMenu === "topics" && selectionUsesTopicKeys(selectedEntities)) {
-          const topicIds = parseTopicIdsFromSelection(selectedEntities);
-          if (topicIds.length > 0) {
-            const { data: pt, error: ptErr } = await supabase
-              .from("page_topics")
-              .select("analysis_id")
-              .in("topic_id", topicIds);
-            if (ptErr) throw ptErr;
-            pageTopicAnalysisIds = new Set((pt ?? []).map((r: { analysis_id: string }) => r.analysis_id));
-          } else {
-            pageTopicAnalysisIds = new Set();
-          }
-        }
-
-        filteredAnalyses = filteredAnalyses.filter((analysis) => {
-          if (sidebarMenu === "topics" && selectedTopicLeaf) {
-            if (pageTopicAnalysisIds?.has(analysis.id)) return true;
-            return analysisMatchesTopicLeaf(analysis, selectedTopicLeaf);
-          }
-          if (pageTopicAnalysisIds) {
-            return !!(analysis.id && pageTopicAnalysisIds.has(analysis.id));
-          }
-          if (!analysis.tags_version2 || !Array.isArray(analysis.tags_version2)) return false;
-          return Array.from(selectedEntities).some((entityKey) => {
-            const [, name] = entityKey.split("::");
-            return analysis.tags_version2!.includes(name);
-          });
-        });
+        if (selectedTopicLeaf) return analysisMatchesTopicLeaf(row, selectedTopicLeaf);
+        return false;
       }
+      return true;
+    },
+    [topicCatalogData],
+  );
 
-      // Apply pagination after client-side filtering
-      const startIndex = (currentPage - 1) * pageSize;
-      const endIndex = startIndex + pageSize;
-      const paginatedAnalyses = filteredAnalyses.slice(startIndex, endIndex).map((a: any) => ({
-        ...a,
-        isFlagged: a.is_flagged || false,
-        isLocked: parseIsLocked(a.is_locked),
-        googleCheckHappened: a.google_check_happened ?? null,
-        googleCheckCheckedAt: a.google_check_checked_at ?? null,
-      }));
-      
-      // If we did client-side filtering, use the filtered count
-      // Otherwise use the totalCount from Supabase query (which includes count: "exact")
-      const actualTotalCount = needsClientSideFiltering ? filteredAnalyses.length : (totalCount || filteredAnalyses.length);
-      const totalPages = Math.ceil(actualTotalCount / pageSize);
-
-      const topicLeafForSummary =
-        sidebarMenu === "topics" && selectedEntities.size > 0 && !showUntagged
-          ? resolveSelectedTopicLeafFromSelection(selectedEntities, topicCatalogData)
+  const {
+    pageSize,
+    setPageSize,
+    selectedEntities,
+    setSelectedEntities,
+    showUntagged,
+    setShowUntagged,
+    selectedDates,
+    setSelectedDates,
+    currentPage,
+    setCurrentPage,
+    selectAllMatching,
+    setSelectAllMatching,
+    searchQuery,
+    setSearchQuery,
+    debouncedSearchQuery,
+    paginatedAnalyses,
+    totalCount,
+    googleCheckSummary,
+    isLoading,
+    refetch,
+    toggleSelectAll,
+    fetchAllMatchingDates,
+    fetchAllFilteredRows,
+  } = useAnalysesBrowse({
+    queryKeyExtra: ["home"],
+    refetchOnMount: "always",
+    staleTime: 0,
+    selectColumns:
+      "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked, google_check_happened, google_check_checked_at",
+    includeTopicCategories: true,
+    applyServerQuery: (query, filters) => {
+      if (isHomeDefaultBrowseView(filters.showUntagged, filters.selectedEntities)) {
+        return query.eq("is_locked", true);
+      }
+      return query;
+    },
+    needsFullFetch: (filters) =>
+      filters.showUntagged ||
+      filters.selectedEntities.size > 0 ||
+      isHomeDefaultBrowseView(filters.showUntagged, filters.selectedEntities),
+    filterRow: browseFilterRow,
+    mapRow: (row) => ({
+      date: row.date,
+      summary: row.summary,
+      tags_version2: row.tags_version2,
+      tier: row.tier_used,
+      isManualOverride: row.is_manual_override,
+      isFlagged: row.is_flagged || false,
+      isLocked: parseIsLocked(row.is_locked),
+      googleCheckHappened: row.google_check_happened ?? null,
+      googleCheckCheckedAt: row.google_check_checked_at ?? null,
+      topic_categories: row.topic_categories,
+    }),
+    buildExtra: (filteredRows, filters) => {
+      const topicLeaf =
+        filters.selectedEntities.size > 0 && !filters.showUntagged
+          ? resolveSelectedTopicLeafFromSelection(filters.selectedEntities, topicCatalogData)
           : null;
-      const googleCheckSummary =
-        topicLeafForSummary || defaultBrowseView
-          ? buildGoogleCheckSummary(filteredAnalyses)
-          : null;
-
-      console.log('📦 Received:', paginatedAnalyses.length, 'analyses, filtered total:', actualTotalCount);
-
+      const isDefault = isHomeDefaultBrowseView(filters.showUntagged, filters.selectedEntities);
       return {
-        analyses: paginatedAnalyses,
-        googleCheckSummary,
-        pagination: {
-          currentPage,
-          pageSize,
-          totalCount: actualTotalCount,
-          totalPages
-        }
+        googleCheckSummary:
+          topicLeaf || isDefault ? buildGoogleCheckSummary(filteredRows) : null,
       };
     },
+    onDebouncedSearchChange,
   });
 
-  // Extract data from responses
-  const allCategoryData = catalogData 
-    ? Object.entries(catalogData.entitiesByCategory)
-        .map(([category, entities]) => ({
-          category,
-          entities: entities.sort((a, b) => b.count - a.count),
-          totalCount: entities.reduce((sum, e) => sum + e.count, 0)
-        }))
-        .sort((a, b) => b.totalCount - a.totalCount)
-    : [];
-  
-  // Debug: log available categories
-  if (catalogData && allCategoryData.length > 0) {
-    console.log('📊 Available categories:', allCategoryData.map(c => c.category));
-  }
-  
-  // Filter categories based on view mode
-  // Define category order (Bitcoin first, then others)
-  const CATEGORY_ORDER: MainCategory[] = [
-    'bitcoin',
-    'money-economics',
-    'technology',
-    'organizations',
-    'people',
-    'regulation-law',
-    'markets-geography',
-    'education-community',
-    'crime-security',
-    'topics',
-    'miscellaneous'
-  ];
-  
-  const ENTITY_CATEGORIES: MainCategory[] = CATEGORY_ORDER;
-  let categoryData = viewMode === 'keywords'
-    ? (allCategoryData || []).filter(({ category }) => ENTITY_CATEGORIES.includes(category as MainCategory))
-    : (allCategoryData || []).filter(({ category }) => category.toLowerCase() === 'topics');
-  
-  // Ensure categoryData is always an array
-  if (!Array.isArray(categoryData)) {
-    categoryData = [];
-  }
-  
-  // Fallback: if filtering results in empty array but we have data, show all categories
-  if (categoryData.length === 0 && allCategoryData && allCategoryData.length > 0) {
-    console.warn('⚠️ Filtering removed all categories, showing all categories instead');
-    categoryData = allCategoryData;
-  }
-  
-  // Debug: log filtered categories
-  if (catalogData) {
-    console.log('🔍 Filtered categories:', categoryData.map(c => c.category), 'viewMode:', viewMode);
-    console.log('📋 All categories:', allCategoryData.map(c => ({ cat: c.category, count: c.entities.length })));
-  }
-  
-  const paginatedAnalyses = analysesData?.analyses || [];
-  const googleCheckSummary = analysesData?.googleCheckSummary ?? null;
-  const totalPages = analysesData?.pagination.totalPages || 1;
-  const totalCount = analysesData?.pagination.totalCount || 0;
+  useEffect(() => {
+    stateRef.current = { selectedEntities, showUntagged, searchQuery, currentPage, pageSize };
+  }, [selectedEntities, showUntagged, searchQuery, currentPage, pageSize]);
+
+  // Restore state from URL params on mount and when navigating back
+  useEffect(() => {
+    const checkAndRestore = () => {
+      const currentSearch = window.location.search;
+
+      if (currentSearch === prevSearchRef.current) {
+        return;
+      }
+
+      prevSearchRef.current = currentSearch;
+      const urlParams = new URLSearchParams(currentSearch);
+      const restoredState = deserializePageState(urlParams);
+      if (restoredState && restoredState.page === "home") {
+        const state = restoredState as HomePageState;
+        if (state.selectedEntities) setSelectedEntities(state.selectedEntities);
+        if (state.showUntagged !== undefined) setShowUntagged(state.showUntagged);
+        if (state.searchQuery) setSearchQuery(state.searchQuery);
+        if (state.currentPage) setCurrentPage(state.currentPage);
+        if (state.pageSize) setPageSize(state.pageSize);
+      }
+    };
+
+    checkAndRestore();
+    const interval = setInterval(checkAndRestore, 50);
+    window.addEventListener("popstate", checkAndRestore);
+    window.addEventListener("hashchange", checkAndRestore);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("popstate", checkAndRestore);
+      window.removeEventListener("hashchange", checkAndRestore);
+    };
+  }, [setCurrentPage, setPageSize, setSearchQuery, setSelectedEntities, setShowUntagged]);
+
+  const defaultBrowseView = isHomeDefaultBrowseView(showUntagged, selectedEntities);
   const selectedTopicLabel = resolveTopicLabelFromSelection(selectedEntities, topicCatalogData);
   const canExportTopicExcel =
-    sidebarMenu === "topics" && selectedEntities.size === 1 && !!selectedTopicLabel && totalCount > 0;
+    selectedEntities.size === 1 && !!selectedTopicLabel && totalCount > 0;
   const selectedTopicLeaf = resolveSelectedTopicLeafFromSelection(selectedEntities, topicCatalogData);
   const canRunTopicChecks = canExportTopicExcel && !!selectedTopicLeaf;
 
+  // New state for the copy dialog
+  const [showCopyDialog, setShowCopyDialog] = useState(false);
+  const [textToCopy, setTextToCopy] = useState("");
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [rowAnnotations, setRowAnnotations] = useState<Record<string, AnalysisRowAnnotation>>({});
+  const [storylineFitRunning, setStorylineFitRunning] = useState(false);
+  const [googleCheckRunning, setGoogleCheckRunning] = useState(false);
+  const [checkLogLines, setCheckLogLines] = useState<LogLine[]>([]);
+  const checkLogScrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Bulk operations state
+  const [showBulkAdd, setShowBulkAdd] = useState(false);
+  const [showBulkRemove, setShowBulkRemove] = useState(false);
+  const [showManageTags, setShowManageTags] = useState(false);
+  const [bulkTagName, setBulkTagName] = useState("");
+  const [bulkTagCategory, setBulkTagCategory] = useState("crypto");
+  const {
+    isReanalyzing,
+    reanalyzeDates,
+    redoSummaries,
+    cancelAnalysis,
+    selectionRequest,
+    isSelectionDialogOpen,
+    setIsSelectionDialogOpen,
+    confirmSelection,
+    progress,
+  } = useBulkReanalyze();
+
   useEffect(() => {
     setRowAnnotations({});
-  }, [selectedEntities, showUntagged, debouncedSearchQuery, currentPage, pageSize, sidebarMenu]);
+  }, [selectedEntities, showUntagged, debouncedSearchQuery, currentPage, pageSize]);
 
   useEffect(() => {
     if (checkLogLines.length === 0) return;
@@ -815,174 +332,6 @@ export default function HomePage() {
     const viewport = root?.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
     viewport?.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
   }, [checkLogLines]);
-
-  // Helper function to get tag category from tag name using catalogData
-  const getTagCategory = (tagName: string): string => {
-    return getTagCategoryUtil(tagName, catalogData);
-  };
-
-
-  // Toggle entity selection
-  const toggleEntity = (category: string, name: string) => {
-    const key = `${category}::${name}`;
-    const newSelected = selectedEntities.has(key) ? new Set<string>() : new Set([key]);
-    setSelectedEntities(newSelected);
-    setShowUntagged(false); // Clear untagged view when selecting entities
-    setCurrentPage(1); // Reset to first page when filter changes
-    setSelectAllMatching(false); // Reset select all matching
-    updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1 });
-  };
-
-  // Select/deselect all on current page
-  const toggleSelectAll = () => {
-    // If currently selecting all matching, clear everything
-    if (selectAllMatching) {
-      setSelectAllMatching(false);
-      setSelectedDates(new Set());
-      return;
-    }
-
-    // Check if all items on current page are selected (ignore other pages)
-    const allPageSelected = paginatedAnalyses.length > 0 && paginatedAnalyses.every(a => selectedDates.has(a.date));
-    
-    if (allPageSelected) {
-      // Deselect all on current page
-      setSelectedDates(prev => {
-        const next = new Set(prev);
-        paginatedAnalyses.forEach(a => next.delete(a.date));
-        return next;
-      });
-    } else {
-      // Select all on current page
-      setSelectedDates(prev => {
-        const next = new Set(prev);
-        paginatedAnalyses.forEach(a => next.add(a.date));
-        return next;
-      });
-    }
-  };
-
-  // Toggle individual date selection
-  const toggleDateSelection = (date: string) => {
-    if (selectAllMatching) {
-      setSelectAllMatching(false);
-    }
-    setSelectedDates(prev => {
-      const next = new Set(prev);
-      if (next.has(date)) {
-        next.delete(date);
-      } else {
-        next.add(date);
-      }
-      return next;
-    });
-  };
-
-  // Helper to fetch all analyses matching current filters (ignores pagination)
-  const fetchAllFilteredAnalyses = async (): Promise<
-    Array<{
-      id?: string;
-      date: string;
-      summary: string;
-      tags_version2?: string[] | null;
-      topic_categories?: unknown;
-    }>
-  > => {
-    if (!supabase) throw new Error("Supabase not configured");
-
-    let query = supabase
-      .from("historical_news_analyses")
-      .select("id, date, summary, tags_version2, topic_categories");
-
-    if (debouncedSearchQuery) {
-      query = query.ilike("summary", `%${debouncedSearchQuery}%`);
-    }
-
-    if (defaultBrowseView) {
-      query = query.eq("is_locked", true);
-    }
-
-    query = query.order("date", { ascending: false });
-
-    let analyses: Array<{
-      id?: string;
-      date: string;
-      summary: string;
-      tags_version2?: string[] | null;
-      topic_categories?: unknown;
-    }> = [];
-
-    let batchStart = 0;
-    const batchSize = 1000;
-
-    while (true) {
-      const { data: batch, error } = await query.range(batchStart, batchStart + batchSize - 1);
-      if (error) throw error;
-      if (!batch || batch.length === 0) break;
-
-      analyses = analyses.concat(batch);
-      if (batch.length < batchSize) break;
-      batchStart += batchSize;
-    }
-
-    let filteredAnalyses = analyses;
-
-    if (showUntagged) {
-      filteredAnalyses = filteredAnalyses.filter(
-        (analysis) => !analysis.tags_version2 || analysis.tags_version2.length === 0,
-      );
-    }
-
-    if (defaultBrowseView) {
-      filteredAnalyses = filteredAnalyses.filter((analysis) =>
-        analysisHasStorylineTopic(analysis.topic_categories),
-      );
-    }
-
-    if (selectedEntities.size > 0 && !showUntagged) {
-      const selectedTopicLeaf = resolveSelectedTopicLeafFromSelection(
-        selectedEntities,
-        topicCatalogData,
-      );
-      let pageTopicAnalysisIds: Set<string> | null = null;
-
-      if (sidebarMenu === "topics" && selectionUsesTopicKeys(selectedEntities)) {
-        const topicIds = parseTopicIdsFromSelection(selectedEntities);
-        if (topicIds.length > 0) {
-          const { data: pt, error: ptErr } = await supabase
-            .from("page_topics")
-            .select("analysis_id")
-            .in("topic_id", topicIds);
-          if (ptErr) throw ptErr;
-          pageTopicAnalysisIds = new Set((pt ?? []).map((r: { analysis_id: string }) => r.analysis_id));
-        } else {
-          pageTopicAnalysisIds = new Set();
-        }
-      }
-
-      filteredAnalyses = filteredAnalyses.filter((analysis) => {
-        if (sidebarMenu === "topics" && selectedTopicLeaf) {
-          if (pageTopicAnalysisIds?.has(analysis.id!)) return true;
-          return analysisMatchesTopicLeaf(analysis, selectedTopicLeaf);
-        }
-        if (pageTopicAnalysisIds) {
-          return !!(analysis.id && pageTopicAnalysisIds.has(analysis.id));
-        }
-        if (!analysis.tags_version2 || !Array.isArray(analysis.tags_version2)) return false;
-        return Array.from(selectedEntities).some((entityKey) => {
-          const [, name] = entityKey.split("::");
-          return analysis.tags_version2!.includes(name);
-        });
-      });
-    }
-
-    return filteredAnalyses;
-  };
-
-  const fetchAllMatchingDates = async (): Promise<string[]> => {
-    const rows = await fetchAllFilteredAnalyses();
-    return rows.map((row) => row.date);
-  };
 
   // Bulk add tags mutation
   const bulkAddMutation = useMutation({
@@ -1034,123 +383,9 @@ export default function HomePage() {
     }
   });
 
-  // Update tag mutation (name, category, subcategory path)
-  const updateTagMutation = useMutation({
-    mutationFn: async ({ 
-      tagName, 
-      oldCategory, 
-      newName, 
-      newCategory, 
-      newSubcategoryPath 
-    }: { 
-      tagName: string; 
-      oldCategory: string; 
-      newName?: string; 
-      newCategory?: string; 
-      newSubcategoryPath?: string[] 
-    }) => {
-      const response = await fetch('/api/tags-manager/update', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          tagName, 
-          oldCategory, 
-          newName, 
-          newCategory, 
-          newSubcategoryPath 
-        }),
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'Failed to update tag';
-        try {
-          const error = await response.json();
-          errorMessage = error.error || errorMessage;
-        } catch (e) {
-          errorMessage = `Error ${response.status}: ${response.statusText || 'Unknown error'}`;
-        }
-        throw new Error(errorMessage);
-      }
-
-      return await response.json();
-    },
-    onSuccess: async (data) => {
-      toast({
-        title: 'Tag Updated',
-        description: `Tag has been updated in ${data.updated} analyses`,
-      });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-filter-tree'] });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
-      setShowRenameDialog(false);
-      setTagToEdit(null);
-    },
-    onError: (error: Error) => {
-      toast({
-        title: 'Update Failed',
-        description: error.message,
-        variant: 'destructive',
-      });
-    },
-  });
-
   // Toggle flag mutation
   const toggleFlagMutation = useToggleFlag({
-    invalidateQueries: [['supabase-tags-analyses']],
-  });
-
-  // Delete tag mutation
-  const deleteTagMutation = useMutation({
-    mutationFn: async ({ tagName, category }: { tagName: string; category: string }) => {
-      const response = await fetch('/api/tags-manager/delete', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ tagName, category }),
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'Failed to delete tag';
-        try {
-          const error = await response.json();
-          errorMessage = error.error || errorMessage;
-        } catch (e) {
-          errorMessage = `Error ${response.status}: ${response.statusText || 'Unknown error'}`;
-        }
-        throw new Error(errorMessage);
-      }
-
-      return await response.json();
-    },
-    onSuccess: async (data) => {
-      toast({
-        title: 'Tag Deleted',
-        description: `Tag has been deleted from ${data.updated} analyses`,
-      });
-      // Invalidate and refetch to ensure UI updates immediately
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-filter-tree'] }); // Critical: invalidate hierarchy
-      await queryClient.invalidateQueries({ queryKey: ['tags-hierarchy'] }); // Fallback hierarchy
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
-      
-      // Force refetch of filter-tree to bypass staleTime cache
-      await queryClient.refetchQueries({ queryKey: ['tags-filter-tree'] });
-      
-      setShowDeleteDialog(false);
-      setTagToEdit(null);
-    },
-    onError: (error: Error) => {
-      toast({
-        title: 'Delete Failed',
-        description: error.message,
-        variant: 'destructive',
-      });
-    },
+    invalidateQueries: [['analyses-browse']],
   });
 
   // Flush cache mutation
@@ -1173,10 +408,7 @@ export default function HomePage() {
       });
       // Invalidate and refetch all tag-related queries
       await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-filter-tree'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-hierarchy'] });
-      await queryClient.refetchQueries({ queryKey: ['tags-catalog-v2'] });
-      await queryClient.refetchQueries({ queryKey: ['tags-filter-tree'] });
+      await queryClient.invalidateQueries({ queryKey: ['analyses-browse'] });
     },
     onError: (error: Error) => {
       toast({
@@ -1254,7 +486,7 @@ export default function HomePage() {
       analyses?.forEach((analysis: any) => {
         if (analysis.tags_version2 && Array.isArray(analysis.tags_version2)) {
           analysis.tags_version2.forEach((tagName: string) => {
-            const category = getTagCategory(tagName);
+            const category = "entities";
             const key = `${category}::${tagName}`;
             if (!uniqueTags.has(key)) {
               uniqueTags.set(key, { name: tagName, category });
@@ -1296,7 +528,7 @@ export default function HomePage() {
     if (!canExportTopicExcel || !selectedTopicLabel) {
       toast({
         title: "Select one topic",
-        description: "Switch to Topics in the sidebar and choose a single storyline to export.",
+        description: "Choose a single storyline in the sidebar to export.",
         variant: "destructive",
       });
       return;
@@ -1304,7 +536,7 @@ export default function HomePage() {
 
     setIsExportingExcel(true);
     try {
-      const analyses = await fetchAllFilteredAnalyses();
+      const analyses = await fetchAllFilteredRows();
       if (analyses.length === 0) {
         toast({
           title: "Nothing to export",
@@ -1759,176 +991,114 @@ export default function HomePage() {
     }
   };
 
-  const allPageSelected = paginatedAnalyses.length > 0 && 
-    paginatedAnalyses.every(a => selectedDates.has(a.date));
-
   return (
-    <SidebarProvider className="w-full" defaultOpen={true}>
-      <div className="space-y-6">
-        <div className="flex flex-col gap-6 lg:flex-row">
-          <div className="lg:w-72 shrink-0 space-y-2">
-            {/* Tags/Topics tab hidden — storyline topics only
-            <div className="flex rounded-lg border bg-muted/30 p-1">
-              <Button
-                type="button"
-                variant={sidebarMenu === "tags" ? "default" : "ghost"}
-                size="sm"
-                className="flex-1"
-                onClick={() => {
-                  setSidebarMenu("tags");
-                  setSelectedEntities(new Set());
-                  setShowUntagged(false);
-                  setCurrentPage(1);
-                  updateUrl({
-                    sidebarMenu: "tags",
-                    selectedEntities: new Set(),
-                    showUntagged: false,
-                    currentPage: 1,
-                  });
-                }}
-              >
-                Tags
-              </Button>
-              <Button
-                type="button"
-                variant={sidebarMenu === "topics" ? "default" : "ghost"}
-                size="sm"
-                className="flex-1"
-                onClick={() => {
-                  setSidebarMenu("topics");
-                  setSelectedEntities(new Set());
-                  setShowUntagged(false);
-                  setCurrentPage(1);
-                  updateUrl({
-                    sidebarMenu: "topics",
-                    selectedEntities: new Set(),
-                    showUntagged: false,
-                    currentPage: 1,
-                  });
-                }}
-              >
-                Topics
-              </Button>
-            </div>
-            */}
-            {!sidebarCatalogData ? (
-              <Card className="p-4 text-sm text-muted-foreground rounded-xl border bg-sidebar/40">
-                No storylines yet. Add rows to <code className="text-xs">topics</code> and link analyses in{" "}
-                <code className="text-xs">page_topics</code>.
-              </Card>
-            ) : (
-            <TagsSidebar
-              catalogData={sidebarCatalogData}
-              selectedEntities={selectedEntities}
-              showUntagged={showUntagged}
-              searchQuery={searchQuery}
-              mode="inline"
-              showOverview={false}
-              onEntitySelect={(entityKey) => {
-                const newSelected = selectedEntities.has(entityKey)
-                  ? new Set<string>()
-                  : new Set([entityKey]);
-                setSelectedEntities(newSelected);
-                setShowUntagged(false);
-                setCurrentPage(1);
-                updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1 });
-              }}
-              onUntaggedToggle={() => {
-                const newShowUntagged = !showUntagged;
-                setShowUntagged(newShowUntagged);
-                setSelectedEntities(new Set());
-                setCurrentPage(1);
-                updateUrl({ showUntagged: newShowUntagged, selectedEntities: new Set(), currentPage: 1 });
-              }}
-              onSearchChange={(value) => {
-                setSearchQuery(value);
-                setCurrentPage(1);
-                // Note: search query is debounced, so URL update happens in debounce effect
-              }}
-            />
-            )}
-          </div>
+    <AnalysesBrowseLayout
+      sidebar={
+        !topicCatalogData ? (
+          <Card className="p-4 text-sm text-muted-foreground rounded-xl border bg-sidebar/40">
+            No storylines in catalog yet. Assign{" "}
+            <code className="text-xs">topic_categories</code> on day rows.
+          </Card>
+        ) : (
+          <TagsSidebar
+            catalogData={topicCatalogData}
+            selectedEntities={selectedEntities}
+            showUntagged={showUntagged}
+            searchQuery={searchQuery}
+            mode="inline"
+            showOverview={false}
+            onEntitySelect={(entityKey) => {
+              const newSelected = selectedEntities.has(entityKey)
+                ? new Set<string>()
+                : new Set([entityKey]);
+              setSelectedEntities(newSelected);
+              setShowUntagged(false);
+              setCurrentPage(1);
+              updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1 });
+            }}
+            onUntaggedToggle={() => {
+              const newShowUntagged = !showUntagged;
+              setShowUntagged(newShowUntagged);
+              setSelectedEntities(new Set());
+              setCurrentPage(1);
+              updateUrl({ showUntagged: newShowUntagged, selectedEntities: new Set(), currentPage: 1 });
+            }}
+            onSearchChange={(value) => {
+              setSearchQuery(value);
+              setCurrentPage(1);
+            }}
+          />
+        )
+      }
+    >
+      <AnalysesBrowseTableCard>
+        <AnalysesBrowseHeader
+          title={showUntagged ? "Untagged Analyses" : "Bitcoinpedia"}
+          totalCount={totalCount}
+          actions={
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  aria-label="Page actions"
+                  data-testid="button-page-actions-menu"
+                >
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem
+                  onClick={handleDownloadExcel}
+                  disabled={!canExportTopicExcel || isExportingExcel}
+                  data-testid="button-download-excel"
+                >
+                  {isExportingExcel ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                  )}
+                  Download Excel
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={handleCopyToClipboard}
+                  disabled={selectAllMatching || selectedDates.size > 50}
+                  data-testid="button-copy-txt"
+                >
+                  <Copy className="w-4 h-4 mr-2" />
+                  Copy TXT
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={handleStorylineFitCheck}
+                  disabled={!canRunTopicChecks || storylineFitRunning || paginatedAnalyses.length === 0}
+                  data-testid="button-storyline-fit-check"
+                >
+                  {storylineFitRunning ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Bot className="w-4 h-4 mr-2" />
+                  )}
+                  Storyline check
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={handleGoogleCheck}
+                  disabled={googleCheckRunning || paginatedAnalyses.length === 0}
+                  data-testid="button-perplexity-check"
+                >
+                  {googleCheckRunning ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <PerplexityIcon className="w-4 h-4 mr-2 shrink-0" />
+                  )}
+                  Perplexity check
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          }
+        />
 
-          <div className="flex-1 space-y-4">
-          {/* Main Content Area */}
-          <div className="space-y-6">
-          <Card className="pt-0 px-6 pb-6 border-0">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center space-x-3">
-                <h2 className="text-lg font-semibold text-foreground">
-                  {showUntagged ? "Untagged Analyses" : "Bitcoinpedia"}
-                </h2>
-                <Badge variant="secondary" className="font-normal">
-                  {totalCount.toLocaleString()} result{totalCount !== 1 ? 's' : ''}
-                </Badge>
-              </div>
-              {totalCount > 0 && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0"
-                      aria-label="Page actions"
-                      data-testid="button-page-actions-menu"
-                    >
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-52">
-                    <DropdownMenuItem
-                      onClick={handleDownloadExcel}
-                      disabled={!canExportTopicExcel || isExportingExcel}
-                      data-testid="button-download-excel"
-                    >
-                      {isExportingExcel ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      ) : (
-                        <FileSpreadsheet className="w-4 h-4 mr-2" />
-                      )}
-                      Download Excel
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={handleCopyToClipboard}
-                      disabled={selectAllMatching || selectedDates.size > 50}
-                      data-testid="button-copy-txt"
-                    >
-                      <Copy className="w-4 h-4 mr-2" />
-                      Copy TXT
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={handleStorylineFitCheck}
-                      disabled={!canRunTopicChecks || storylineFitRunning || paginatedAnalyses.length === 0}
-                      data-testid="button-storyline-fit-check"
-                    >
-                      {storylineFitRunning ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      ) : (
-                        <Bot className="w-4 h-4 mr-2" />
-                      )}
-                      Storyline check
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={handleGoogleCheck}
-                      disabled={googleCheckRunning || paginatedAnalyses.length === 0}
-                      data-testid="button-perplexity-check"
-                    >
-                      {googleCheckRunning ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      ) : (
-                        <PerplexityIcon className="w-4 h-4 mr-2 shrink-0" />
-                      )}
-                      Perplexity check
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-            </div>
-
-            {/* Activity log hidden */}
-
-            {/* Analysis Table */}
-            <AnalysesTable
+        <AnalysesTable
               analyses={paginatedAnalyses}
               googleCheckSummary={googleCheckSummary}
               isLoading={isLoading}
@@ -1951,8 +1121,8 @@ export default function HomePage() {
                   searchQuery,
                   currentPage,
                   pageSize,
-                  viewMode,
-                  sidebarMenu,
+                  viewMode: 'topics',
+                  sidebarMenu: 'topics',
                 };
                 const query = serializePageState(state);
                 setLocation(`/day/${date}?${query}`);
@@ -1973,9 +1143,7 @@ export default function HomePage() {
                 showUntagged
                   ? "No untagged analyses found"
                   : selectedEntities.size > 0
-                  ? sidebarMenu === "topics"
-                    ? "No analyses match the selected storylines"
-                    : "No analyses match the selected entities"
+                  ? "No analyses match the selected storylines"
                   : defaultBrowseView
                   ? debouncedSearchQuery
                     ? "No locked analyses with a topic match your search"
@@ -1988,7 +1156,7 @@ export default function HomePage() {
               pageSize={pageSize}
               currentPage={currentPage}
               totalCount={totalCount}
-              catalogData={catalogData}
+              catalogData={null}
               onPageChange={(page) => {
                 setCurrentPage(page);
                 updateUrl({ currentPage: page });
@@ -2000,7 +1168,7 @@ export default function HomePage() {
               }}
               onSelectAll={toggleSelectAll}
               selectAllMatching={selectAllMatching}
-              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
               showPagination={true}
               showSelectAll={true}
               showBulkActions={true}
@@ -2084,8 +1252,7 @@ export default function HomePage() {
                 ),
               }}
             />
-          </Card>
-          </div>
+      </AnalysesBrowseTableCard>
 
       {/* New Copy to Clipboard Dialog */}
       <Dialog open={showCopyDialog} onOpenChange={setShowCopyDialog}>
@@ -2354,100 +1521,6 @@ export default function HomePage() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Tag Dialog */}
-      <EditTagDialog
-        open={showRenameDialog}
-        onOpenChange={setShowRenameDialog}
-        tag={tagToEdit}
-        onConfirm={(changes) => {
-          if (tagToEdit) {
-            updateTagMutation.mutate({
-              tagName: tagToEdit.name,
-              oldCategory: tagToEdit.category,
-              newName: changes.newName,
-              newCategory: changes.newCategory,
-              newSubcategoryPath: changes.newSubcategoryPath,
-            });
-          }
-        }}
-        isLoading={updateTagMutation.isPending}
-      />
-
-      {/* Delete Tag Dialog */}
-          <DeleteDialog
-            open={showDeleteDialog}
-            onOpenChange={setShowDeleteDialog}
-            tag={tagToEdit}
-            onConfirm={async () => {
-              if (tagToEdit) {
-                // First, find the actual category from the database
-                // This handles cases where tag appears in Miscellaneous but has a different category in DB
-                try {
-                  const response = await fetch(`/api/tags-manager/find-categories?tagName=${encodeURIComponent(tagToEdit.name)}`);
-                  if (response.ok) {
-                    const data = await response.json();
-                    if (data.categories && data.categories.length > 0) {
-                      // Delete from all categories the tag exists in
-                      // This handles cases where the same tag name might exist in multiple categories
-                      const deletePromises = data.categories.map((cat: { category: string }) => 
-                        fetch('/api/tags-manager/delete', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ tagName: tagToEdit.name, category: cat.category }),
-                        })
-                      );
-                      
-                      const results = await Promise.all(deletePromises);
-                      const allOk = results.every(r => r.ok);
-                      
-                      if (allOk) {
-                        const totalUpdated = await Promise.all(
-                          results.map(r => r.json().then((d: any) => d.updated || 0))
-                        );
-                        const sum = totalUpdated.reduce((a, b) => a + b, 0);
-                        
-                        toast({
-                          title: 'Tag Deleted',
-                          description: `Tag has been deleted from ${sum} analyses across ${data.categories.length} category(ies)`,
-                        });
-                        
-                        await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
-                        await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
-                        await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
-                        setShowDeleteDialog(false);
-                        setTagToEdit(null);
-                      } else {
-                        throw new Error('Some deletions failed');
-                      }
-                    } else {
-                      // No categories found - try with the provided category anyway
-                      console.warn(`No categories found for "${tagToEdit.name}", using provided category: ${tagToEdit.category}`);
-                      deleteTagMutation.mutate({
-                        tagName: tagToEdit.name,
-                        category: tagToEdit.category,
-                      });
-                    }
-                  } else {
-                    // If lookup fails, try with provided category
-                    console.warn(`Failed to find categories for "${tagToEdit.name}", using provided category: ${tagToEdit.category}`);
-                    deleteTagMutation.mutate({
-                      tagName: tagToEdit.name,
-                      category: tagToEdit.category,
-                    });
-                  }
-                } catch (error) {
-                  // If lookup fails, try with provided category
-                  console.error(`Error finding categories for "${tagToEdit.name}":`, error);
-                  deleteTagMutation.mutate({
-                    tagName: tagToEdit.name,
-                    category: tagToEdit.category,
-                  });
-                }
-              }
-            }}
-            isLoading={deleteTagMutation.isPending}
-          />
-
           {/* Article Selection Dialog for Bulk Re-analyze */}
           {selectionRequest && (
             <ArticleSelectionDialog
@@ -2463,9 +1536,6 @@ export default function HomePage() {
               onConfirm={confirmSelection}
             />
           )}
-          </div>
-        </div>
-      </div>
-    </SidebarProvider>
+    </AnalysesBrowseLayout>
   );
 }

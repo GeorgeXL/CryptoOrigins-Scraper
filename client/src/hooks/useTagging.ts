@@ -55,7 +55,7 @@ export function useTagging() {
   const startContextTagging = async (dates?: string[]) => {
     setIsContextTagging(true);
     try {
-      const response = await fetch('/api/tagging/with-context', {
+      const response = await fetch('/api/tagging/with-context/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dates: dates || null }),

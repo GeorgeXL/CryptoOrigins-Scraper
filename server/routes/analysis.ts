@@ -6,13 +6,12 @@ import { type ArticleData, type TieredArticles } from "@shared/schema";
 import { periodDetector } from "../services/period-detector";
 import { hierarchicalSearch } from "../services/hierarchical-search";
 import { type HistoricalNewsAnalysis, type InsertHistoricalNewsAnalysis } from "@shared/schema";
+import { deriveVerificationBadge } from "@shared/verification-badge";
 import { cacheManager } from "../services/cache-manager";
 import { healthMonitor } from "../services/health-monitor";
 import { createErrorResponse } from "../utils/error-handler";
 import { apiMonitor } from "../services/api-monitor";
 import { qualityChecker } from "../services/quality-checker";
-import { batchProcessor } from "../services/batch-processor";
-import { conflictClusterer } from "../services/conflict-clusterer";
 import { perplexityCleaner } from "../services/perplexity-cleaner";
 import { entityExtractor } from "../services/entity-extractor";
 import { sql, eq, desc, and, asc, inArray } from "drizzle-orm";
@@ -445,13 +444,13 @@ function parsePerplexityDate(dateText: string | null): string | null {
     try {
       const { date } = req.params;
       if (!(await requireUnlockedDay(date, res))) return;
-      const { isFlagged, flagReason } = req.body as { isFlagged: boolean; flagReason?: string };
+      const { isFlagged } = req.body as { isFlagged: boolean };
 
       if (typeof isFlagged !== "boolean") {
         return res.status(400).json({ error: "isFlagged (boolean) is required" });
       }
 
-      const updated = await storage.updateAnalysisFlag(date, isFlagged, flagReason);
+      const updated = await storage.updateAnalysisFlag(date, isFlagged);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: (error as Error).message });
@@ -461,18 +460,18 @@ function parsePerplexityDate(dateText: string | null): string | null {
   router.post("/api/analysis/date/:date/veri-badge", async (req, res) => {
     try {
       const { date } = req.params;
-      const { veriBadge } = req.body;
+      const { veriBadge: requestedBadge } = req.body;
 
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
       }
       if (!(await requireUnlockedDay(date, res))) return;
 
-      if (!veriBadge || !['Manual', 'Orphan', 'Verified', 'Not Available'].includes(veriBadge)) {
-        return res.status(400).json({ error: "Invalid veri_badge value. Must be one of: Manual, Orphan, Verified, Not Available" });
+      if (!requestedBadge || !['Manual', 'Verified', 'Not Available'].includes(requestedBadge)) {
+        return res.status(400).json({ error: "Invalid verification badge value. Must be one of: Manual, Verified, Not Available" });
       }
 
-      console.log(`🏷️ POST /api/analysis/date/${date}/veri-badge - Updating veri_badge to ${veriBadge}`);
+      console.log(`🏷️ POST /api/analysis/date/${date}/veri-badge - Updating verification state to ${requestedBadge}`);
 
       // Check if analysis exists
       const existingAnalysis = await storage.getAnalysisByDate(date);
@@ -480,46 +479,39 @@ function parsePerplexityDate(dateText: string | null): string | null {
         return res.status(404).json({ error: `Analysis not found for date: ${date}` });
       }
 
-      // Update the underlying fields that determine veri_badge
-      // The database trigger will automatically recalculate veri_badge
-      const updateData: any = {};
+      const updateData: Partial<InsertHistoricalNewsAnalysis> = {};
       
-      switch (veriBadge) {
+      switch (requestedBadge) {
         case 'Manual':
           updateData.isManualOverride = true;
-          updateData.isOrphan = false;
-          updateData.geminiApproved = false;
-          updateData.perplexityApproved = false;
-          break;
-        case 'Orphan':
-          updateData.isOrphan = true;
-          updateData.isManualOverride = false;
-          updateData.geminiApproved = false;
-          updateData.perplexityApproved = false;
+          updateData.googleCheckHappened = 'uncertain';
           break;
         case 'Verified':
-          updateData.geminiApproved = true;
-          updateData.perplexityApproved = true;
           updateData.isManualOverride = false;
-          updateData.isOrphan = false;
+          updateData.googleCheckHappened = 'yes';
+          updateData.googleCheckCheckedAt = new Date();
           break;
         case 'Not Available':
-          updateData.geminiApproved = false;
-          updateData.perplexityApproved = false;
           updateData.isManualOverride = false;
-          updateData.isOrphan = false;
+          updateData.googleCheckHappened = 'uncertain';
           break;
       }
 
       await storage.updateAnalysis(date, updateData);
 
-      console.log(`✅ Successfully updated veri_badge for ${date} to ${veriBadge}`);
+      const veriBadge = deriveVerificationBadge({
+        isManualOverride: updateData.isManualOverride ?? existingAnalysis.isManualOverride,
+        googleCheckHappened:
+          updateData.googleCheckHappened ?? existingAnalysis.googleCheckHappened,
+      });
+
+      console.log(`✅ Successfully updated verification state for ${date} to ${veriBadge}`);
 
       res.json({
         success: true,
         date,
         veriBadge,
-        message: "Verification badge updated successfully"
+        message: "Verification state updated successfully",
       });
     } catch (error) {
       console.error(`💥 Error updating veri_badge for ${req.params.date}:`, error);
@@ -581,19 +573,12 @@ function parsePerplexityDate(dateText: string | null): string | null {
         summary,
         topArticleId: sourceUrl,
         isManualOverride: true,
-        isOrphan: false,
-        aiProvider: "manual",
         reasoning: "Manual entry with operator-provided source URL",
-        confidenceScore: "100",
         winningTier: "bitcoin",
         tierUsed: "manual",
         tieredArticles,
         analyzedArticles: [manualArticle],
-        totalArticlesFetched: 1,
-        uniqueArticlesAnalyzed: 1,
         topicCategories: linkedTopics,
-        geminiApproved: false,
-        perplexityApproved: false,
         tagsVersion2: [],
       };
 
@@ -788,12 +773,15 @@ function parsePerplexityDate(dateText: string | null): string | null {
           console.log(`✅ [${requestId}] Analysis already exists for ${date}, returning existing data`);
           // Extract articles from the analysis record
           const articles = existingAnalysis.analyzedArticles || [];
+          const tiered = existingAnalysis.tieredArticles as { bitcoin?: unknown[]; crypto?: unknown[]; macro?: unknown[] } | null;
+          const articleCount =
+            (tiered?.bitcoin?.length ?? 0) + (tiered?.crypto?.length ?? 0) + (tiered?.macro?.length ?? 0);
           return res.json({
             topArticleId: existingAnalysis.topArticleId,
             summary: existingAnalysis.summary,
-            totalArticlesFetched: existingAnalysis.totalArticlesFetched,
-            uniqueArticlesAnalyzed: existingAnalysis.uniqueArticlesAnalyzed,
-            duplicateArticleIds: existingAnalysis.duplicateArticleIds,
+            totalArticlesFetched: articleCount,
+            uniqueArticlesAnalyzed: articleCount,
+            duplicateArticleIds: [],
             isFromCache: true,
             analysis: existingAnalysis,
             articles: articles || []
@@ -811,14 +799,8 @@ function parsePerplexityDate(dateText: string | null): string | null {
             
             // Clear tags_version2 array and old tags JSONB field
             await storage.updateAnalysis(date, {
-              tags: [],
               tagsVersion2: []
             });
-            
-            // Clear normalized tags (pages_and_tags join table)
-            const { pagesAndTags } = await import('@shared/schema');
-            const { eq } = await import('drizzle-orm');
-            await db.delete(pagesAndTags).where(eq(pagesAndTags.analysisId, existingAnalysis.id));
             
             console.log(`✅ [${requestId}] Tags cleared for ${date}`);
           }
@@ -926,19 +908,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
             reasoning: analysisResult.reasoning,
             winningTier: 'none',
             tieredArticles: tieredArticles,
-            aiProvider: 'openai',
-            confidenceScore: '0',
-            sentimentScore: '0',
-            sentimentLabel: 'neutral',
             topicCategories: [],
-            duplicateArticleIds: [],
-            totalArticlesFetched: analysisResult.totalArticlesFetched,
-            uniqueArticlesAnalyzed: 0,
-            perplexityVerdict: analysisResult.perplexityVerdict,
-            perplexityApproved: analysisResult.perplexityApproved,
-            geminiApproved: analysisResult.geminiApproved,
-            factCheckVerdict: analysisResult.factCheckVerdict,
-            isOrphan: analysisResult.selectionMode === 'orphan'
           };
           
           const existingAnalysis = await storage.getAnalysisByDate(date);
@@ -978,22 +948,20 @@ function parsePerplexityDate(dateText: string | null): string | null {
       // CRITICAL: Use tieredArticles from analysisResult if available, otherwise use the preserved one
       const finalTieredArticles = analysisResult.tieredArticles || tieredArticles || { bitcoin: [], crypto: [], macro: [] };
       
-      const analysisData: any = {
+      const analysisData: InsertHistoricalNewsAnalysis = {
         date,
         summary: analysisResult.summary || '',
         topArticleId: analysisResult.topArticleId || 'none',
         isManualOverride: false,
-        aiProvider: analysisResult.aiProvider || 'openai',
         reasoning: analysisResult.reasoning || 'Analysis completed with no summary generated.',
-        confidenceScore: (analysisResult.confidenceScore || 0).toString(),
-        sentimentScore: (analysisResult.sentimentScore || 0).toString(),
-        sentimentLabel: analysisResult.sentimentLabel || 'neutral',
         topicCategories: analysisResult.topicCategories || [],
-        duplicateArticleIds: analysisResult.duplicateArticleIds || [],
-        totalArticlesFetched: analysisResult.totalArticlesFetched || 0,
-        uniqueArticlesAnalyzed: analysisResult.uniqueArticlesAnalyzed || 0,
         winningTier: analysisResult.winningTier || 'none',
-        tieredArticles: finalTieredArticles, // ALWAYS save tieredArticles, even if no summary
+        tieredArticles: finalTieredArticles,
+        analyzedArticles: [
+          ...(finalTieredArticles?.bitcoin || []),
+          ...(finalTieredArticles?.crypto || []),
+          ...(finalTieredArticles?.macro || []),
+        ],
         articleTags: {
           totalArticles: analysisResult.totalArticlesFetched || 0,
           topSources: {},
@@ -1008,24 +976,17 @@ function parsePerplexityDate(dateText: string | null): string | null {
             version: '4.0-analyse-day',
             tierUsed: analysisResult.winningTier || 'none',
             winningTier: analysisResult.winningTier || 'none',
-            analyzedArticles: []
-          }
-        }
+            analyzedArticles: [],
+          },
+        },
       };
-
-      // Add fact checking fields
-      analysisData.perplexityVerdict = analysisResult.perplexityVerdict || 'uncertain';
-      analysisData.perplexityApproved = analysisResult.perplexityApproved || false;
-      analysisData.geminiApproved = analysisResult.geminiApproved || false;
-      analysisData.factCheckVerdict = analysisResult.factCheckVerdict || 'uncertain';
 
       // Try to save to database (even if analysis failed, save what we have)
       try {
-        // Log what we're about to save
         const bitcoinCount = finalTieredArticles?.bitcoin?.length || 0;
         const cryptoCount = finalTieredArticles?.crypto?.length || 0;
         const macroCount = finalTieredArticles?.macro?.length || 0;
-        console.log(`💾 [${requestId}] Saving to database - Bitcoin: ${bitcoinCount}, Crypto: ${cryptoCount}, Macro: ${macroCount}, Total: ${analysisData.totalArticlesFetched}`);
+        console.log(`💾 [${requestId}] Saving to database - Bitcoin: ${bitcoinCount}, Crypto: ${cryptoCount}, Macro: ${macroCount}, Total: ${analysisResult.totalArticlesFetched || 0}`);
         console.log(`💾 [${requestId}] tieredArticles type: ${typeof finalTieredArticles}, has macro: ${!!finalTieredArticles?.macro}, macro length: ${finalTieredArticles?.macro?.length || 0}`);
         
         const existingAnalysis = await storage.getAnalysisByDate(date);
@@ -1224,27 +1185,18 @@ function parsePerplexityDate(dateText: string | null): string | null {
         summary: summaryResult.summary,
         topArticleId: articleId,
         reasoning: `Manually selected article from ${winningTier} tier`,
-        isOrphan: true, // Mark as orphan since it's manually selected
-        aiProvider: 'openai',
-        confidenceScore: summaryResult.confidenceScore.toString(),
-        sentimentScore: summaryResult.sentimentScore.toString(),
-        sentimentLabel: summaryResult.sentimentLabel,
         topicCategories: summaryResult.topicCategories,
         winningTier: winningTier,
-        // Keep existing tieredArticles
         tieredArticles: tieredArticles
       };
       
       await storage.updateAnalysis(date, updateData);
-      
-      console.log(`   ✅ Analysis updated with orphan flag`);
       
       res.json({
         success: true,
         summary: summaryResult.summary,
         topArticleId: articleId,
         winningTier: winningTier,
-        isOrphan: true
       });
     } catch (error) {
       console.error(`💥 Error selecting article:`, error);
@@ -1323,19 +1275,11 @@ function parsePerplexityDate(dateText: string | null): string | null {
         reasoning: selectionMode === 'orphan' 
           ? `Manually selected article from ${winningTier} tier (no intersection found)`
           : `User confirmed selection from ${winningTier} tier (multiple matches)`,
-        isOrphan: selectionMode === 'orphan',
-        aiProvider: 'openai',
-        confidenceScore: summaryResult.confidenceScore.toString(),
-        sentimentScore: summaryResult.sentimentScore.toString(),
-        sentimentLabel: summaryResult.sentimentLabel,
         topicCategories: summaryResult.topicCategories,
         winningTier: winningTier,
         tieredArticles: tieredArticles,
-        // Set verification fields based on selection mode
-        perplexityVerdict: selectionMode === 'orphan' ? 'uncertain' : 'verified',
-        perplexityApproved: selectionMode === 'orphan' ? false : true,
-        geminiApproved: selectionMode === 'orphan' ? false : true,
-        factCheckVerdict: selectionMode === 'orphan' ? 'uncertain' : 'verified'
+        googleCheckHappened: selectionMode === 'orphan' ? 'uncertain' : 'yes',
+        googleCheckCheckedAt: new Date(),
       };
       
       // Remove any undefined values and exclude agentCreated
@@ -1352,8 +1296,10 @@ function parsePerplexityDate(dateText: string | null): string | null {
         summary: summaryResult.summary,
         topArticleId: articleId,
         winningTier: winningTier,
-        isOrphan: selectionMode === 'orphan',
-        veriBadge: selectionMode === 'orphan' ? 'Orphan' : 'Verified'
+        veriBadge: deriveVerificationBadge({
+          isManualOverride: cleanUpdateData.isManualOverride,
+          googleCheckHappened: cleanUpdateData.googleCheckHappened ?? "yes",
+        }),
       });
     } catch (error) {
       console.error(`💥 Error confirming article selection:`, error);
@@ -1395,30 +1341,6 @@ function parsePerplexityDate(dateText: string | null): string | null {
       
       if (tags_version2 && Array.isArray(tags_version2)) {
         updateData.tags_version2 = tags_version2;
-        
-        // Also sync with normalized tags table
-        console.log(`🏷️ Syncing ${tags_version2.length} tags with normalized tables...`);
-        
-        for (const tagName of tags_version2) {
-          try {
-            // Find or create the tag (use "miscellaneous" as default category for manual tags)
-            const tag = await storage.findOrCreateTag({
-              name: tagName,
-              category: 'miscellaneous',
-            });
-            
-            // Link tag to analysis (will skip if already linked)
-            await storage.addTagToAnalysis(existingAnalysis.id, tag.id);
-            
-            // Update usage count
-            await storage.updateTagUsageCount(tag.id);
-            
-            console.log(`   ✅ Tag "${tagName}" linked (id: ${tag.id.substring(0, 8)}...)`);
-          } catch (tagError) {
-            console.warn(`   ⚠️ Failed to sync tag "${tagName}":`, (tagError as Error).message);
-            // Continue with other tags even if one fails
-          }
-        }
       }
 
       await storage.updateAnalysis(date, updateData);
@@ -1565,17 +1487,14 @@ function parsePerplexityDate(dateText: string | null): string | null {
           // Update database with results
           // Note: This will fail if migration hasn't been run, so we catch and continue
           try {
-            const updateData: any = {
-              perplexityApproved: perplexityResult.approved,
-              finalAnalysisCheckedAt: new Date()
-            };
-            // Only update geminiApproved if we actually got a result (not null)
-            if (geminiResult !== null) {
-              updateData.geminiApproved = geminiResult.approved;
-            }
-            await db.update(historicalNewsAnalyses)
-              .set(updateData)
-              .where(eq(historicalNewsAnalyses.date, date));
+            const happened =
+              geminiResult?.approved && perplexityResult.approved ? 'yes'
+              : geminiResult?.approved === false || !perplexityResult.approved ? 'no'
+              : 'uncertain';
+            await storage.updateAnalysis(date, {
+              googleCheckHappened: happened,
+              googleCheckCheckedAt: new Date(),
+            });
           } catch (dbError: any) {
             // If columns don't exist yet (migration not run), log but continue
             if (dbError.message?.includes('column') || dbError.message?.includes('does not exist')) {
@@ -1657,8 +1576,8 @@ function parsePerplexityDate(dateText: string | null): string | null {
       // Get all analyses that have no verdict at all (both null)
       const allAnalyses = await storage.getAllAnalyses();
       
-      const notVerifiedAnalyses = allAnalyses.filter(analysis => {
-        return !analysis.perplexityVerdict && !analysis.factCheckVerdict;
+      const notVerifiedAnalyses = allAnalyses.filter((analysis) => {
+        return !analysis.googleCheckHappened || analysis.googleCheckHappened === 'uncertain';
       });
 
       const total = notVerifiedAnalyses.length;
@@ -1721,24 +1640,15 @@ function parsePerplexityDate(dateText: string | null): string | null {
             }
 
             // Update database with fact-check results
-            const updateData: any = {
-              perplexityVerdict: factCheckResult.verdict,
-              perplexityConfidence: factCheckResult.confidence.toString(),
-              perplexityReasoning: factCheckResult.reasoning,
-              perplexityCheckedAt: new Date(),
+            const updateData: Partial<InsertHistoricalNewsAnalysis> = {
+              googleCheckHappened:
+                factCheckResult.verdict === 'verified' ? 'yes'
+                : factCheckResult.verdict === 'contradicted' ? 'no'
+                : 'uncertain',
+              googleCheckCheckedAt: new Date(),
             };
 
-            // Add citations if available
-            if (factCheckResult.citations && factCheckResult.citations.length > 0) {
-              updateData.perplexityCitations = factCheckResult.citations;
-            }
-
-            // Note: We do NOT save correctDateText in Button 1 (initial verify)
-            // correctDateText will be determined later when resolving contradictions
-
-            await db.update(historicalNewsAnalyses)
-              .set(updateData)
-              .where(eq(historicalNewsAnalyses.date, analysis.date));
+            await storage.updateAnalysis(analysis.date, updateData);
 
             return { 
               success: true, 
@@ -1828,36 +1738,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
       // Get all analyses that are in AI Arena (contradicted/uncertain or one verified but rejected by Gemini)
       const allAnalyses = await storage.getAllAnalyses();
       
-      const arenaAnalyses = allAnalyses.filter(analysis => {
-        const isPerplexityVerified = analysis.perplexityVerdict === 'verified';
-        const isOpenAIVerified = analysis.factCheckVerdict === 'verified';
-        const isGeminiApproved = analysis.geminiApproved === true;
-        const isGeminiRejected = analysis.geminiApproved === false;
-        const isBothVerified = isPerplexityVerified && isOpenAIVerified;
-        const isOneVerified = (isPerplexityVerified || isOpenAIVerified) && !isBothVerified;
-        const isOrphan = analysis.isOrphan === true;
-        
-        // Exclude: Orphans (already processed and marked as orphan)
-        if (isOrphan) return false;
-        
-        // Exclude: Not Verified (both null)
-        const isNotVerified = !analysis.perplexityVerdict && !analysis.factCheckVerdict;
-        if (isNotVerified) return false;
-        
-        // Exclude: Ready to be Tagged (both verified OR one verified AND gemini approved)
-        const isReadyToTag = isBothVerified || (isOneVerified && isGeminiApproved);
-        if (isReadyToTag) return false;
-        
-        // Exclude: Verified by one service only (unless rejected by Gemini)
-        if (isOneVerified && !isGeminiRejected) return false;
-        
-        // Include: Has verdict but NOT verified, OR one verified but rejected by Gemini
-        const hasPerplexityVerdict = analysis.perplexityVerdict != null && analysis.perplexityVerdict !== '' && analysis.perplexityVerdict !== 'verified';
-        const hasOpenAIVerdict = analysis.factCheckVerdict != null && analysis.factCheckVerdict !== '' && analysis.factCheckVerdict !== 'verified';
-        
-        return (!isPerplexityVerified && !isOpenAIVerified && (hasPerplexityVerdict || hasOpenAIVerdict)) ||
-               (isOneVerified && isGeminiRejected);
-      });
+      const arenaAnalyses = allAnalyses.filter((analysis) => analysis.googleCheckHappened === 'no');
 
       const total = arenaAnalyses.length;
       console.log(`⚔️ Found ${total} AI Arena entries to battle`);
@@ -1911,7 +1792,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
             if (!tieredArticles || typeof tieredArticles !== 'object') {
               console.log(`⚠️ No cached articles for ${analysis.date}, marking as orphan`);
               await db.update(historicalNewsAnalyses)
-                .set({ isOrphan: true })
+                .set({ googleCheckHappened: 'uncertain', lastAnalyzed: new Date() })
                 .where(eq(historicalNewsAnalyses.date, analysis.date));
               processed++;
               orphaned++;
@@ -1938,7 +1819,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
             if (allArticles.length === 0) {
               console.log(`⚠️ No articles found for ${analysis.date}, marking as orphan`);
               await db.update(historicalNewsAnalyses)
-                .set({ isOrphan: true })
+                .set({ googleCheckHappened: 'uncertain', lastAnalyzed: new Date() })
                 .where(eq(historicalNewsAnalyses.date, analysis.date));
               processed++;
               orphaned++;
@@ -1986,7 +1867,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
               console.log(`❌ No matching articles found for ${analysis.date}, marking as orphan`);
               try {
                 await db.update(historicalNewsAnalyses)
-                  .set({ isOrphan: true })
+                  .set({ googleCheckHappened: 'uncertain', lastAnalyzed: new Date() })
                   .where(eq(historicalNewsAnalyses.date, analysis.date));
                 console.log(`✅ Successfully marked ${analysis.date} as orphan in database`);
               } catch (dbError) {
@@ -2074,7 +1955,7 @@ Format: "id"`;
             if (!selectedArticle) {
               console.error(`❌ Could not find selected article for ${analysis.date}`);
               await db.update(historicalNewsAnalyses)
-                .set({ isOrphan: true })
+                .set({ googleCheckHappened: 'uncertain', lastAnalyzed: new Date() })
                 .where(eq(historicalNewsAnalyses.date, analysis.date));
               processed++;
               orphaned++;
@@ -2174,10 +2055,11 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
                 .set({
                   summary: finalSummary,
                   topArticleId: selectedArticle.id,
-                  perplexityVerdict: 'verified',
-                  geminiApproved: true,
-                  isOrphan: false,
-                  reasoning: `Battle result: Both Perplexity and Gemini agreed on this article. Original summary was incorrect.`
+                  googleCheckHappened: "yes",
+                  googleCheckCheckedAt: new Date(),
+                  lastAnalyzed: new Date(),
+                  reasoning:
+                    "Battle result: Both Perplexity and Gemini agreed on this article. Original summary was incorrect.",
                 })
                 .where(eq(historicalNewsAnalyses.date, analysis.date));
               console.log(`✅ [BATTLE] Database update successful for ${analysis.date}`);
@@ -2292,15 +2174,7 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
       // Get all analyses that are verified by either OpenAI or Perplexity
       const allAnalyses = await storage.getAllAnalyses();
       
-      let verifiedAnalyses = allAnalyses.filter(analysis => {
-        const isPerplexityVerified = analysis.perplexityVerdict === 'verified';
-        const isOpenAIVerified = analysis.factCheckVerdict === 'verified';
-        // Only include entries verified by one service (not both)
-        const isOneServiceVerified = (isPerplexityVerified && !isOpenAIVerified) || (!isPerplexityVerified && isOpenAIVerified);
-        // Exclude entries that already have a Gemini response
-        const hasGeminiResponse = analysis.geminiApproved !== null && analysis.geminiApproved !== undefined;
-        return isOneServiceVerified && !hasGeminiResponse;
-      });
+      let verifiedAnalyses = allAnalyses.filter((analysis) => analysis.googleCheckHappened === 'yes');
 
       // Apply limit if provided (for testing)
       if (limit && limit > 0) {
@@ -2309,7 +2183,7 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
       }
 
       const total = verifiedAnalyses.length;
-      console.log(`📊 Found ${total} verified entries to process with Gemini${limit ? ` (limited from ${allAnalyses.filter(a => a.perplexityVerdict === 'verified' || a.factCheckVerdict === 'verified').length})` : ''}`);
+      console.log(`📊 Found ${total} google-checked entries for legacy Gemini batch${limit ? ` (limited from ${allAnalyses.filter(a => a.googleCheckHappened === 'yes').length})` : ''}`);
 
       if (total === 0) {
         apiMonitor.updateRequest(batchRequestId, {
@@ -2368,14 +2242,10 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
             const confidence = geminiResult.approved ? 80 : 20;
 
             // Update database with Gemini verification results
-            const updateData: any = {
-              geminiApproved: geminiResult.approved,
-              geminiConfidence: confidence.toString(),
-            };
-
-            await db.update(historicalNewsAnalyses)
-              .set(updateData)
-              .where(eq(historicalNewsAnalyses.date, analysis.date));
+            await storage.updateAnalysis(analysis.date, {
+              googleCheckHappened: geminiResult.approved ? 'yes' : 'no',
+              googleCheckCheckedAt: new Date(),
+            });
 
             return { 
               success: true, 
@@ -2609,7 +2479,7 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
         const uniqueDates = [...new Set(dates.filter((d: unknown) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)))];
         analysesToProcess = (
           await Promise.all(uniqueDates.map((date: string) => storage.getAnalysisByDate(date)))
-        ).filter(Boolean);
+        ).filter((row): row is NonNullable<typeof row> => row != null);
         console.log(`🔧 Processing ${analysesToProcess.length} selected date(s) for period removal`);
       } else {
         analysesToProcess = await storage.getAllAnalyses();

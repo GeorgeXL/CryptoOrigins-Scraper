@@ -187,30 +187,27 @@ const sourceFinderAgent: AgentExecutor = async (ctx) => {
   }
   return {
     status: "completed",
-    confidence: Math.min(0.99, Math.max(0.4, discovered.confidenceScore / 100)),
+    confidence: 0.82,
     output: buildStepOutput({
       summary: "Used existing search/summarization pipeline",
       findings: [
-        `Fetched articles: ${discovered.totalArticlesFetched}`,
+        `Fetched articles: ${discovered.articleCount}`,
         `Summary chars: ${discovered.summary.length}`,
       ],
     }),
     evidence: {
       sourceType: "existing-news-analyzer",
-      totalArticlesFetched: discovered.totalArticlesFetched,
+      articleCount: discovered.articleCount,
     },
   };
 };
 
 function verificationAgreementPercent(signals: {
-  factCheckConfidence: string | null;
-  perplexityConfidence: string | null;
-  confidenceScore: string | null;
+  googleCheckHappened: string | null;
 }): number {
-  const raw = signals.factCheckConfidence ?? signals.perplexityConfidence ?? signals.confidenceScore;
-  if (raw == null) return 70;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : 70;
+  if (signals.googleCheckHappened === "yes") return 92;
+  if (signals.googleCheckHappened === "no") return 35;
+  return 70;
 }
 
 const verificationAgent: AgentExecutor = async (ctx) => {
@@ -236,12 +233,11 @@ const verificationAgent: AgentExecutor = async (ctx) => {
     status: "completed",
     confidence: Math.min(1, Math.max(0, pct / 100)),
     output: buildStepOutput({
-      summary: "Verification pass completed from existing verification signals",
+      summary: "Verification pass completed from stored google_check signals",
       findings: [
-        `factCheckVerdict=${signals.factCheckVerdict ?? "unknown"}`,
-        `perplexityVerdict=${signals.perplexityVerdict ?? "unknown"}`,
-        `geminiApproved=${signals.geminiApproved === null ? "unknown" : String(signals.geminiApproved)}`,
-        `perplexityApproved=${signals.perplexityApproved === null ? "unknown" : String(signals.perplexityApproved)}`,
+        `googleCheckHappened=${signals.googleCheckHappened ?? "unknown"}`,
+        `topArticleId=${signals.topArticleId ?? "none"}`,
+        `isManualOverride=${signals.isManualOverride === null ? "unknown" : String(signals.isManualOverride)}`,
       ],
     }),
   };
@@ -519,19 +515,18 @@ const tagManagerAgent: AgentExecutor = async (ctx) => {
     };
   }
   const gaps: string[] = [];
-  if (cov.pagesAndTagsCount === 0) gaps.push("pages_and_tags has no links for this page");
   if (cov.tagsVersion2Count === 0) gaps.push("tags_version2 is empty");
   return {
     status: "completed",
-    confidence: cov.pagesAndTagsCount > 0 ? 0.88 : 0.42,
+    confidence: cov.tagsVersion2Count > 0 ? 0.88 : 0.42,
     output: buildStepOutput({
       summary:
-        cov.pagesAndTagsCount > 0 ?
-          "Normalized tag links exist"
-        : "No normalized tag links yet — use Tags admin or migrate-to-normalized-tags tooling",
+        cov.tagsVersion2Count > 0 ?
+          "Entity tags exist on day row"
+        : "No entity tags yet — use Tags admin to assign tags_version2",
       findings:
-        cov.pagesAndTagsCount > 0 ?
-          [`pages_and_tags rows: ${cov.pagesAndTagsCount}`, `tags_version2 count: ${cov.tagsVersion2Count}`]
+        cov.tagsVersion2Count > 0 ?
+          [`tags_version2 count: ${cov.tagsVersion2Count}`]
         : gaps,
     }),
     evidence: { ...cov },
@@ -597,14 +592,14 @@ const tagApplierAgent: AgentExecutor = async (ctx) => {
     };
   }
 
-  const hasAppliedTags = cov.tagsVersion2Count > 0 || cov.pagesAndTagsCount > 0;
+  const hasAppliedTags = cov.tagsVersion2Count > 0;
   if (!hasAppliedTags) {
     return {
       status: "rejected",
       confidence: 0.6,
       output: buildStepOutput({
         summary: "Tag application is incomplete",
-        findings: ["No tags_version2 values or normalized pages_and_tags links exist"],
+        findings: ["No tags_version2 values exist on this day row"],
         rejection: {
           status: "rejected",
           agent: "TagApplierAgent",
@@ -620,13 +615,10 @@ const tagApplierAgent: AgentExecutor = async (ctx) => {
 
   return {
     status: "completed",
-    confidence: cov.pagesAndTagsCount > 0 ? 0.88 : 0.78,
+    confidence: 0.88,
     output: buildStepOutput({
       summary: "Tag application confirmed",
-      findings: [
-        `tags_version2 count=${cov.tagsVersion2Count}`,
-        `pages_and_tags rows=${cov.pagesAndTagsCount}`,
-      ],
+      findings: [`tags_version2 count=${cov.tagsVersion2Count}`],
     }),
     evidence: { ...cov },
   };

@@ -8,4 +8,5 @@ vite.config.ts.*
 supabase_data.sql
 .env*
 attached_assets/
+tmp/
 .config/.semgrep/semgrep_rules.json

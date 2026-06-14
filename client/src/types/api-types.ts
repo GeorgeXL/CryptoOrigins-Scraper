@@ -95,8 +95,6 @@ export interface HistoricalAnalysis {
   summary: string;
   topArticleId: string;
   reasoning: string;
-  confidenceScore: string;
-  aiProvider: string;
   isManualOverride?: boolean;
   hasManualEntry?: boolean;
   articleTags?: {

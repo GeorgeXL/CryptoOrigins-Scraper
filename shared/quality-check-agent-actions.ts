@@ -46,7 +46,15 @@ export const QUALITY_CHECK_AGENT_ACTIONS: Record<string, QualityCheckAgentAction
     buttonLabel: "Run agent: assign topic",
     confirmTitle: "Assign topics with the Topic Agent?",
     confirmDescription:
-      "Runs the editorial pipeline (topics scope) to propose exactly one homepage topic leaf per selected day.",
+      "Runs the editorial pipeline (topics scope) on days that are not Google-approved yet and still have no storyline topic.",
+    kind: "pipeline",
+    checkScopes: ["topics"],
+  },
+  "google-yes-no-topic": {
+    buttonLabel: "Run agent: assign topic",
+    confirmTitle: "Assign topics with the Topic Agent?",
+    confirmDescription:
+      "Runs the editorial pipeline (topics scope) for Google-verified days that still have no storyline topic.",
     kind: "pipeline",
     checkScopes: ["topics"],
   },

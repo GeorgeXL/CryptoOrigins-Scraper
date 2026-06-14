@@ -20,14 +20,12 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import { VeriBadge } from "@/components/VeriBadge";
+import { deriveVerificationBadge } from "@shared/verification-badge";
 import { TopicBadgeEditor } from "@/components/TopicBadgeEditor";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { SingleDayAgentDialog } from "@/components/SingleDayAgentDialog";
 import { ManualDayEntryDialog } from "@/components/ManualDayEntryDialog";
 import { useToast } from "@/hooks/use-toast";
-import { useTagging } from "@/hooks/useTagging";
-import { SiOpenai } from "react-icons/si";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -125,14 +123,11 @@ interface DayAnalysisData {
 
     topArticleId: string;
     reasoning: string;
-    confidenceScore: string;
-    aiProvider: string;
     isManualOverride?: boolean;
     isFlagged?: boolean;
     isLocked?: boolean;
-    flagReason?: string;
     flaggedAt?: string | null;
-    veriBadge?: 'Manual' | 'Orphan' | 'Verified' | 'Not Available' | null;
+    veriBadge?: 'Manual' | 'Verified' | 'Not Available' | null;
     tagsVersion2?: string[];
     topicCategories?: string[];
     articleTags?: {
@@ -251,7 +246,6 @@ export default function DayAnalysis() {
   const { date } = useParams();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
-  const { startContextTagging, isContextTagging } = useTagging();
   const [isEditing, setIsEditing] = React.useState(false);
   const [editedSummary, setEditedSummary] = React.useState('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = React.useState(false);
@@ -269,15 +263,16 @@ export default function DayAnalysis() {
   const [showRedoSummaryDialog, setShowRedoSummaryDialog] = React.useState(false);
   const [showSingleDayAgentDialog, setShowSingleDayAgentDialog] = React.useState(false);
   const [showManualEntryDialog, setShowManualEntryDialog] = React.useState(false);
+  const [flagAnimPhase, setFlagAnimPhase] = React.useState<"on" | "off" | null>(null);
+  const [flagOverride, setFlagOverride] = React.useState<boolean | null>(null);
   const articlesPerPage = 10;
   const invalidateDayQueries = React.useCallback(() => {
     if (!date) return;
     queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
-    queryClient.invalidateQueries({ queryKey: ["supabase-tags-analyses"] });
+    queryClient.invalidateQueries({ queryKey: ["analyses-browse"] });
     queryClient.invalidateQueries({ queryKey: ["supabase-counts"] });
     queryClient.invalidateQueries({ queryKey: ["supabase-analysis-topic-categories"] });
     queryClient.invalidateQueries({ queryKey: ["supabase-page-topics-rows"] });
-    queryClient.invalidateQueries({ queryKey: ["supabase-topics-rows"] });
     const dateYear = date.substring(0, 4);
     queryClient.invalidateQueries({ queryKey: [`supabase-year-${dateYear}`] });
     queryClient.invalidateQueries({ queryKey: ["/api/analysis/stats"] });
@@ -296,6 +291,12 @@ export default function DayAnalysis() {
   React.useEffect(() => {
     tagQueueRef.current = tagQueue;
   }, [tagQueue]);
+
+  React.useEffect(() => {
+    if (!flagAnimPhase) return;
+    const timer = window.setTimeout(() => setFlagAnimPhase(null), 360);
+    return () => window.clearTimeout(timer);
+  }, [flagAnimPhase]);
 
   // Get the source parameter from URL to determine back button behavior
   const urlParams = new URLSearchParams(window.location.search);
@@ -363,12 +364,9 @@ export default function DayAnalysis() {
             summary: '',
             topArticleId: '',
             reasoning: '',
-            confidenceScore: '0',
-            aiProvider: 'unknown',
             isManualOverride: false,
             isFlagged: false,
             isLocked: false,
-            flagReason: '',
             tagsVersion2: [],
             topicCategories: [],
             articleTags: {
@@ -415,13 +413,13 @@ export default function DayAnalysis() {
           summary: analysis.summary,
           topArticleId: analysis.top_article_id || '',
           reasoning: analysis.reasoning || '',
-          confidenceScore: analysis.confidence_score || '0',
-          aiProvider: analysis.ai_provider || 'unknown',
           isManualOverride: analysis.is_manual_override || false,
           isFlagged: analysis.is_flagged || false,
           isLocked: parseIsLocked(analysis.is_locked),
-          flagReason: analysis.flag_reason || '',
-          veriBadge: analysis.veri_badge as 'Manual' | 'Orphan' | 'Verified' | 'Not Available' | null | undefined,
+          veriBadge: deriveVerificationBadge({
+            isManualOverride: analysis.is_manual_override,
+            googleCheckHappened: analysis.google_check_happened,
+          }),
           tagsVersion2: analysis.tags_version2 || [],
           topicCategories: Array.isArray(analysis.topic_categories)
             ? analysis.topic_categories
@@ -462,6 +460,10 @@ export default function DayAnalysis() {
   });
 
   const isLocked = parseIsLocked(dayData?.analysis?.isLocked);
+
+  React.useEffect(() => {
+    setFlagOverride(null);
+  }, [dayData?.analysis?.isFlagged]);
 
   React.useEffect(() => {
     if (isLocked) {
@@ -857,7 +859,7 @@ export default function DayAnalysis() {
     onSuccess: () => {
       // Invalidate multiple related queries to ensure UI updates
       queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      queryClient.invalidateQueries({ queryKey: ['analyses-browse'] });
       queryClient.invalidateQueries({ queryKey: ['supabase-counts'] });
       
       // Get year from date to invalidate year data (for calendar updates)
@@ -920,7 +922,7 @@ export default function DayAnalysis() {
     onSuccess: () => {
       // Invalidate queries to refresh the UI
       queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      queryClient.invalidateQueries({ queryKey: ['analyses-browse'] });
       queryClient.invalidateQueries({ queryKey: ['supabase-counts'] });
       
       const dateYear = date?.substring(0, 4);
@@ -974,7 +976,7 @@ export default function DayAnalysis() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
-      queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
+      queryClient.invalidateQueries({ queryKey: ['analyses-browse'] });
       queryClient.invalidateQueries({ queryKey: ['supabase-counts'] });
       toast({
         title: "Tag Added",
@@ -1069,6 +1071,8 @@ export default function DayAnalysis() {
       });
     },
     onError: (error: any) => {
+      setFlagOverride(null);
+      setFlagAnimPhase(null);
       toast({
         title: "Failed to update flag",
         description: error?.message || "Unknown error",
@@ -1076,6 +1080,14 @@ export default function DayAnalysis() {
       });
     },
   });
+
+  const handleFlagToggle = React.useCallback(() => {
+    if (!dayData?.analysis || flagAnalysisMutation.isPending) return;
+    const nextFlag = !(flagOverride ?? dayData.analysis.isFlagged);
+    setFlagOverride(nextFlag);
+    setFlagAnimPhase(nextFlag ? "on" : "off");
+    flagAnalysisMutation.mutate(nextFlag);
+  }, [dayData?.analysis, flagAnalysisMutation, flagOverride]);
 
   const lockDayMutation = useMutation({
     mutationFn: async (locked: boolean) => {
@@ -1102,36 +1114,6 @@ export default function DayAnalysis() {
     },
   });
 
-  const updateVeriBadgeMutation = useMutation({
-    mutationFn: async (newBadge: 'Manual' | 'Orphan' | 'Verified' | 'Not Available') => {
-      const res = await fetch(`/api/analysis/date/${date}/veri-badge`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ veriBadge: newBadge }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || "Failed to update verification badge");
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
-      queryClient.invalidateQueries({ queryKey: ['supabase-counts'] });
-      toast({
-        title: "Verification Badge Updated",
-        description: "The verification status has been updated successfully.",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        variant: "destructive",
-        title: "Update Failed",
-        description: error.message || "Failed to update verification badge",
-      });
-    }
-  });
-
   const updateTopicMutation = useMutation({
     mutationFn: async (newTopic: string | null) => {
       if (!date || !dayData?.analysis?.id) {
@@ -1141,10 +1123,9 @@ export default function DayAnalysis() {
     },
     onSuccess: (topics) => {
       queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
-      queryClient.invalidateQueries({ queryKey: ["supabase-tags-analyses"] });
+      queryClient.invalidateQueries({ queryKey: ["analyses-browse"] });
       queryClient.invalidateQueries({ queryKey: ["supabase-analysis-topic-categories"] });
       queryClient.invalidateQueries({ queryKey: ["supabase-page-topics-rows"] });
-      queryClient.invalidateQueries({ queryKey: ["supabase-topics-rows"] });
       toast({
         title: "Topic updated",
         description: topics.length ? `Set to ${topics[0]}` : "Topic cleared",
@@ -1709,6 +1690,13 @@ export default function DayAnalysis() {
     );
   }
 
+  const analysisFlagged = dayData?.analysis?.isFlagged ?? false;
+  const flagged = flagOverride ?? analysisFlagged;
+  const showFlagRedFill =
+    flagAnimPhase === "on" ||
+    flagAnimPhase === "off" ||
+    (flagged && flagAnimPhase === null);
+
   return (
     <div className="space-y-6">
       {/* Header with Action Buttons */}
@@ -1910,6 +1898,37 @@ export default function DayAnalysis() {
                       )}
                     </Button>
                     )}
+                    {!isLocked && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleFlagToggle}
+                        disabled={flagAnalysisMutation.isPending}
+                        className={`h-8 w-8 p-0 transition-all duration-150 active:scale-90 hover:bg-accent ${
+                          flagged
+                            ? "text-red-500 hover:text-red-500"
+                            : "text-muted-foreground hover:text-accent-foreground"
+                        }`}
+                        title={flagged ? "Remove flag" : "Flag for review"}
+                      >
+                        <span className="relative inline-flex h-4 w-4 shrink-0">
+                          <Flag className="h-4 w-4" strokeWidth={2} />
+                          {showFlagRedFill ? (
+                            <span
+                              className={`absolute inset-0 overflow-hidden ${
+                                flagAnimPhase === "on"
+                                  ? "animate-flag-fill-ltr"
+                                  : flagAnimPhase === "off"
+                                    ? "animate-flag-unfill-rtl"
+                                    : "[clip-path:inset(0_0_0_0)]"
+                              }`}
+                            >
+                              <Flag className="h-4 w-4 fill-red-500 text-red-500" strokeWidth={2} />
+                            </span>
+                          ) : null}
+                        </span>
+                      </Button>
+                    )}
                   </div>
                 </div>
                 {/* Show loading state during article selection */}
@@ -1967,20 +1986,6 @@ export default function DayAnalysis() {
                           <X className="w-3.5 h-3.5" />
                         ) : (
                           <Pencil className="w-3.5 h-3.5" />
-                        )}
-                      </Button>
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        onClick={() => date && startContextTagging([date])}
-                        disabled={isContextTagging || !date}
-                        className="h-6 w-6 p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                        title="Extract tags from summary and article using AI"
-                      >
-                        {isContextTagging ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <SiOpenai className="w-3.5 h-3.5" />
                         )}
                       </Button>
                       <Button 
@@ -2066,145 +2071,124 @@ export default function DayAnalysis() {
                       <p className="text-sm text-muted-foreground">No analysis row yet</p>
                     )}
                   </div>
-                  
-                  {/* More */}
-                  {!isLocked && (
-                  <div className="mt-6 space-y-2">
-                    <h5 className="text-sm font-semibold text-foreground">More</h5>
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <VeriBadge 
-                        badge={dayData.analysis.veriBadge} 
-                        onBadgeChange={(newBadge) => updateVeriBadgeMutation.mutate(newBadge)}
-                        date={date}
-                      />
-                      {pipelineReviewSummary?.latest ? (
-                        <div className="inline-flex items-center gap-1.5">
-                          <Badge
-                            variant="outline"
-                            className={
-                              pipelineReviewSummary.latest.status === "approved"
-                                ? "cursor-default border-emerald-500/45 bg-emerald-950/35 text-emerald-100"
-                                : pipelineReviewSummary.latest.status === "rejected"
-                                  ? "cursor-default border-red-500/50 bg-red-950/30 text-red-100"
-                                  : "cursor-default border-amber-500/45 bg-amber-950/30 text-amber-100"
-                            }
-                          >
-                            <Bot className="mr-1 h-3 w-3 opacity-80" />
-                            {pipelineReviewBadgeText(pipelineReviewSummary.latest)}
-                          </Badge>
-                          <HoverCard openDelay={120}>
-                            <HoverCardTrigger asChild>
-                              <button
-                                type="button"
-                                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border/90 bg-muted/50 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                                aria-label="View editorial pipeline agent steps for this day"
-                              >
-                                <Info className="h-3.5 w-3.5" strokeWidth={2.25} />
-                              </button>
-                            </HoverCardTrigger>
-                            <HoverCardContent
-                              className="w-[min(22rem,calc(100vw-2rem))] max-h-[min(70vh,24rem)] overflow-y-auto space-y-3 text-sm"
-                              align="start"
-                            >
-                              <div>
-                                <p className="font-medium text-foreground">Editorial pipeline</p>
-                                <p className="mt-1 text-muted-foreground">
-                                  Agent steps for this calendar date (latest run linked to review).
-                                </p>
-                                <p className="mt-2 text-xs text-muted-foreground">
-                                  Triage route{" "}
-                                  <span className="font-mono text-foreground">
-                                    {pipelineReviewSummary.latest.triageRoute ?? "—"}
-                                  </span>
-                                  {" · "}
-                                  Run{" "}
-                                  <span className="font-mono text-foreground">
-                                    {pipelineReviewSummary.latest.runId}
-                                  </span>
-                                  {pipelineReviewSummary.latest.reviewedAt ? (
-                                    <>
-                                      {" · reviewed "}
-                                      {pipelineReviewSummary.latest.reviewedAt}
-                                    </>
-                                  ) : null}
-                                  {pipelineReviewSummary.latest.reviewer ? (
-                                    <>
-                                      {" · "}
-                                      {pipelineReviewSummary.latest.reviewer}
-                                    </>
-                                  ) : null}
-                                </p>
-                              </div>
-                              {pipelineReviewSummary.latest.steps &&
-                              pipelineReviewSummary.latest.steps.length > 0 ? (
-                                <ul className="space-y-2 border-t border-border pt-2">
-                                  {pipelineReviewSummary.latest.steps.map((st) => (
-                                    <li
-                                      key={`${st.stepIndex}-${st.agentName}`}
-                                      className="rounded-md border px-2 py-1.5 text-xs"
-                                    >
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <span className="font-mono text-[10px] text-muted-foreground">
-                                          #{st.stepIndex}
-                                        </span>
-                                        <span className="font-medium text-foreground">
-                                          {formatPipelineAgentLabel(st.agentName)}
-                                        </span>
-                                        <Badge
-                                          variant="outline"
-                                          className={`h-5 px-1.5 text-[10px] font-normal ${pipelineStepStatusClass(st.status)}`}
-                                        >
-                                          {st.status}
-                                        </Badge>
-                                      </div>
-                                      {st.summary ? (
-                                        <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
-                                          {st.summary}
-                                        </p>
-                                      ) : null}
-                                      {st.findings && st.findings.length > 0 ? (
-                                        <ul className="mt-1 list-inside list-disc text-[11px] text-muted-foreground">
-                                          {st.findings.map((f, i) => (
-                                            <li key={i}>{f}</li>
-                                          ))}
-                                        </ul>
-                                      ) : null}
-                                      {st.rejectionReason ? (
-                                        <p className="mt-1 text-[11px] text-red-600 dark:text-red-300">
-                                          {st.rejectionReason}
-                                          {st.suggestedAction ? (
-                                            <span className="text-muted-foreground">
-                                              {" "}
-                                              → {st.suggestedAction}
-                                            </span>
-                                          ) : null}
-                                        </p>
-                                      ) : null}
-                                    </li>
-                                  ))}
-                                </ul>
-                              ) : (
-                                <p className="border-t border-border pt-2 text-xs text-muted-foreground">
-                                  No per-step records matched this date for this run (older runs or
-                                  different input shape). Open Admin → Pipeline and select the run
-                                  for full trace if needed.
-                                </p>
-                              )}
-                            </HoverCardContent>
-                          </HoverCard>
-                        </div>
-                      ) : null}
+
+                  {!isLocked && pipelineReviewSummary?.latest ? (
+                    <div className="mt-4 inline-flex items-center gap-1.5">
                       <Badge
-                        variant={dayData.analysis.isFlagged ? "destructive" : "outline"}
-                        className="cursor-pointer inline-flex items-center gap-1.5"
-                        onClick={() => flagAnalysisMutation.mutate(!dayData.analysis.isFlagged)}
+                        variant="outline"
+                        className={
+                          pipelineReviewSummary.latest.status === "approved"
+                            ? "cursor-default border-emerald-500/45 bg-emerald-950/35 text-emerald-100"
+                            : pipelineReviewSummary.latest.status === "rejected"
+                              ? "cursor-default border-red-500/50 bg-red-950/30 text-red-100"
+                              : "cursor-default border-amber-500/45 bg-amber-950/30 text-amber-100"
+                        }
                       >
-                        <Flag className={`w-3 h-3 ${dayData.analysis.isFlagged ? 'fill-current' : ''}`} />
-                        {dayData.analysis.isFlagged ? "Unflag" : "Flag"}
+                        <Bot className="mr-1 h-3 w-3 opacity-80" />
+                        {pipelineReviewBadgeText(pipelineReviewSummary.latest)}
                       </Badge>
+                      <HoverCard openDelay={120}>
+                        <HoverCardTrigger asChild>
+                          <button
+                            type="button"
+                            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border/90 bg-muted/50 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                            aria-label="View editorial pipeline agent steps for this day"
+                          >
+                            <Info className="h-3.5 w-3.5" strokeWidth={2.25} />
+                          </button>
+                        </HoverCardTrigger>
+                        <HoverCardContent
+                          className="w-[min(22rem,calc(100vw-2rem))] max-h-[min(70vh,24rem)] overflow-y-auto space-y-3 text-sm"
+                          align="start"
+                        >
+                          <div>
+                            <p className="font-medium text-foreground">Editorial pipeline</p>
+                            <p className="mt-1 text-muted-foreground">
+                              Agent steps for this calendar date (latest run linked to review).
+                            </p>
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              Triage route{" "}
+                              <span className="font-mono text-foreground">
+                                {pipelineReviewSummary.latest.triageRoute ?? "—"}
+                              </span>
+                              {" · "}
+                              Run{" "}
+                              <span className="font-mono text-foreground">
+                                {pipelineReviewSummary.latest.runId}
+                              </span>
+                              {pipelineReviewSummary.latest.reviewedAt ? (
+                                <>
+                                  {" · reviewed "}
+                                  {pipelineReviewSummary.latest.reviewedAt}
+                                </>
+                              ) : null}
+                              {pipelineReviewSummary.latest.reviewer ? (
+                                <>
+                                  {" · "}
+                                  {pipelineReviewSummary.latest.reviewer}
+                                </>
+                              ) : null}
+                            </p>
+                          </div>
+                          {pipelineReviewSummary.latest.steps &&
+                          pipelineReviewSummary.latest.steps.length > 0 ? (
+                            <ul className="space-y-2 border-t border-border pt-2">
+                              {pipelineReviewSummary.latest.steps.map((st) => (
+                                <li
+                                  key={`${st.stepIndex}-${st.agentName}`}
+                                  className="rounded-md border px-2 py-1.5 text-xs"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-mono text-[10px] text-muted-foreground">
+                                      #{st.stepIndex}
+                                    </span>
+                                    <span className="font-medium text-foreground">
+                                      {formatPipelineAgentLabel(st.agentName)}
+                                    </span>
+                                    <Badge
+                                      variant="outline"
+                                      className={`h-5 px-1.5 text-[10px] font-normal ${pipelineStepStatusClass(st.status)}`}
+                                    >
+                                      {st.status}
+                                    </Badge>
+                                  </div>
+                                  {st.summary ? (
+                                    <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+                                      {st.summary}
+                                    </p>
+                                  ) : null}
+                                  {st.findings && st.findings.length > 0 ? (
+                                    <ul className="mt-1 list-inside list-disc text-[11px] text-muted-foreground">
+                                      {st.findings.map((f, i) => (
+                                        <li key={i}>{f}</li>
+                                      ))}
+                                    </ul>
+                                  ) : null}
+                                  {st.rejectionReason ? (
+                                    <p className="mt-1 text-[11px] text-red-600 dark:text-red-300">
+                                      {st.rejectionReason}
+                                      {st.suggestedAction ? (
+                                        <span className="text-muted-foreground">
+                                          {" "}
+                                          → {st.suggestedAction}
+                                        </span>
+                                      ) : null}
+                                    </p>
+                                  ) : null}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="border-t border-border pt-2 text-xs text-muted-foreground">
+                              No per-step records matched this date for this run (older runs or
+                              different input shape). Open Admin → Pipeline and select the run
+                              for full trace if needed.
+                            </p>
+                          )}
+                        </HoverCardContent>
+                      </HoverCard>
                     </div>
-                  </div>
-                  )}
+                  ) : null}
                 </div>
               </div>
           </CardContent>
@@ -2323,7 +2307,20 @@ export default function DayAnalysis() {
       {showManualSource && manualSourceUrl ? (
         <Card className="border-sky-500/30 bg-background">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Manual source</CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-base">Manual source</CardTitle>
+              {!isLocked && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowManualEntryDialog(true)}
+                  className="h-7 w-7 p-0 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  title="Edit manual entry"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             <a
@@ -2668,7 +2665,7 @@ export default function DayAnalysis() {
           date={date}
           onRunFinished={() => {
             queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
-            queryClient.invalidateQueries({ queryKey: ["supabase-tags-analyses"] });
+            queryClient.invalidateQueries({ queryKey: ["analyses-browse"] });
           }}
         />
       ) : null}

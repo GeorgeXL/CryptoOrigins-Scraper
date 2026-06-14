@@ -309,7 +309,6 @@ type DayAnalysisPreview = {
   topArticle: { title: string; url: string } | null;
   tags: string[];
   topicCategories: string[];
-  totalArticlesFetched: number | null;
   tierUsed: string | null;
   winningTier: string | null;
   sourceArticles: { title: string; url: string }[];
@@ -383,7 +382,6 @@ function buildDayAnalysisPreview(row: {
   analyzedArticles?: unknown;
   topicCategories: unknown;
   tagsVersion2: string[] | null;
-  totalArticlesFetched: number | null;
   tierUsed: string | null;
   winningTier: string | null;
 }): DayAnalysisPreview {
@@ -405,7 +403,6 @@ function buildDayAnalysisPreview(row: {
       ? row.tagsVersion2.filter((t): t is string => typeof t === "string" && t.trim() !== "")
       : [],
     topicCategories: topicCategoryLabels(row.topicCategories),
-    totalArticlesFetched: row.totalArticlesFetched ?? null,
     tierUsed: row.tierUsed?.trim() || null,
     winningTier: row.winningTier?.trim() || null,
     sourceArticles:
@@ -755,7 +752,6 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
           topArticleId: historicalNewsAnalyses.topArticleId,
           topicCategories: historicalNewsAnalyses.topicCategories,
           tagsVersion2: historicalNewsAnalyses.tagsVersion2,
-          totalArticlesFetched: historicalNewsAnalyses.totalArticlesFetched,
           tierUsed: historicalNewsAnalyses.tierUsed,
           winningTier: historicalNewsAnalyses.winningTier,
         })
@@ -860,7 +856,7 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
         dayTopArticle: extra?.topArticle ?? null,
         dayTags: extra?.tags ?? null,
         dayTopicCategories: extra?.topicCategories ?? null,
-        dayTotalArticlesFetched: extra?.totalArticlesFetched ?? null,
+        dayTotalArticlesFetched: extra?.sourceArticles?.length ?? null,
         dayTierUsed: extra?.tierUsed ?? null,
         dayWinningTier: extra?.winningTier ?? null,
         daySourceArticles: extra?.sourceArticles ?? null,

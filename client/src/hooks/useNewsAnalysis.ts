@@ -6,8 +6,6 @@ export interface NewsAnalysisResult {
   topArticleId: string;
   summary: string;
   reasoning: string;
-  confidenceScore: number;
-  aiProvider: string;
   articles: Array<{
     id: string;
     title: string;
@@ -17,7 +15,6 @@ export interface NewsAnalysisResult {
     text: string;
     score?: number;
   }>;
-  totalArticlesFetched: number;
   analysisDate: string;
 }
 

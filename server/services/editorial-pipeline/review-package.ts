@@ -132,11 +132,6 @@ export const correctionProposalSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     id: z.string().min(1),
-    kind: z.literal("clear_orphan_flag"),
-    rationale: z.string(),
-  }),
-  z.object({
-    id: z.string().min(1),
     kind: z.literal("clear_manual_flag"),
     rationale: z.string(),
   }),

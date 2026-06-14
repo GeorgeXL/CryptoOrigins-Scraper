@@ -26,7 +26,7 @@ export interface YearData {
     date: string;
     summary: string;
     hasManualEntry: boolean;
-    confidenceScore: number;
+    isFlagged?: boolean;
   }>;
   monthlyBreakdown: Array<{
     month: number;
@@ -40,7 +40,6 @@ export interface MonthAnalysis {
   date: string;
   summary: string;
   hasManualEntry: boolean;
-  confidenceScore: number;
   status: 'complete' | 'missing' | 'manual' | 'low-confidence';
 }
 
@@ -81,7 +80,10 @@ export function useMonthAnalyses(year: number, month: number) {
         })
         .map(analysis => ({
           ...analysis,
-          status: getAnalysisStatus(analysis)
+          status: getAnalysisStatus({
+            hasManualEntry: analysis.hasManualEntry,
+            hasSummary: Boolean(analysis.summary?.trim()),
+          })
         }));
     },
     enabled: year >= 2008 && year <= getCurrentYear() && month >= 1 && month <= 12,
@@ -183,11 +185,10 @@ export function useCreateManualEntry() {
 // Utility functions
 function getAnalysisStatus(analysis: {
   hasManualEntry: boolean;
-  confidenceScore: number;
+  hasSummary: boolean;
 }): 'complete' | 'missing' | 'manual' | 'low-confidence' {
   if (analysis.hasManualEntry) return 'manual';
-  if (analysis.confidenceScore >= 60) return 'complete';
-  if (analysis.confidenceScore > 0) return 'low-confidence';
+  if (analysis.hasSummary) return 'complete';
   return 'missing';
 }
 

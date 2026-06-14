@@ -38,7 +38,7 @@ export async function getMainEventsReviewQueue(leafInput: string): Promise<MainE
   const canonicalDates = cached.canonical.map((entry) => entry.date);
   const allRows = await loadAnalysisIndexForLeafCrossCheck(leaf, canonicalDates);
 
-  const dateSet = new Set(canonicalDates);
+  const dateSet = new Set<string>(canonicalDates);
   const analyses = allRows.filter((row) => dateSet.has(row.date)).map(mapRowToReviewAnalysis);
 
   return buildMainEventsReviewQueue({

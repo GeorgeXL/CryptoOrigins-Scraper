@@ -98,19 +98,12 @@ export type ManualAnalysisDbRow = {
   summary: string;
   top_article_id: string;
   is_manual_override: boolean;
-  is_orphan: boolean;
-  ai_provider: string;
   reasoning: string;
-  confidence_score: string;
   winning_tier: string;
   tier_used: string;
   tiered_articles: TieredArticles;
   analyzed_articles: ArticleData[];
-  total_articles_fetched: number;
-  unique_articles_analyzed: number;
   topic_categories: string[];
-  gemini_approved: boolean;
-  perplexity_approved: boolean;
   tags_version2: string[];
 };
 
@@ -133,19 +126,12 @@ export function buildManualAnalysisDbRow(opts: {
     summary: opts.summary,
     top_article_id: opts.sourceUrl,
     is_manual_override: true,
-    is_orphan: false,
-    ai_provider: "manual",
     reasoning: "Manual entry with operator-provided source URL",
-    confidence_score: "100",
     winning_tier: "bitcoin",
     tier_used: "manual",
     tiered_articles: tieredArticles,
     analyzed_articles: [opts.manualArticle],
-    total_articles_fetched: 1,
-    unique_articles_analyzed: 1,
     topic_categories: opts.topicCategories,
-    gemini_approved: false,
-    perplexity_approved: false,
     tags_version2: opts.tagsVersion2 ?? [],
   };
 }

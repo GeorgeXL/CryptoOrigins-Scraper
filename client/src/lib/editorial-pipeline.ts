@@ -47,7 +47,7 @@ export type CorrectionProposal =
       targetMax: number;
       rationale: string;
     }
-  | { id: string; kind: "clear_orphan_flag"; rationale: string }
+  | { id: string; kind: "expand_summary"; currentSummary: string; rationale: string }
   | { id: string; kind: "clear_manual_flag"; rationale: string }
   | { id: string; kind: "fix_tag_conflict"; conflictingTags: string[]; proposedDrop: string[]; rationale: string }
   | { id: string; kind: "drop_ungrounded_tags"; proposedDrop: string[]; suggestedFocusTags?: string[]; rationale: string }

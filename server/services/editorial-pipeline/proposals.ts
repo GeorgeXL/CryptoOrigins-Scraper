@@ -48,7 +48,6 @@ export type DayProposalInputs = {
   date: string;
   summary: string | null;
   topArticleId: string | null;
-  isOrphan: boolean | null;
   isFlagged: boolean | null;
   tagsVersion2: string[] | null;
   topicCategories: unknown;
@@ -413,16 +412,7 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
     });
   }
 
-  // 5. Orphan flag
-  if (input.isOrphan) {
-    out.push({
-      id: buildId(input.date, "clear_orphan_flag"),
-      kind: "clear_orphan_flag",
-      rationale: "Day was manually picked outside the normal pipeline. Approve to clear the marker after review.",
-    });
-  }
-
-  // 6. Manual flag
+  // 5. Manual flag
   if (input.isFlagged) {
     out.push({
       id: buildId(input.date, "clear_manual_flag"),

@@ -13,11 +13,11 @@
  *    into the existing canonical so we don't grow a sea of near-duplicate tags.
  *
  * Both helpers are pure and synchronous over data the caller fetched. The
- * one async helper is `loadCanonicalTagIndex()` which queries the `tags` table.
+ * one async helper is `loadCanonicalTagIndex()` which queries distinct tags_version2 values.
  */
 
 import { db } from "../../db";
-import { tags } from "@shared/schema";
+import { sql } from "drizzle-orm";
 import { normalizeTagValue } from "./tools";
 import { filterEditorialTagAdds, isEditorialEntityTagCandidate, preferredEditorialTagDisplay } from "./editorial-tag-rules";
 
@@ -55,7 +55,7 @@ export function tokensOf(raw: string): string[] {
 }
 
 export type CanonicalTagIndex = {
-  /** normalized name → original canonical name from the `tags` table */
+  /** normalized name → original canonical name from tags_version2 corpus */
   byNormalized: Map<string, string>;
   /** tokens (sorted) of every canonical tag, for prefix-word containment */
   tokensByNormalized: Map<string, string[]>;
@@ -64,12 +64,19 @@ export type CanonicalTagIndex = {
 };
 
 /**
- * Snapshot the `tags` table into a fast in-memory index. Call once per
- * pipeline run / approval; small enough to keep in memory.
+ * Snapshot distinct tag strings from tags_version2 into a fast in-memory index.
  */
 export async function loadCanonicalTagIndex(): Promise<CanonicalTagIndex> {
-  const rows = await db.select({ name: tags.name }).from(tags);
-  return buildCanonicalTagIndex(rows.map((r) => r.name));
+  const rows = await db.execute<{ tag_name: string }>(sql`
+    SELECT DISTINCT unnest(tags_version2) AS tag_name
+    FROM historical_news_analyses
+    WHERE tags_version2 IS NOT NULL AND array_length(tags_version2, 1) > 0
+  `);
+  return buildCanonicalTagIndex(
+    rows.rows
+      .map((r) => r.tag_name)
+      .filter((name): name is string => typeof name === "string" && name.trim().length > 0),
+  );
 }
 
 /** Pure builder used by tests; takes an explicit list of canonical names. */

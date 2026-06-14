@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import type { Ref, RefObject } from "react";
 import { Check, Loader2, UserRound, X } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -44,7 +44,7 @@ export function PipelineActivityLog({
         className,
       )}
     >
-      <ScrollArea ref={scrollRef} className={cn("h-[280px]", scrollClassName)}>
+      <ScrollArea ref={scrollRef as Ref<HTMLDivElement>} className={cn("h-[280px]", scrollClassName)}>
         <ul className="space-y-1.5 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
           {lines.length === 0 ? (
             <li className="text-muted-foreground/80">{emptyMessage ?? "Starting editorial agent…"}</li>

@@ -61,7 +61,7 @@ function getDbInstance() {
   }
 
   try {
-    const isServerless = process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME;
+    const isServerless = Boolean(process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME);
     const maxConnections = resolveMaxConnections(isServerless);
 
     console.log(`🔧 LAZY INIT: Creating database pool (serverless: ${isServerless}, max: ${maxConnections})...`);

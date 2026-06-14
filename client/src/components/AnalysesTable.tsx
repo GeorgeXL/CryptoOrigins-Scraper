@@ -47,6 +47,7 @@ export interface HistoricalNewsAnalysis {
   isLocked?: boolean;
   googleCheckHappened?: "yes" | "no" | "uncertain" | null;
   googleCheckCheckedAt?: string | null;
+  topic_categories?: unknown;
 }
 
 interface CategoryData {

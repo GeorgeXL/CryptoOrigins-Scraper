@@ -167,6 +167,32 @@ export interface FilterTreeResponse {
   totalTags: number;
 }
 
+export interface FlatCatalogV2Input {
+  tags: Array<{ name: string; count: number }>;
+  taggedCount: number;
+  untaggedCount: number;
+  totalAnalyses: number;
+}
+
+export function buildFlatEntityCatalog(catalogV2: FlatCatalogV2Input | null | undefined) {
+  if (!catalogV2?.tags) return null;
+
+  return {
+    entitiesByCategory: {
+      entities: catalogV2.tags.map((tag) => ({
+        name: tag.name,
+        category: "entities",
+        count: tag.count,
+        isTag: true,
+        isParent: false,
+      })),
+    },
+    taggedCount: catalogV2.taggedCount,
+    untaggedCount: catalogV2.untaggedCount,
+    totalAnalyses: catalogV2.totalAnalyses,
+  };
+}
+
 export function buildFilterTreeFromTags(allTags: Tag[], customLabels: Map<string, string> = new Map()): FilterTreeResponse {
   if (!allTags || allTags.length === 0) {
     return { categories: [], totalTags: 0 };

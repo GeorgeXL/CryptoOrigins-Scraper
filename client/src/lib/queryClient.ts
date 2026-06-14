@@ -117,13 +117,13 @@ export function patchAnalysisListLockInCache(date: string, locked: boolean) {
     return changed ? { ...old, analyses } : old;
   };
 
-  queryClient.setQueriesData({ queryKey: ["supabase-tags-analyses"] }, patch);
+  queryClient.setQueriesData({ queryKey: ["analyses-browse"] }, patch);
   queryClient.setQueriesData({ queryKey: ["monthly-analyses"] }, patch);
 }
 
 /** Home / monthly tables — refetch even when those pages are not mounted. */
 export function invalidateAnalysisListQueries() {
-  void queryClient.invalidateQueries({ queryKey: ["supabase-tags-analyses"], refetchType: "all" });
+  void queryClient.invalidateQueries({ queryKey: ["analyses-browse"], refetchType: "all" });
   void queryClient.invalidateQueries({ queryKey: ["monthly-analyses"], refetchType: "all" });
   void queryClient.invalidateQueries({ queryKey: ["pending-agent-queue-batch"], refetchType: "all" });
 }

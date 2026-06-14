@@ -119,9 +119,6 @@ export function summarizeCorrectionProposals(proposals: CorrectionProposal[]): C
         redoSummaryProposalId = p.id;
         misc.push({ id: p.id, label: "Expand summary in place" });
         break;
-      case "clear_orphan_flag":
-        misc.push({ id: p.id, label: "Clear orphan marker" });
-        break;
       case "clear_manual_flag":
         misc.push({ id: p.id, label: "Clear manual flag" });
         break;

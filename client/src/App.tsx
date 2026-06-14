@@ -10,14 +10,12 @@ import HomePage from "@/pages/HomePage";
 import MonthView from "@/pages/MonthView";
 import MonthlyView from "@/pages/MonthlyView";
 import DayAnalysis from "@/pages/DayAnalysis";
-import TagCleanupTool from "@/pages/TagCleanupTool";
-import TagManagerPage from "@/pages/TagManagerPage";
-import ConflictCockpit from "@/pages/ConflictCockpit";
 import IsolatedLab from "@/pages/IsolatedLab";
 import Admin from "@/pages/Admin";
 import AdminAgentsV2Page from "@/pages/AdminAgentsV2Page";
 import EventsManager from "@/pages/EventsManager";
 import MainEventsCheckPage from "@/pages/MainEventsCheckPage";
+import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
 import AppLayout from "@/components/AppLayout";
 
@@ -31,23 +29,12 @@ function Router() {
         <Route path="/day/:date" component={DayAnalysis} />
         <Route path="/events-manager" component={EventsManager} />
         <Route path="/main-events-check" component={MainEventsCheckPage} />
-        <Route path="/leaf-agent" component={MainEventsCheckPage} />
-        <Route path="/tags-browser" component={HomePage} />
-        <Route path="/tags-cleanup" component={TagCleanupTool} />
-        <Route path="/tags-manager" component={TagManagerPage} />
-        <Route path="/conflict/:sourceDate" component={ConflictCockpit} />
-        <Route path="/violation/:date" component={ConflictCockpit} />
-        <Route path="/fact-check/:date" component={ConflictCockpit} />
+        <Route path="/settings" component={Settings} />
         <Route path="/admin/agents/agent" component={AdminAgentsV2Page} />
         <Route path="/admin/agents/metrics" component={AdminAgentsV2Page} />
         <Route path="/admin/agents/system" component={AdminAgentsV2Page} />
         <Route path="/admin/agents/review-lab" component={AdminAgentsV2Page} />
         <Route path="/admin/agents" component={AdminAgentsV2Page} />
-        <Route path="/admin/agents-v2/agent" component={AdminAgentsV2Page} />
-        <Route path="/admin/agents-v2/metrics" component={AdminAgentsV2Page} />
-        <Route path="/admin/agents-v2/system" component={AdminAgentsV2Page} />
-        <Route path="/admin/agents-v2/review-lab" component={AdminAgentsV2Page} />
-        <Route path="/admin/agents-v2" component={AdminAgentsV2Page} />
         <Route path="/admin" component={Admin} />
         <Route path="/lab/isolated" component={IsolatedLab} />
         <Route component={NotFound} />

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
@@ -9,7 +9,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useBulkReanalyze } from "@/hooks/useBulkReanalyze";
 import { useQualityCheckAgentRun } from "@/hooks/useQualityCheckAgentRun";
 import { useToggleFlag } from "@/hooks/useToggleFlag";
-import { TaggingDropdown } from "@/components/TaggingDropdown";
 import { QualityCheckAgentToolbar } from "@/components/QualityCheckAgentToolbar";
 import { 
   Dialog,
@@ -29,7 +28,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AnalysesTable } from "@/components/AnalysesTable";
+import { AnalysesTable, type HistoricalNewsAnalysis } from "@/components/AnalysesTable";
 import {
   Select,
   SelectContent,
@@ -37,54 +36,41 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { 
-  Tag, 
-  Search, 
-  Filter,
-  Calendar,
-  Building,
-  User,
-  Globe,
-  Coins,
-  ChevronDown,
-  ChevronRight,
-  Check,
-  Plus,
-  Minus,
-  X,
-  Building2,
-  Sparkles,
-  Hash,
+import {
+  Tag,
   Copy,
-  ExternalLink,
-  Pencil,
-  Trash2,
-  Bot,
-  StopCircle,
+  Tags,
+  Plus,
+  X,
   Loader2,
-  RefreshCw,
-  FileText,
-  Tags
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { SiOpenai } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 import { Link } from "wouter";
-import { EditTagDialog } from "@/components/TagsManager/EditTagDialog";
-import { DeleteDialog } from "@/components/TagsManager/DeleteDialog";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { getCategoryDisplayMeta } from "@shared/taxonomy";
 import { TagsSidebar, QualityCheckItem, type LockStatsItem } from "@/components/TagsSidebar";
-import {
-  SidebarProvider,
-} from "@/components/ui/sidebar";
-import { getTagCategory as getTagCategoryUtil, getCategoryIcon, getCategoryColor } from "@/utils/tagHelpers";
+import { getCategoryColor, buildFlatEntityCatalog } from "@/utils/tagHelpers";
 import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
 import { extractTopicLabelsFromCategories } from "@/lib/topicCatalog";
 import type { QualityCheckDateInput } from "@shared/quality-check-agent-actions";
 import { getQualityCheckAgentAction, isEmptyQualityCheckSummary } from "@shared/quality-check-agent-actions";
 import { parseIsLocked } from "@/lib/parseIsLocked";
+import {
+  useAnalysesBrowse,
+  filterUntaggedRow,
+  filterByEntityTags,
+} from "@/features/analyses-browse/useAnalysesBrowse";
+import { PAGE_SIZE_OPTIONS, type EntityTag, type RawAnalysisRow, type AnalysesBrowseFilterState } from "@/features/analyses-browse/types";
+import {
+  AnalysesBrowseLayout,
+  AnalysesBrowseHeader,
+  AnalysesBrowseTableCard,
+  AnalysesBrowseBulkActions,
+  AnalysesBrowseEmptyPlaceholder,
+} from "@/features/analyses-browse/AnalysesBrowseLayout";
 
 function qualityCheckRowHasSummary(row: { summary?: string | null }): boolean {
   return !isEmptyQualityCheckSummary(row.summary);
@@ -138,63 +124,11 @@ function resolveQualityCheckRowLocked(
   return opts.lockedDates.has(date);
 }
 
-// Main category type definition
-export type MainCategory = 
-  | 'bitcoin'
-  | 'money-economics'
-  | 'technology'
-  | 'organizations'
-  | 'people'
-  | 'regulation-law'
-  | 'markets-geography'
-  | 'education-community'
-  | 'crime-security'
-  | 'topics'
-  | 'miscellaneous';
-
-interface EntityTag {
-  name: string;
-  category: string;
-}
-
-// For tags_version2, we just have tag names as strings
-type TagName = string;
-
-interface HistoricalNewsAnalysis {
-  date: string;
-  summary: string;
-  tags?: EntityTag[] | null; // Old tags column (deprecated)
-  tags_version2?: string[] | null; // New tags column - array of tag names
-  tier?: number;
-  url?: string;
-  source_url?: string;
-  isManualOverride?: boolean;
-  isFlagged?: boolean;
-  isLocked?: boolean;
-  googleCheckHappened?: "yes" | "no" | "uncertain" | null;
-}
-
-const PAGE_SIZE_OPTIONS = [50, 200, 500];
-
 export default function EventsManager() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   
-  // View mode state - toggle between Keywords and Topics
   const [viewMode, setViewMode] = useState<'keywords' | 'topics'>('keywords');
-  const [pageSize, setPageSize] = useState(50);
-  
-  const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
-  const [showUntagged, setShowUntagged] = useState(false);
-  
-  // Date list state
-  const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
-  const [currentPage, setCurrentPage] = useState(1);
-  const [selectAllMatching, setSelectAllMatching] = useState(false);
-  
-  // Search and modal state
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
 
   // Quality check state
   const [selectedQualityCheck, setSelectedQualityCheck] = useState<string | null>(null);
@@ -202,18 +136,19 @@ export default function EventsManager() {
   const [selectedLocked, setSelectedLocked] = useState(false);
   const [qualityCheckPage, setQualityCheckPage] = useState(1);
 
-  // Track previous search string to detect URL changes (start empty so we restore on first mount)
-  const prevSearchRef = useRef<string>('');
-  
-  // Use refs to store current state values for updateUrl function
-  const stateRef = useRef({ selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, selectedQualityCheck, selectedVeriBadge, qualityCheckPage });
-  
-  // Update refs whenever state changes
-  useEffect(() => {
-    stateRef.current = { selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, selectedQualityCheck, selectedVeriBadge, qualityCheckPage };
-  }, [selectedEntities, showUntagged, searchQuery, currentPage, pageSize, viewMode, selectedQualityCheck, selectedVeriBadge, qualityCheckPage]);
+  const prevSearchRef = useRef<string>("");
+  const stateRef = useRef({
+    selectedEntities: new Set<string>(),
+    showUntagged: false,
+    searchQuery: "",
+    currentPage: 1,
+    pageSize: 50,
+    viewMode: "keywords" as "keywords" | "topics",
+    selectedQualityCheck: null as string | null,
+    selectedVeriBadge: null as string | null,
+    qualityCheckPage: 1,
+  });
 
-  // Helper function to update URL when state changes
   const updateUrl = (updates: Partial<HomePageState>) => {
     const currentState: HomePageState = {
       page: 'events-manager',
@@ -257,25 +192,89 @@ export default function EventsManager() {
     setLocation(newUrl, { replace: true });
   };
 
+  const onDebouncedSearchChange = useCallback((nextSearchQuery: string) => {
+    updateUrl({ searchQuery: nextSearchQuery, currentPage: 1 });
+  }, []);
+
+  const eventsFilterRow = useCallback((row: RawAnalysisRow, filters: AnalysesBrowseFilterState) => {
+    if (filters.showUntagged && !filterUntaggedRow(row)) return false;
+    if (filters.selectedEntities.size > 0 && !filters.showUntagged) {
+      return filterByEntityTags(row, filters.selectedEntities);
+    }
+    return true;
+  }, []);
+
+  const {
+    pageSize,
+    setPageSize,
+    selectedEntities,
+    setSelectedEntities,
+    showUntagged,
+    setShowUntagged,
+    selectedDates,
+    setSelectedDates,
+    currentPage,
+    setCurrentPage,
+    selectAllMatching,
+    setSelectAllMatching,
+    searchQuery,
+    setSearchQuery,
+    debouncedSearchQuery,
+    paginatedAnalyses,
+    totalCount,
+    isLoading,
+    toggleSelectAll,
+    fetchAllMatchingDates,
+  } = useAnalysesBrowse({
+    queryKeyExtra: ["events-manager"],
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
+    selectColumns: "date, summary, tags_version2, tier_used, is_manual_override, is_flagged",
+    needsFullFetch: (filters) =>
+      filters.showUntagged || filters.selectedEntities.size > 0,
+    filterRow: eventsFilterRow,
+    mapRow: (row) => ({
+      date: row.date,
+      summary: row.summary,
+      tags_version2: row.tags_version2,
+      tier: row.tier_used,
+      isManualOverride: row.is_manual_override,
+      isFlagged: row.is_flagged || false,
+    }),
+    enabledWhen: (filters) =>
+      filters.selectedEntities.size > 0 ||
+      filters.showUntagged ||
+      filters.debouncedSearchQuery.length > 0,
+    onDebouncedSearchChange,
+  });
+
+  useEffect(() => {
+    stateRef.current = {
+      selectedEntities,
+      showUntagged,
+      searchQuery,
+      currentPage,
+      pageSize,
+      viewMode,
+      selectedQualityCheck,
+      selectedVeriBadge,
+      qualityCheckPage,
+    };
+  }, [
+    selectedEntities,
+    showUntagged,
+    searchQuery,
+    currentPage,
+    pageSize,
+    viewMode,
+    selectedQualityCheck,
+    selectedVeriBadge,
+    qualityCheckPage,
+  ]);
+
   // New state for the copy dialog
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [textToCopy, setTextToCopy] = useState("");
-
-  // State for edit/delete tag dialogs
-  const [showRenameDialog, setShowRenameDialog] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [tagToEdit, setTagToEdit] = useState<{ name: string; category: string; count: number; subcategoryPath?: string[] } | null>(null);
-
-  // Debounce search query - only update after user stops typing for 300ms
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearchQuery(searchQuery);
-      setCurrentPage(1); // Reset to first page when search changes
-      updateUrl({ searchQuery, currentPage: 1 });
-    }, 300);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
 
   // Restore state from URL params on mount and when navigating back
   useEffect(() => {
@@ -458,6 +457,10 @@ export default function EventsManager() {
   // Fetch topic assignment quality (no topic / multiple topics)
   const { data: topicQualityData, isLoading: topicQualityLoading } = useQuery<{
     noTopic: { entries: { date: string; summary: string; topic_categories: unknown }[]; totalCount: number };
+    googleYesNoTopic: {
+      entries: { date: string; summary: string; topic_categories: unknown; google_check_happened: "yes" }[];
+      totalCount: number;
+    };
     multiTopic: { entries: { date: string; summary: string; topic_categories: unknown; topics: string[] }[]; totalCount: number };
   }>({
     queryKey: ["events-manager-topic-quality"],
@@ -466,11 +469,17 @@ export default function EventsManager() {
         console.warn("Supabase not configured for topic quality check");
         return {
           noTopic: { entries: [], totalCount: 0 },
+          googleYesNoTopic: { entries: [], totalCount: 0 },
           multiTopic: { entries: [], totalCount: 0 },
         };
       }
 
-      let allData: { date: string; summary: string | null; topic_categories: unknown }[] = [];
+      let allData: {
+        date: string;
+        summary: string | null;
+        topic_categories: unknown;
+        google_check_happened: "yes" | "no" | "uncertain" | null;
+      }[] = [];
       let from = 0;
       const batchSize = 1000;
       let hasMore = true;
@@ -478,7 +487,7 @@ export default function EventsManager() {
       while (hasMore) {
         const { data: batchData, error: batchError } = await supabase
           .from("historical_news_analyses")
-          .select("date, summary, topic_categories")
+          .select("date, summary, topic_categories, google_check_happened")
           .range(from, from + batchSize - 1);
 
         if (batchError) {
@@ -496,6 +505,12 @@ export default function EventsManager() {
       }
 
       const noTopicEntries: { date: string; summary: string; topic_categories: unknown }[] = [];
+      const googleYesNoTopicEntries: {
+        date: string;
+        summary: string;
+        topic_categories: unknown;
+        google_check_happened: "yes";
+      }[] = [];
       const multiTopicEntries: {
         date: string;
         summary: string;
@@ -507,11 +522,20 @@ export default function EventsManager() {
         const topics = extractTopicLabelsFromCategories(entry.topic_categories);
         const summary = entry.summary || "";
         if (topics.length === 0) {
-          noTopicEntries.push({
-            date: entry.date,
-            summary,
-            topic_categories: entry.topic_categories,
-          });
+          if (entry.google_check_happened === "yes") {
+            googleYesNoTopicEntries.push({
+              date: entry.date,
+              summary,
+              topic_categories: entry.topic_categories,
+              google_check_happened: "yes",
+            });
+          } else {
+            noTopicEntries.push({
+              date: entry.date,
+              summary,
+              topic_categories: entry.topic_categories,
+            });
+          }
         } else if (topics.length >= 2) {
           multiTopicEntries.push({
             date: entry.date,
@@ -524,6 +548,10 @@ export default function EventsManager() {
 
       return {
         noTopic: { entries: noTopicEntries, totalCount: noTopicEntries.length },
+        googleYesNoTopic: {
+          entries: googleYesNoTopicEntries,
+          totalCount: googleYesNoTopicEntries.length,
+        },
         multiTopic: { entries: multiTopicEntries, totalCount: multiTopicEntries.length },
       };
     },
@@ -802,6 +830,9 @@ export default function EventsManager() {
     const missingMonthsCount = missingMonthsData?.totalCount || 0;
     const flaggedCount = (flaggedData?.entries || []).filter(qualityCheckRowHasSummary).length;
     const noTopicCount = (topicQualityData?.noTopic.entries || []).filter(qualityCheckRowHasSummary).length;
+    const googleYesNoTopicCount = (topicQualityData?.googleYesNoTopic.entries || []).filter(
+      qualityCheckRowHasSummary,
+    ).length;
     const multiTopicCount = (topicQualityData?.multiTopic.entries || []).filter(qualityCheckRowHasSummary).length;
     const isEmptyLoading = emptySummaryLoading;
     const isUntaggedLoading = untaggedLoading;
@@ -840,9 +871,17 @@ export default function EventsManager() {
     // No topic assigned
     items.push({
       id: 'no-topic',
-      label: 'No topic',
+      label: 'Not approved, no topic',
       count: noTopicCount,
       hasIssues: noTopicCount > 0,
+      isLoading: isTopicQualityLoading,
+    });
+
+    items.push({
+      id: 'google-yes-no-topic',
+      label: 'Google yes, no topic',
+      count: googleYesNoTopicCount,
+      hasIssues: googleYesNoTopicCount > 0,
       isLoading: isTopicQualityLoading,
     });
 
@@ -1017,9 +1056,23 @@ export default function EventsManager() {
         (topicQualityData?.noTopic.entries || []).map((entry) => ({
           date: entry.date,
           summary: entry.summary || '',
-          violations: ['No topic assigned'],
+          violations: ['Not approved, no topic assigned'],
           length: entry.summary?.length || 0,
           tags_version2: null,
+        })),
+        selectedQualityCheck,
+      );
+    }
+
+    if (selectedQualityCheck === 'google-yes-no-topic') {
+      return applyQualityCheckSummaryFilter(
+        (topicQualityData?.googleYesNoTopic.entries || []).map((entry) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: ['Google Check yes, no topic assigned'],
+          length: entry.summary?.length || 0,
+          tags_version2: null,
+          googleCheckHappened: entry.google_check_happened,
         })),
         selectedQualityCheck,
       );
@@ -1106,409 +1159,10 @@ export default function EventsManager() {
     retry: 1,
   });
 
-  // Fetch tag filter tree from normalized tags table
-  const { data: filterTreeData, refetch: refetchFilterTree } = useQuery<{
-    categories: any[];
-    totalTags: number;
-    builtFrom?: string;
-  }>({
-    queryKey: ['tags-filter-tree'],
-    queryFn: async () => {
-      const response = await fetch('/api/tags/filter-tree');
-      if (!response.ok) {
-        throw new Error('Failed to fetch filter tree');
-      }
-      return response.json();
-    },
-    staleTime: 0, // Always refetch when invalidated (was 1 hour, but need immediate updates after deletes)
-    refetchOnMount: true, // Always refetch when component mounts
-  });
-
-  // Fallback to old hierarchy endpoint if filter-tree is not available
-  const { data: hierarchyData } = useQuery<{
-    categories: any[];
-    totalTags: number;
-  }>({
-    queryKey: ['tags-hierarchy'],
-    queryFn: async () => {
-      const response = await fetch('/api/tags/hierarchy');
-      if (!response.ok) {
-        throw new Error('Failed to fetch hierarchy');
-      }
-      return response.json();
-    },
-    staleTime: 1000 * 60 * 60,
-    enabled: !filterTreeData, // Only fetch if filter-tree is not available
-  });
-
-  // Use filter-tree data if available, otherwise fall back to hierarchy
-  const hierarchyDataToUse = filterTreeData || hierarchyData;
-
-  // Map main category names to display names (New 14-Category Taxonomy)
-  const categoryDisplayNames: Record<MainCategory, string> = {
-    'bitcoin': '🪙 Bitcoin',
-    'money-economics': '💰 Money & Economics',
-    'technology': '⚡ Technology Concepts',
-    'organizations': '🏢 Organizations & Companies',
-    'people': '👥 People',
-    'regulation-law': '⚖️ Regulation & Government',
-    'markets-geography': '🌍 Geography & Markets',
-    'education-community': '🎓 Education & Community',
-    'crime-security': '🔒 Crime & Security',
-    'topics': '🏷️ Topics & Themes',
-    'miscellaneous': '📝 Miscellaneous'
-  };
-
-  // Frontend grouping logic - Uses filter tree from normalized tags table
-  const catalogData = useMemo(() => {
-    if (!hierarchyDataToUse?.categories) return null;
-
-    const entitiesByCategory: Record<string, any[]> = {};
-    
-    // Process each main category directly from the backend response
-    hierarchyDataToUse.categories.forEach((category: any) => {
-      const categoryKey = category.category; 
-      
-      // Build subcategory structure with counts recursively
-      const buildSubcategoryDisplay = (node: any): any => {
-        const children: any[] = [];
-        let totalCount = node.totalTags || 0;
-        
-        // Process subcategories
-        if (node.subcategories && Object.keys(node.subcategories).length > 0) {
-          Object.values(node.subcategories).forEach((subcat: any) => {
-            const subResult = buildSubcategoryDisplay(subcat);
-            if (subResult) {
-              children.push(subResult);
-            }
-          });
-        }
-        
-        // Process tags at this level
-        if (node.tags && Array.isArray(node.tags)) {
-          node.tags.forEach((tag: any) => {
-            children.push({
-              name: tag.name,
-              category: categoryKey,
-              count: tag.usageCount || 0,
-              isTag: true
-            });
-          });
-        }
-        
-        // Sort children: subcategories first, then tags, both alphabetical
-        children.sort((a, b) => {
-          if (a.isTag && !b.isTag) return 1;
-          if (!a.isTag && b.isTag) return -1;
-          return a.name.localeCompare(b.name);
-        });
-        
-        if (children.length === 0) return null;
-        
-        return {
-          category: categoryKey,
-          name: node.name,
-          count: totalCount,
-          isParent: true,
-          children
-        };
-      };
-      
-      // Build category items
-      const categoryItems: any[] = [];
-      
-      // Add tags at the root of the category
-      if (category.tags && Array.isArray(category.tags)) {
-        category.tags.forEach((tag: any) => {
-          categoryItems.push({
-            name: tag.name,
-            category: categoryKey,
-            count: tag.usageCount || 0,
-            isTag: true
-          });
-        });
-      }
-      
-      // Add subcategories
-      if (category.subcategories) {
-        Object.values(category.subcategories).forEach((subcat: any) => {
-          const result = buildSubcategoryDisplay(subcat);
-          if (result) {
-            categoryItems.push(result);
-          }
-        });
-      }
-      
-      // Sort root items
-      categoryItems.sort((a, b) => {
-        if (a.isTag && !b.isTag) return 1;
-        if (!a.isTag && b.isTag) return -1;
-        return a.name.localeCompare(b.name);
-      });
-      
-      if (categoryItems.length > 0) {
-        entitiesByCategory[categoryKey] = categoryItems;
-      }
-    });
-    
-    return {
-      entitiesByCategory,
-      taggedCount: catalogV2Data?.taggedCount || 0,
-      untaggedCount: catalogV2Data?.untaggedCount || 0,
-      totalAnalyses: catalogV2Data?.totalAnalyses || 0
-    };
-  }, [catalogV2Data, hierarchyDataToUse]);
-
-
-  // Fetch filtered analyses with server-side filtering and pagination
-  const { data: analysesData, isLoading, refetch } = useQuery<{
-    analyses: HistoricalNewsAnalysis[];
-    pagination: {
-      currentPage: number;
-      pageSize: number;
-    totalCount: number;
-      totalPages: number;
-    };
-  }>({
-    queryKey: ['supabase-tags-analyses', Array.from(selectedEntities).sort().join(','), showUntagged, debouncedSearchQuery, currentPage, pageSize],
-    refetchOnMount: true,
-    refetchOnWindowFocus: false,
-    // Only fetch when user has made a selection (entities, untagged, or search query)
-    enabled: selectedEntities.size > 0 || showUntagged || debouncedSearchQuery.length > 0,
-    queryFn: async () => {
-      if (!supabase) throw new Error("Supabase not configured");
-
-      // Build base query - use tags_version2 instead of tags
-      let query = supabase
-        .from("historical_news_analyses")
-        .select("date, summary, tags_version2, tier_used, is_manual_override, is_flagged", { count: "exact" });
-
-      // Apply filters
-      if (showUntagged) {
-        // Filter for untagged: tags is null or empty array
-        // Since Supabase doesn't have a good way to filter for empty JSONB arrays,
-        // we'll fetch all and filter client-side
-        // query = query.or(`tags.is.null,tags.eq.[]`);
-      } else if (selectedEntities.size > 0) {
-        // Filter by selected entities
-        // We'll fetch all and filter client-side since JSONB array filtering is complex
-        // Don't apply any server-side filter here
-      }
-
-      if (debouncedSearchQuery) {
-        // Search in summary only (date is a date type, not text, so we can't use ilike on it directly)
-        // If you want to search by date, the user should type in YYYY-MM-DD format
-        query = query.ilike("summary", `%${debouncedSearchQuery}%`);
-      }
-
-      // Order by date
-      query = query.order("date", { ascending: false });
-
-      let analyses: any[] = [];
-      let totalCount: number | null = null;
-
-      // If we're doing client-side filtering (untagged or entity selection),
-      // we need to fetch ALL results to properly filter
-      const needsClientSideFiltering = showUntagged || selectedEntities.size > 0;
-      
-      if (needsClientSideFiltering) {
-        // Fetch all results in batches
-        let allAnalyses: any[] = [];
-        let batchStart = 0;
-        const batchSize = 1000;
-        
-        while (true) {
-          const { data: batch, error } = await query.range(batchStart, batchStart + batchSize - 1);
-          if (error) throw error;
-          if (!batch || batch.length === 0) break;
-          
-          allAnalyses = allAnalyses.concat(batch);
-          if (batch.length < batchSize) break;
-          batchStart += batchSize;
-        }
-        
-        analyses = allAnalyses;
-        totalCount = allAnalyses.length;
-      } else {
-        // Apply pagination at the database level for non-filtered queries
-        const from = (currentPage - 1) * pageSize;
-        const to = from + pageSize - 1;
-        
-        query = query.range(from, to);
-      
-        const { data, error, count } = await query;
-        if (error) throw error;
-        
-        analyses = data || [];
-        totalCount = count;
-      }
-
-      console.log('📊 Analyses Query Result:', JSON.stringify({
-        analysesCount: analyses?.length,
-        totalCount,
-        showUntagged,
-        selectedEntitiesCount: selectedEntities.size,
-        needsClientSideFiltering,
-        firstAnalysisDate: analyses?.[0]?.date,
-        firstAnalysisTags: analyses?.[0]?.tags_version2
-      }, null, 2));
-
-      // Client-side filtering for untagged and entity selection (since JSONB array filtering is complex)
-      let filteredAnalyses = analyses || [];
-      
-      // Filter for untagged - check tags_version2
-      if (showUntagged) {
-        filteredAnalyses = filteredAnalyses.filter(analysis => 
-          !analysis.tags_version2 || analysis.tags_version2.length === 0
-        );
-      }
-      
-      if (selectedEntities.size > 0 && !showUntagged) {
-        filteredAnalyses = filteredAnalyses.filter(analysis => {
-          if (!analysis.tags_version2 || !Array.isArray(analysis.tags_version2)) return false;
-          return Array.from(selectedEntities).some(entityKey => {
-            const [category, name] = entityKey.split("::");
-            // Match by tag name from tags_version2 array
-            return analysis.tags_version2.includes(name);
-          });
-        });
-      }
-
-      // Apply pagination after client-side filtering
-      const startIndex = (currentPage - 1) * pageSize;
-      const endIndex = startIndex + pageSize;
-      const paginatedAnalyses = filteredAnalyses.slice(startIndex, endIndex).map((a: any) => ({
-        ...a,
-        isFlagged: a.is_flagged || false,
-      }));
-      
-      // If we did client-side filtering, use the filtered count
-      // Otherwise use the totalCount from Supabase query (which includes count: "exact")
-      const actualTotalCount = needsClientSideFiltering ? filteredAnalyses.length : (totalCount || filteredAnalyses.length);
-      const totalPages = Math.ceil(actualTotalCount / pageSize);
-
-      console.log('📦 Received:', paginatedAnalyses.length, 'analyses, filtered total:', actualTotalCount);
-
-      return {
-        analyses: paginatedAnalyses,
-        pagination: {
-          currentPage,
-          pageSize,
-          totalCount: actualTotalCount,
-          totalPages
-        }
-      };
-    },
-  });
-
-  // Extract data from responses
-  const allCategoryData = catalogData 
-    ? Object.entries(catalogData.entitiesByCategory)
-        .map(([category, entities]) => ({
-          category,
-          entities: entities.sort((a, b) => b.count - a.count),
-          totalCount: entities.reduce((sum, e) => sum + e.count, 0)
-        }))
-        .sort((a, b) => b.totalCount - a.totalCount)
-    : [];
-  
-  // Debug: log available categories
-  if (catalogData && allCategoryData.length > 0) {
-    console.log('📊 Available categories:', allCategoryData.map(c => c.category));
-  }
-  
-  // Filter categories based on view mode
-  // Define category order (Bitcoin first, then others)
-  const CATEGORY_ORDER: MainCategory[] = [
-    'bitcoin',
-    'money-economics',
-    'technology',
-    'organizations',
-    'people',
-    'regulation-law',
-    'markets-geography',
-    'education-community',
-    'crime-security',
-    'topics',
-    'miscellaneous'
-  ];
-  
-  const ENTITY_CATEGORIES: MainCategory[] = CATEGORY_ORDER;
-  let categoryData = viewMode === 'keywords'
-    ? (allCategoryData || []).filter(({ category }) => ENTITY_CATEGORIES.includes(category as MainCategory))
-    : (allCategoryData || []).filter(({ category }) => category.toLowerCase() === 'topics');
-  
-  // Ensure categoryData is always an array
-  if (!Array.isArray(categoryData)) {
-    categoryData = [];
-  }
-  
-  // Fallback: if filtering results in empty array but we have data, show all categories
-  if (categoryData.length === 0 && allCategoryData && allCategoryData.length > 0) {
-    console.warn('⚠️ Filtering removed all categories, showing all categories instead');
-    categoryData = allCategoryData;
-  }
-  
-  // Debug: log filtered categories
-  if (catalogData) {
-    console.log('🔍 Filtered categories:', categoryData.map(c => c.category), 'viewMode:', viewMode);
-    console.log('📋 All categories:', allCategoryData.map(c => ({ cat: c.category, count: c.entities.length })));
-  }
-  
-  const paginatedAnalyses = analysesData?.analyses || [];
-  const totalPages = analysesData?.pagination.totalPages || 1;
-  const totalCount = analysesData?.pagination.totalCount || 0;
-
-  // Helper function to get tag category from tag name using catalogData
-  const getTagCategory = (tagName: string): string => {
-    return getTagCategoryUtil(tagName, catalogData);
-  };
-
-
-  // Toggle entity selection
-  const toggleEntity = (category: string, name: string) => {
-    const key = `${category}::${name}`;
-    setSelectedEntities(prev => {
-      // If the clicked entity is already selected, clear the selection.
-      if (prev.has(key)) {
-        return new Set();
-      }
-      // Otherwise, select only this entity.
-      return new Set([key]);
-    });
-    setShowUntagged(false); // Clear untagged view when selecting entities
-    setCurrentPage(1); // Reset to first page when filter changes
-    setSelectAllMatching(false); // Reset select all matching
-  };
-
-  // Select/deselect all on current page
-  const toggleSelectAll = () => {
-    // If currently selecting all matching, clear everything
-    if (selectAllMatching) {
-      setSelectAllMatching(false);
-      setSelectedDates(new Set());
-      return;
-    }
-
-    // Check if all items on current page are selected (ignore other pages)
-    const allPageSelected = paginatedAnalyses.length > 0 && paginatedAnalyses.every(a => selectedDates.has(a.date));
-    
-    if (allPageSelected) {
-      // Deselect all on current page
-      setSelectedDates(prev => {
-        const next = new Set(prev);
-        paginatedAnalyses.forEach(a => next.delete(a.date));
-        return next;
-      });
-    } else {
-      // Select all on current page
-      setSelectedDates(prev => {
-        const next = new Set(prev);
-        paginatedAnalyses.forEach(a => next.add(a.date));
-        return next;
-      });
-    }
-  };
+  const catalogData = useMemo(
+    () => buildFlatEntityCatalog(catalogV2Data),
+    [catalogV2Data],
+  );
 
   // Select/deselect all on current page for quality violations
   const toggleSelectAllQualityViolations = () => {
@@ -1537,65 +1191,6 @@ export default function EventsManager() {
         return next;
       });
     }
-  };
-
-  // Toggle individual date selection
-  const toggleDateSelection = (date: string) => {
-    if (selectAllMatching) {
-      setSelectAllMatching(false);
-    }
-    setSelectedDates(prev => {
-      const next = new Set(prev);
-      if (next.has(date)) {
-        next.delete(date);
-      } else {
-        next.add(date);
-      }
-      return next;
-    });
-  };
-
-  // Helper to fetch all matching dates based on current filters
-  const fetchAllMatchingDates = async (): Promise<string[]> => {
-    if (!supabase) throw new Error("Supabase not configured");
-
-    let query = supabase
-      .from("historical_news_analyses")
-      .select("date, tags_version2, summary");
-
-    // Note: For untagged filtering, we'll do it client-side since Supabase doesn't handle empty arrays well
-    // if (showUntagged) {
-    //   query = query.or("tags_version2.is.null,tags_version2.eq.[]");
-    // }
-
-      if (debouncedSearchQuery) {
-      query = query.ilike("summary", `%${debouncedSearchQuery}%`);
-    }
-
-    const { data: analyses, error } = await query;
-    if (error) throw error;
-
-    // Client-side filtering for untagged and entity selection - use tags_version2
-    let filteredAnalyses = analyses || [];
-    
-    if (showUntagged) {
-      filteredAnalyses = filteredAnalyses.filter(analysis => 
-        !analysis.tags_version2 || analysis.tags_version2.length === 0
-      );
-    }
-    
-    if (selectedEntities.size > 0 && !showUntagged) {
-      filteredAnalyses = filteredAnalyses.filter(analysis => {
-        if (!analysis.tags_version2 || !Array.isArray(analysis.tags_version2)) return false;
-        return Array.from(selectedEntities).some(entityKey => {
-          const [category, name] = entityKey.split("::");
-          // Match by tag name from tags_version2 array
-          return analysis.tags_version2.includes(name);
-        });
-      });
-    }
-
-    return filteredAnalyses.map(a => a.date);
   };
 
   // Helper to fetch all matching quality violation dates
@@ -1654,120 +1249,6 @@ export default function EventsManager() {
     }
   });
 
-  // Update tag mutation (name, category, subcategory path)
-  const updateTagMutation = useMutation({
-    mutationFn: async ({ 
-      tagName, 
-      oldCategory, 
-      newName, 
-      newCategory, 
-      newSubcategoryPath 
-    }: { 
-      tagName: string; 
-      oldCategory: string; 
-      newName?: string; 
-      newCategory?: string; 
-      newSubcategoryPath?: string[] 
-    }) => {
-      const response = await fetch('/api/tags-manager/update', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          tagName, 
-          oldCategory, 
-          newName, 
-          newCategory, 
-          newSubcategoryPath 
-        }),
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'Failed to update tag';
-        try {
-          const error = await response.json();
-          errorMessage = error.error || errorMessage;
-        } catch (e) {
-          errorMessage = `Error ${response.status}: ${response.statusText || 'Unknown error'}`;
-        }
-        throw new Error(errorMessage);
-      }
-
-      return await response.json();
-    },
-    onSuccess: async (data) => {
-      toast({
-        title: 'Tag Updated',
-        description: `Tag has been updated in ${data.updated} analyses`,
-      });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-filter-tree'] });
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
-      setShowRenameDialog(false);
-      setTagToEdit(null);
-    },
-    onError: (error: Error) => {
-      toast({
-        title: 'Update Failed',
-        description: error.message,
-        variant: 'destructive',
-      });
-    },
-  });
-
-  // Delete tag mutation
-  const deleteTagMutation = useMutation({
-    mutationFn: async ({ tagName, category }: { tagName: string; category: string }) => {
-      const response = await fetch('/api/tags-manager/delete', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ tagName, category }),
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'Failed to delete tag';
-        try {
-          const error = await response.json();
-          errorMessage = error.error || errorMessage;
-        } catch (e) {
-          errorMessage = `Error ${response.status}: ${response.statusText || 'Unknown error'}`;
-        }
-        throw new Error(errorMessage);
-      }
-
-      return await response.json();
-    },
-    onSuccess: async (data) => {
-      toast({
-        title: 'Tag Deleted',
-        description: `Tag has been deleted from ${data.updated} analyses`,
-      });
-      // Invalidate and refetch to ensure UI updates immediately
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-filter-tree'] }); // Critical: invalidate hierarchy
-      await queryClient.invalidateQueries({ queryKey: ['tags-hierarchy'] }); // Fallback hierarchy
-      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
-      
-      // Force refetch of filter-tree to bypass staleTime cache
-      await queryClient.refetchQueries({ queryKey: ['tags-filter-tree'] });
-      
-      setShowDeleteDialog(false);
-      setTagToEdit(null);
-    },
-    onError: (error: Error) => {
-      toast({
-        title: 'Delete Failed',
-        description: error.message,
-        variant: 'destructive',
-      });
-    },
-  });
-
   // Toggle flag mutation
   const toggleFlagMutation = useToggleFlag({
     invalidateQueries: [['supabase-tags-analyses']],
@@ -1793,10 +1274,8 @@ export default function EventsManager() {
       });
       // Invalidate and refetch all tag-related queries
       await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-filter-tree'] });
-      await queryClient.invalidateQueries({ queryKey: ['tags-hierarchy'] });
+      await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
       await queryClient.refetchQueries({ queryKey: ['tags-catalog-v2'] });
-      await queryClient.refetchQueries({ queryKey: ['tags-filter-tree'] });
     },
     onError: (error: Error) => {
       toast({
@@ -1874,7 +1353,7 @@ export default function EventsManager() {
       analyses?.forEach((analysis: any) => {
         if (analysis.tags_version2 && Array.isArray(analysis.tags_version2)) {
           analysis.tags_version2.forEach((tagName: string) => {
-            const category = getTagCategory(tagName);
+            const category = "entities";
             const key = `${category}::${tagName}`;
             if (!uniqueTags.has(key)) {
               uniqueTags.set(key, { name: tagName, category });
@@ -2031,11 +1510,9 @@ export default function EventsManager() {
     paginatedAnalyses.every(a => selectedDates.has(a.date));
 
   return (
-    <SidebarProvider className="w-full">
-      <div className="space-y-6">
-        <div className="flex flex-col gap-6 lg:flex-row">
-          <div className="lg:w-72 shrink-0">
-            <TagsSidebar
+    <AnalysesBrowseLayout
+      sidebar={
+        <TagsSidebar
               catalogData={catalogData}
               selectedEntities={selectedEntities}
               showUntagged={showUntagged}
@@ -2111,12 +1588,9 @@ export default function EventsManager() {
                 // Note: search query is debounced, so URL update happens in debounce effect
               }}
             />
-          </div>
-
-          <div className="flex-1 space-y-4">
-            {/* Main Content Area */}
-            <div className="space-y-6">
-              <Card className="pt-0 px-6 pb-6 border-0">
+      }
+    >
+      <AnalysesBrowseTableCard>
             {(selectedQualityCheck || selectedVeriBadge || selectedLocked) ? (
               <>
                 {/* Quality Check, Locked, or Google Check View */}
@@ -2214,7 +1688,9 @@ export default function EventsManager() {
                       ? emptySummaryLoading 
                       : selectedQualityCheck === 'untagged'
                       ? untaggedLoading
-                      : selectedQualityCheck === 'no-topic' || selectedQualityCheck === 'multi-topic'
+                      : selectedQualityCheck === 'no-topic' ||
+                        selectedQualityCheck === 'google-yes-no-topic' ||
+                        selectedQualityCheck === 'multi-topic'
                       ? topicQualityLoading
                       : selectedQualityCheck === 'flagged'
                       ? flaggedLoading
@@ -2267,7 +1743,7 @@ export default function EventsManager() {
                   }}
                   onSelectAll={toggleSelectAllQualityViolations}
                   selectAllMatching={selectAllMatching}
-                  pageSizeOptions={PAGE_SIZE_OPTIONS}
+                  pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
                   showPagination={true}
                   showSelectAll={true}
                   showBulkActions={true}
@@ -2279,75 +1755,17 @@ export default function EventsManager() {
                       setSelectAllMatching(false);
                     },
                     customActions: (
-                      <>
-                        {/* Re-analyze Dropdown or Stop Button */}
-                        {isReanalyzing ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={cancelAnalysis}
-                            title="Stop bulk analysis"
-                          >
-                            <StopCircle className="w-4 h-4 mr-2" />
-                            Stop ({progress.completed}/{progress.total})
-                          </Button>
-                        ) : (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                title="Re-analyze (R)"
-                              >
-                                <RefreshCw className="w-4 h-4 mr-2" />
-                                Re-analyze
-                                <ChevronDown className="w-4 h-4 ml-2" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={async () => {
-                                  const dates = selectAllMatching 
-                                    ? await fetchAllQualityViolationDates()
-                                    : Array.from(selectedDates);
-                                  await reanalyzeDates(dates);
-                                }}
-                              >
-                                <RefreshCw className="w-4 h-4 mr-2" />
-                                Analyse Days
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={async () => {
-                                  const dates = selectAllMatching 
-                                    ? await fetchAllQualityViolationDates()
-                                    : Array.from(selectedDates);
-                                  await redoSummaries(dates);
-                                }}
-                              >
-                                <FileText className="w-4 h-4 mr-2" />
-                                Redo Summaries
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-
-                        {/* Tagging Dropdown */}
-                        <TaggingDropdown
-                          selectedDates={Array.from(selectedDates)}
-                          selectAllMatching={selectAllMatching}
-                          onDatesResolve={fetchAllQualityViolationDates}
-                        />
-
-                        {/* Manage Tags Button */}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowManageTags(true)}
-                        >
-                          <Tags className="w-4 h-4 mr-2" />
-                          Manage Tags
-                        </Button>
-                      </>
+                      <AnalysesBrowseBulkActions
+                        isReanalyzing={isReanalyzing}
+                        progress={progress}
+                        cancelAnalysis={cancelAnalysis}
+                        reanalyzeDates={reanalyzeDates}
+                        redoSummaries={redoSummaries}
+                        selectAllMatching={selectAllMatching}
+                        selectedDates={selectedDates}
+                        fetchAllMatchingDates={async () => fetchAllQualityViolationDates()}
+                        onManageTags={() => setShowManageTags(true)}
+                      />
                     ),
                   }}
                 />
@@ -2356,28 +1774,16 @@ export default function EventsManager() {
               <>
                 {/* Show placeholder when no selection is made */}
                 {selectedEntities.size === 0 && !showUntagged && !debouncedSearchQuery ? (
-                  <div className="flex min-h-[calc(100vh-14rem)] w-full flex-col items-center justify-center text-center">
-                    <Filter className="w-12 h-12 text-muted-foreground mb-4" />
-                    <h3 className="text-lg font-semibold text-foreground mb-2">
-                      Select tags to view analyses
-                    </h3>
-                    <p className="text-sm text-muted-foreground max-w-md">
-                      Please pick a tag to see the analyses
-                    </p>
-                  </div>
+                  <AnalysesBrowseEmptyPlaceholder
+                    title="Select tags to view analyses"
+                    description="Please pick a tag to see the analyses"
+                  />
                 ) : (
                   <>
-                    {/* Default Events Manager View */}
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center space-x-3">
-                        <h2 className="text-lg font-semibold text-foreground">
-                          {showUntagged ? "Untagged Analyses" : "Events Manager"}
-                        </h2>
-                        <Badge variant="secondary" className="font-normal">
-                          {totalCount.toLocaleString()} result{totalCount !== 1 ? 's' : ''}
-                        </Badge>
-                      </div>
-                      {totalCount > 0 && (
+                    <AnalysesBrowseHeader
+                      title={showUntagged ? "Untagged Analyses" : "Events Manager"}
+                      totalCount={totalCount}
+                      actions={
                         <Button
                           variant="outline"
                           size="sm"
@@ -2389,10 +1795,9 @@ export default function EventsManager() {
                           <Copy className="w-4 h-4" />
                           <span>Copy TXT</span>
                         </Button>
-                      )}
-                    </div>
+                      }
+                    />
 
-                    {/* Analysis Table */}
                     <AnalysesTable
                   analyses={paginatedAnalyses}
                   isLoading={isLoading}
@@ -2455,7 +1860,7 @@ export default function EventsManager() {
                   }}
                   onSelectAll={toggleSelectAll}
                   selectAllMatching={selectAllMatching}
-                  pageSizeOptions={PAGE_SIZE_OPTIONS}
+                  pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
                   showPagination={true}
                   showSelectAll={true}
                   showBulkActions={true}
@@ -2467,75 +1872,17 @@ export default function EventsManager() {
                       setSelectAllMatching(false);
                     },
                     customActions: (
-                      <>
-                        {/* Re-analyze Dropdown or Stop Button */}
-                        {isReanalyzing ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={cancelAnalysis}
-                            title="Stop bulk analysis"
-                          >
-                            <StopCircle className="w-4 h-4 mr-2" />
-                            Stop ({progress.completed}/{progress.total})
-                          </Button>
-                        ) : (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                title="Re-analyze (R)"
-                              >
-                                <RefreshCw className="w-4 h-4 mr-2" />
-                                Re-analyze
-                                <ChevronDown className="w-4 h-4 ml-2" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={async () => {
-                                  const dates = selectAllMatching 
-                                    ? await fetchAllMatchingDates()
-                                    : Array.from(selectedDates);
-                                  await reanalyzeDates(dates);
-                                }}
-                              >
-                                <RefreshCw className="w-4 h-4 mr-2" />
-                                Analyse Days
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={async () => {
-                                  const dates = selectAllMatching 
-                                    ? await fetchAllMatchingDates()
-                                    : Array.from(selectedDates);
-                                  await redoSummaries(dates);
-                                }}
-                              >
-                                <FileText className="w-4 h-4 mr-2" />
-                                Redo Summaries
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-
-                        {/* Tagging Dropdown */}
-                        <TaggingDropdown
-                          selectedDates={Array.from(selectedDates)}
-                          selectAllMatching={selectAllMatching}
-                          onDatesResolve={fetchAllMatchingDates}
-                        />
-
-                        {/* Manage Tags Button */}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowManageTags(true)}
-                        >
-                          <Tags className="w-4 h-4 mr-2" />
-                          Manage Tags
-                        </Button>
-                      </>
+                      <AnalysesBrowseBulkActions
+                        isReanalyzing={isReanalyzing}
+                        progress={progress}
+                        cancelAnalysis={cancelAnalysis}
+                        reanalyzeDates={reanalyzeDates}
+                        redoSummaries={redoSummaries}
+                        selectAllMatching={selectAllMatching}
+                        selectedDates={selectedDates}
+                        fetchAllMatchingDates={fetchAllMatchingDates}
+                        onManageTags={() => setShowManageTags(true)}
+                      />
                     ),
                   }}
                 />
@@ -2543,8 +1890,7 @@ export default function EventsManager() {
                 )}
               </>
             )}
-              </Card>
-            </div>
+      </AnalysesBrowseTableCard>
 
       {/* New Copy to Clipboard Dialog */}
             <Dialog open={showCopyDialog} onOpenChange={setShowCopyDialog}>
@@ -2813,100 +2159,6 @@ export default function EventsManager() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Tag Dialog */}
-      <EditTagDialog
-        open={showRenameDialog}
-        onOpenChange={setShowRenameDialog}
-        tag={tagToEdit}
-        onConfirm={(changes) => {
-          if (tagToEdit) {
-            updateTagMutation.mutate({
-              tagName: tagToEdit.name,
-              oldCategory: tagToEdit.category,
-              newName: changes.newName,
-              newCategory: changes.newCategory,
-              newSubcategoryPath: changes.newSubcategoryPath,
-            });
-          }
-        }}
-        isLoading={updateTagMutation.isPending}
-      />
-
-      {/* Delete Tag Dialog */}
-          <DeleteDialog
-            open={showDeleteDialog}
-            onOpenChange={setShowDeleteDialog}
-            tag={tagToEdit}
-            onConfirm={async () => {
-              if (tagToEdit) {
-                // First, find the actual category from the database
-                // This handles cases where tag appears in Miscellaneous but has a different category in DB
-                try {
-                  const response = await fetch(`/api/tags-manager/find-categories?tagName=${encodeURIComponent(tagToEdit.name)}`);
-                  if (response.ok) {
-                    const data = await response.json();
-                    if (data.categories && data.categories.length > 0) {
-                      // Delete from all categories the tag exists in
-                      // This handles cases where the same tag name might exist in multiple categories
-                      const deletePromises = data.categories.map((cat: { category: string }) => 
-                        fetch('/api/tags-manager/delete', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ tagName: tagToEdit.name, category: cat.category }),
-                        })
-                      );
-                      
-                      const results = await Promise.all(deletePromises);
-                      const allOk = results.every(r => r.ok);
-                      
-                      if (allOk) {
-                        const totalUpdated = await Promise.all(
-                          results.map(r => r.json().then((d: any) => d.updated || 0))
-                        );
-                        const sum = totalUpdated.reduce((a, b) => a + b, 0);
-                        
-                        toast({
-                          title: 'Tag Deleted',
-                          description: `Tag has been deleted from ${sum} analyses across ${data.categories.length} category(ies)`,
-                        });
-                        
-                        await queryClient.invalidateQueries({ queryKey: ['supabase-tags-catalog'] });
-                        await queryClient.invalidateQueries({ queryKey: ['tags-catalog-v2'] });
-                        await queryClient.invalidateQueries({ queryKey: ['supabase-tags-analyses'] });
-                        setShowDeleteDialog(false);
-                        setTagToEdit(null);
-                      } else {
-                        throw new Error('Some deletions failed');
-                      }
-                    } else {
-                      // No categories found - try with the provided category anyway
-                      console.warn(`No categories found for "${tagToEdit.name}", using provided category: ${tagToEdit.category}`);
-                      deleteTagMutation.mutate({
-                        tagName: tagToEdit.name,
-                        category: tagToEdit.category,
-                      });
-                    }
-                  } else {
-                    // If lookup fails, try with provided category
-                    console.warn(`Failed to find categories for "${tagToEdit.name}", using provided category: ${tagToEdit.category}`);
-                    deleteTagMutation.mutate({
-                      tagName: tagToEdit.name,
-                      category: tagToEdit.category,
-                    });
-                  }
-                } catch (error) {
-                  // If lookup fails, try with provided category
-                  console.error(`Error finding categories for "${tagToEdit.name}":`, error);
-                  deleteTagMutation.mutate({
-                    tagName: tagToEdit.name,
-                    category: tagToEdit.category,
-                  });
-                }
-              }
-            }}
-            isLoading={deleteTagMutation.isPending}
-          />
-
           {/* Article Selection Dialog for Bulk Re-analyze */}
           {selectionRequest && (
             <ArticleSelectionDialog
@@ -2922,9 +2174,6 @@ export default function EventsManager() {
               onConfirm={confirmSelection}
             />
           )}
-          </div>
-        </div>
-      </div>
-    </SidebarProvider>
+    </AnalysesBrowseLayout>
   );
 }

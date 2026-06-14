@@ -3,10 +3,8 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { newsAnalyzer } from "../services/news-analyzer";
 import { exaService } from "../services/exa";
-import { type ArticleData } from "@shared/schema";
+import { type InsertHistoricalNewsAnalysis } from "@shared/schema";
 import { periodDetector } from "../services/period-detector";
-import { hierarchicalSearch } from "../services/hierarchical-search";
-import { insertHistoricalNewsAnalysisSchema, insertManualNewsEntrySchema, insertEventBatchSchema, insertBatchEventSchema, type InsertHistoricalNewsAnalysis, type HistoricalNewsAnalysis, type EventBatch, type BatchEvent } from "@shared/schema";
 
 import { cacheManager } from "../services/cache-manager";
 
@@ -14,8 +12,6 @@ import { healthMonitor } from "../services/health-monitor";
 import { createErrorResponse } from "../utils/error-handler";
 import { apiMonitor } from "../services/api-monitor";
 import { qualityChecker } from "../services/quality-checker";
-import { batchProcessor } from "../services/batch-processor";
-import { conflictClusterer } from "../services/conflict-clusterer";
 import { perplexityCleaner } from "../services/perplexity-cleaner";
 import { entityExtractor } from "../services/entity-extractor";
 import { sql, desc } from "drizzle-orm";
@@ -192,42 +188,6 @@ router.delete("/api/database/clear-manual-entries", async (req, res) => {
   }
 });
 
-router.delete("/api/database/clear-source-credibility", async (req, res) => {
-  try {
-    await storage.clearSourceCredibility();
-    res.json({ success: true, message: "Source credibility settings cleared" });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-router.delete("/api/database/clear-spam-domains", async (req, res) => {
-  try {
-    await storage.clearSpamDomains();
-    res.json({ success: true, message: "Spam domain filters cleared" });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-router.delete("/api/database/clear-ai-prompts", async (req, res) => {
-  try {
-    await storage.clearAiPrompts();
-    res.json({ success: true, message: "AI prompts and configurations cleared" });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-router.delete("/api/database/clear-users", async (req, res) => {
-  try {
-    await storage.clearUserData();
-    res.json({ success: true, message: "User data cleared" });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
 router.get("/api/system/db-stats", async (req, res) => {
   try {
     const stats = await storage.getAnalysisStats();
@@ -295,96 +255,6 @@ router.delete('/api/monitor/clear', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-router.post("/api/database/migrate-enhanced-events", async (req, res) => {
-  try {
-    console.log("🗄️ Starting migration of enhanced events to main database...");
-    
-    // Get all enhanced events from batch_events table
-    const { batchEvents } = await import("@shared/schema");
-    const { eq } = await import("drizzle-orm");
-    
-    const enhancedEvents = await db.select({
-      date: batchEvents.originalDate,
-      summary: batchEvents.enhancedSummary,
-      reasoning: batchEvents.enhancedReasoning,
-      originalGroup: batchEvents.originalGroup
-    })
-    .from(batchEvents)
-    .where(eq(batchEvents.status, 'enhanced'));
-
-    console.log(`📊 Found ${enhancedEvents.length} enhanced events to migrate`);
-
-    let migratedCount = 0;
-    let skippedCount = 0;
-    const errors = [];
-
-    for (const event of enhancedEvents) {
-      try {
-        if (!event.summary || event.summary.trim() === '') {
-          console.log(`⏭️ Skipping event for ${event.date} - no enhanced summary`);
-          skippedCount++;
-          continue;
-        }
-
-        // Check if analysis already exists for this date
-        const existingAnalysis = await storage.getAnalysisByDate(event.date);
-        if (existingAnalysis) {
-          console.log(`⏭️ Skipping ${event.date} - analysis already exists`);
-          skippedCount++;
-          continue;
-        }
-
-        // Create historical news analysis entry
-        const analysisData: InsertHistoricalNewsAnalysis = {
-          date: event.date,
-          summary: event.summary,
-          reasoning: event.reasoning || 'Enhanced from Bitcoin historical events import',
-          isManualOverride: true,
-          aiProvider: 'openai',
-          tierUsed: 'bitcoin-history',
-          winningTier: 'bitcoin-history',
-          confidenceScore: '95.00',
-          sentimentScore: '0.00',
-          sentimentLabel: 'neutral',
-          topicCategories: ['historical', 'bitcoin'],
-          totalArticlesFetched: 1,
-          uniqueArticlesAnalyzed: 1,
-        };
-
-        await storage.createAnalysis(analysisData);
-        migratedCount++;
-        
-        if (migratedCount % 100 === 0) {
-          console.log(`📈 Progress: ${migratedCount}/${enhancedEvents.length} events migrated`);
-        }
-      } catch (error) {
-        console.error(`❌ Failed to migrate event for ${event.date}:`, error);
-        errors.push({ date: event.date, error: (error as Error).message });
-      }
-    }
-
-    console.log("🎉 Migration completed!");
-    console.log(`✅ Migrated: ${migratedCount} events`);
-    console.log(`⏭️ Skipped: ${skippedCount} events`);
-    console.log(`❌ Errors: ${errors.length} events`);
-
-    res.json({
-      success: true,
-      migrated: migratedCount,
-      skipped: skippedCount,
-      errors: errors.length,
-      errorDetails: errors
-    });
-
-  } catch (error) {
-    console.error("❌ Migration failed:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: (error as Error).message 
-    });
   }
 });
 
@@ -510,19 +380,7 @@ router.post("/api/system/backfill-missing-dates", async (req, res) => {
       reasoning: 'Placeholder row - awaiting analysis',
       winningTier: 'none',
       tieredArticles: { bitcoin: [], crypto: [], macro: [] },
-      aiProvider: 'openai',
-      confidenceScore: '0',
-      sentimentScore: '0',
-      sentimentLabel: 'neutral',
       topicCategories: [],
-      duplicateArticleIds: [],
-      totalArticlesFetched: 0,
-      uniqueArticlesAnalyzed: 0,
-      perplexityVerdict: 'uncertain',
-      perplexityApproved: false,
-      geminiApproved: false,
-      factCheckVerdict: 'uncertain',
-      isOrphan: false
     }));
     
     // Insert missing rows (handle duplicates gracefully)

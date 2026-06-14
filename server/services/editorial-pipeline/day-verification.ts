@@ -36,10 +36,8 @@ export type DayVerificationResult = {
   corpusPhase?: string;
   wouldQueue?: string[];
   storedVerification?: {
-    geminiApproved: boolean | null;
-    perplexityApproved: boolean | null;
-    factCheckVerdict: string | null;
-    perplexityVerdict: string | null;
+    googleCheckHappened: string | null;
+    isManualOverride: boolean | null;
   } | null;
   knownEvent?: {
     isKnownEvent: boolean;
@@ -190,27 +188,16 @@ export async function verifyEditorialDay(opts: {
   }
 
   const signals = await getExistingVerificationSignals(opts.date);
-  if (signals) {
-    const hasStored =
-      signals.geminiApproved != null ||
-      signals.perplexityApproved != null ||
-      signals.factCheckVerdict != null ||
-      signals.perplexityVerdict != null;
-    if (hasStored) {
-      const approved =
-        signals.geminiApproved === true ||
-        signals.perplexityApproved === true ||
-        signals.factCheckVerdict === "Valid" ||
-        signals.perplexityVerdict === "Valid";
-      pushCheck(checks, {
-        id: "stored_verification",
-        label: "Stored fact-check signals",
-        status: approved ? "pass" : "warn",
-        message: approved
-          ? "Legacy Gemini/Perplexity/fact-check signals look positive."
-          : "Stored verification signals exist but are not clearly approved.",
-      });
-    }
+  if (signals?.googleCheckHappened) {
+    const approved = signals.googleCheckHappened === "yes";
+    pushCheck(checks, {
+      id: "stored_verification",
+      label: "Google check",
+      status: approved ? "pass" : signals.googleCheckHappened === "uncertain" ? "warn" : "fail",
+      message: approved
+        ? "google_check_happened=yes."
+        : `google_check_happened=${signals.googleCheckHappened}.`,
+    });
   }
 
   let corpusPhase: string | undefined;
@@ -253,10 +240,8 @@ export async function verifyEditorialDay(opts: {
     wouldQueue,
     storedVerification: signals
       ? {
-          geminiApproved: signals.geminiApproved,
-          perplexityApproved: signals.perplexityApproved,
-          factCheckVerdict: signals.factCheckVerdict,
-          perplexityVerdict: signals.perplexityVerdict,
+          googleCheckHappened: signals.googleCheckHappened,
+          isManualOverride: signals.isManualOverride,
         }
       : null,
     knownEvent: knownEvent.isKnownEvent

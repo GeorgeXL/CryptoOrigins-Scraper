@@ -157,12 +157,8 @@ async function applyAutoFixesForDate(opts: {
   if (!opts.fixes.length) return applied;
   const update: Record<string, unknown> = {};
   for (const fix of opts.fixes) {
-    if (fix.code === "orphan_flag") {
-      update.isOrphan = false;
-      applied.push("cleared orphan flag");
-    } else if (fix.code === "flagged") {
+    if (fix.code === "flagged") {
       update.isFlagged = false;
-      update.flagReason = null;
       applied.push("cleared manual flag");
     } else if (fix.code === "low_confidence") {
       update.isManualOverride = true;
@@ -217,12 +213,8 @@ export async function applyArticlePickApproval(opts: {
       reasoning: `Created by editorial pipeline v3 article-pick (operator=${opts.reviewer ?? "unknown"})`,
       topArticleId: candidate.id,
       isManualOverride: true,
-      isOrphan: true,
       tieredArticles: tiered,
       analyzedArticles: opts.candidates.map(candidateToArticleData),
-      totalArticlesFetched: opts.candidates.length,
-      uniqueArticlesAnalyzed: opts.candidates.length,
-      aiProvider: "openai",
       winningTier: candidate.tier,
       tierUsed: candidate.tier,
     });
@@ -230,12 +222,8 @@ export async function applyArticlePickApproval(opts: {
     await storage.updateAnalysis(opts.date, {
       topArticleId: candidate.id,
       isManualOverride: true,
-      isOrphan: true,
       tieredArticles: tiered,
       analyzedArticles: opts.candidates.map(candidateToArticleData),
-      totalArticlesFetched: opts.candidates.length,
-      uniqueArticlesAnalyzed: opts.candidates.length,
-      aiProvider: "openai",
       winningTier: candidate.tier,
       tierUsed: candidate.tier,
     });
@@ -307,16 +295,11 @@ export async function applyArticlePickApproval(opts: {
   await storage.updateAnalysis(opts.date, {
     summary: summaryResult.summary,
     reasoning: `Article-pick summary; tier=${candidate.tier}; operator=${opts.reviewer ?? "unknown"}`,
-    confidenceScore: String(summaryResult.confidenceScore ?? 0),
-    sentimentScore: String(summaryResult.sentimentScore ?? 0),
-    sentimentLabel: summaryResult.sentimentLabel ?? "neutral",
     topicCategories: safeTopics,
   });
 
   // Queue the second gate so the operator can confirm/edit the generated
-  // summary + tag set + topics before the day is declared "live" (orphan flag
-  // stays on until then). The operator can edit each field inline; on approval
-  // the writer persists what's on screen, not what the agent proposed.
+  // summary + tag set + topics before the day is declared live.
   const mergedNote =
     extractedMerged.length > 0
       ? ` Merged: ${extractedMerged
@@ -538,14 +521,8 @@ export async function applyCorrectionProposals(opts: {
         applied.push(`updated summary (${edited.length} chars)`);
         break;
       }
-      case "clear_orphan_flag": {
-        update.isOrphan = false;
-        applied.push("cleared orphan flag");
-        break;
-      }
       case "clear_manual_flag": {
         update.isFlagged = false;
-        update.flagReason = null;
         applied.push("cleared manual flag");
         break;
       }
@@ -669,7 +646,6 @@ async function applySummaryApproval(opts: {
     summary: finalSummary,
     tagsVersion2: finalTags,
     topicCategories: persistedTopicLabels,
-    isOrphan: false,
   });
 
   // Post-write assertion: re-read and confirm the row reflects the operator's
@@ -917,7 +893,7 @@ async function applyCalendarDecision(opts: {
       }
       await db
         .update(historicalNewsAnalyses)
-        .set({ date: opts.expectedDate, isOrphan: false, lastAnalyzed: new Date() })
+        .set({ date: opts.expectedDate, lastAnalyzed: new Date() })
         .where(eq(historicalNewsAnalyses.date, opts.date));
       return { ok: true, message: `Moved analysis ${opts.date} → ${opts.expectedDate}.` };
     }
@@ -1080,6 +1056,7 @@ export type ApprovalOptions = {
   calendarGroupDates?: string[];
   calendarRemoveDates?: string[];
   duplicateDecision?: DuplicateDecisionInput;
+  duplicateNeighborDate?: string;
   replaceArticleId?: string;
   /** Operator-edited summary text (overrides package proposedSummary on summary-approval). */
   editedSummary?: string;
@@ -1231,7 +1208,7 @@ export async function executeApprovedReviewItem(
     const out = await runExistingSearchAndSummaryForDate(decision.action.date);
     return {
       ok: true,
-      message: `Applied existing search/summarization pipeline to ${decision.action.date} (articles=${out.totalArticlesFetched})`,
+      message: `Applied existing search/summarization pipeline to ${decision.action.date} (articles=${out.articleCount})`,
     };
   }
 
