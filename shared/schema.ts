@@ -24,11 +24,14 @@ export const historicalNewsAnalyses = pgTable("historical_news_analyses", {
   googleCheckCheckedAt: timestamp("google_check_checked_at"),
   tagsVersion2: text("tags_version2").array(), // Simple array of tag names: ["Elon Musk", "Obama", "NFT", "Bitcoin"]
   suppressedTagSuggestions: text("suppressed_tag_suggestions").array(), // Operator-declined proposed tags for this date
+  /** Collector rarity — one of artifact|landmark|notable|infamous|chronicle; meaningful when is_locked */
+  rarity: text("rarity"),
 }, (table) => ({
   // Critical indexes for performance
   dateIdx: index("idx_historical_news_date").on(table.date),
   lastAnalyzedIdx: index("idx_historical_news_last_analyzed").on(table.lastAnalyzed),
   googleCheckHappenedIdx: index("idx_historical_news_google_check_happened").on(table.googleCheckHappened),
+  rarityIdx: index("idx_historical_news_rarity").on(table.rarity),
 }));
 
 export const manualNewsEntries = pgTable("manual_news_entries", {

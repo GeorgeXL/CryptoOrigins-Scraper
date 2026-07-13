@@ -37,6 +37,10 @@ import {
   runGoogleCheckSingle,
   type GoogleCheckBatchResult,
 } from "../services/homepage-checks/google-check";
+import {
+  persistRarityResults,
+  runRarityBatch,
+} from "../services/homepage-checks/rarity-check";
 import { runStorylineFitBatch } from "../services/homepage-checks/storyline-fit";
 
 const router = Router();
@@ -3243,6 +3247,79 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
     } catch (error) {
       const message = (error as Error).message;
       const status = message.includes("Cannot verify more than") ? 400 : 500;
+      res.status(status).json({ error: message });
+    }
+  });
+
+  router.post("/api/quality-check/bulk-assign-rarity", async (req, res) => {
+    try {
+      const { dates, testDate } = req.body ?? {};
+
+      let items: { date: string; summary: string }[] = [];
+
+      if (testDate && typeof testDate === "string") {
+        const analysis = await storage.getAnalysisByDate(testDate);
+        if (!analysis) {
+          return res.status(404).json({ error: `Analysis not found for date: ${testDate}` });
+        }
+        if (!analysis.isLocked) {
+          return res.status(400).json({ error: "Rarity applies only to locked days" });
+        }
+        items = [{ date: analysis.date, summary: analysis.summary }];
+      } else if (Array.isArray(dates) && dates.length > 0) {
+        const uniqueDates = [
+          ...new Set(
+            dates.filter((d: unknown) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)),
+          ),
+        ];
+        const rows = (
+          await Promise.all(uniqueDates.map((date: string) => storage.getAnalysisByDate(date)))
+        ).filter((row): row is NonNullable<typeof row> => row != null && !!row.isLocked);
+        items = rows.map((row) => ({ date: row.date, summary: row.summary }));
+      } else {
+        return res.status(400).json({ error: "dates array or testDate is required" });
+      }
+
+      const batch = await runRarityBatch(items);
+      const updated = await persistRarityResults(batch);
+
+      res.json({
+        success: true,
+        updated,
+        total: items.length,
+        assignedDays: batch.assignedDays,
+        failedDays: batch.failedDays,
+        results: batch.results,
+        testMode: !!testDate,
+      });
+    } catch (error) {
+      console.error("bulk-assign-rarity failed:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post("/api/analysis/rarity/batch", async (req, res) => {
+    try {
+      const { items } = req.body ?? {};
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "items array is required" });
+      }
+
+      const normalized = items.map((row: { date?: string; summary?: string }) => ({
+        date: String(row.date ?? "").trim(),
+        summary: String(row.summary ?? ""),
+      }));
+
+      if (normalized.some((row) => !row.date)) {
+        return res.status(400).json({ error: "Each item must include date" });
+      }
+
+      const batch = await runRarityBatch(normalized);
+      const updated = await persistRarityResults(batch);
+      res.json({ ...batch, updated });
+    } catch (error) {
+      const message = (error as Error).message;
+      const status = message.includes("Cannot assign rarity") ? 400 : 500;
       res.status(status).json({ error: message });
     }
   });

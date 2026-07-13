@@ -177,6 +177,75 @@ export function useQualityCheckAgentRun() {
     [patchLog, pushLog, toast],
   );
 
+  const runAssignRarity = useCallback(
+    async (dates: string[]) => {
+      setRunning(true);
+      setProgressLabel(`Rarity agent · ${dates.length} date${dates.length === 1 ? "" : "s"}`);
+      setLogLines([]);
+      pushLog({
+        id: "qc-rarity-start",
+        text: `Assigning rarity on ${dates.length} locked day(s)…`,
+        status: "pending",
+      });
+
+      let updated = 0;
+      let failed = 0;
+
+      try {
+        for (const date of dates) {
+          pushLog({ id: `qc-rarity-${date}`, text: `${date}…`, status: "pending" });
+        }
+
+        const result = (await apiRequest("POST", "/api/quality-check/bulk-assign-rarity", {
+          dates,
+        })) as {
+          updated?: number;
+          results?: Record<string, { rarity?: string | null; error?: string }>;
+        };
+
+        for (const date of dates) {
+          const row = result.results?.[date];
+          const lineId = `qc-rarity-${date}`;
+          if (row?.rarity) {
+            updated += 1;
+            patchLog(lineId, { status: "approved", text: `${date} → ${row.rarity}` });
+          } else {
+            failed += 1;
+            patchLog(lineId, {
+              status: "rejected",
+              text: `${date} — ${row?.error ?? "no label"}`,
+            });
+          }
+        }
+
+        patchLog("qc-rarity-start", {
+          status: failed > 0 ? "review" : "approved",
+          text: `Rarity agent done · ${updated} assigned${failed > 0 ? ` · ${failed} failed` : ""}`,
+        });
+
+        toast({
+          title: "Rarity agent finished",
+          description: `${updated} assigned${failed > 0 ? `, ${failed} failed` : ""}.`,
+          variant: failed > 0 ? "destructive" : "default",
+        });
+      } catch (error) {
+        patchLog("qc-rarity-start", {
+          status: "rejected",
+          text: error instanceof Error ? error.message : "Rarity assignment failed",
+        });
+        toast({
+          title: "Rarity agent failed",
+          description: error instanceof Error ? error.message : "Error",
+          variant: "destructive",
+        });
+      } finally {
+        setRunning(false);
+        setProgressLabel(null);
+      }
+    },
+    [patchLog, pushLog, toast],
+  );
+
   const runQualityCheckAgent = useCallback(
     async (opts: {
       checkId: string;
@@ -208,6 +277,11 @@ export function useQualityCheckAgentRun() {
         return;
       }
 
+      if (action.kind === "rarity") {
+        await runAssignRarity(targetRows.map((row) => row.date));
+        return;
+      }
+
       const windows = resolveQualityCheckRunWindows(opts.checkId, targetRows, new Set());
       if (windows.length === 0) {
         toast({ title: "No dates to run", description: "Could not build a pipeline window for this selection.", variant: "destructive" });
@@ -236,7 +310,7 @@ export function useQualityCheckAgentRun() {
         targetDates,
       });
     },
-    [runRemovePeriods, startPipelineSlice, toast],
+    [runAssignRarity, runRemovePeriods, startPipelineSlice, toast],
   );
 
   const stopRun = useCallback(async () => {

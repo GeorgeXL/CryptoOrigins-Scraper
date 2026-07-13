@@ -249,6 +249,10 @@ buildLabelLookup(TAXONOMY_TREE);
 // Synthetic sidebar bucket for DB-driven narrative topics (not taxonomy category "topics")
 LABEL_LOOKUP["narratives"] = "Storylines";
 MAIN_CATEGORY_META["narratives"] = { name: "Storylines", emoji: "📖" };
+LABEL_LOOKUP["rarity"] = "Rarity";
+MAIN_CATEGORY_META["rarity"] = { name: "Rarity", emoji: "◆" };
+LABEL_LOOKUP["tag-entities"] = "Entities";
+MAIN_CATEGORY_META["tag-entities"] = { name: "Entities", emoji: "🏷️" };
 
 export function getTaxonomyLabel(key: string | null | undefined): string | undefined {
   if (!key) return undefined;

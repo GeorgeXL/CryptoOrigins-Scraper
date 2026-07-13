@@ -10,6 +10,8 @@ export interface HomePageState {
   currentPage: number;
   pageSize: number;
   viewMode: 'keywords' | 'topics';
+  /** Home browse axis: storyline topics vs collector rarity vs entity tags */
+  browseAxis?: 'topic' | 'rarity' | 'tags';
   /** Left sidebar: tag taxonomy vs DB narrative topics (`topics` / `page_topics`) */
   sidebarMenu?: 'tags' | 'topics';
   // EventsManager-specific fields
@@ -24,6 +26,13 @@ export interface MonthlyViewState {
   selectedMonth: number | null;
   currentPage: number;
   pageSize: number;
+}
+
+function parseBrowseAxis(searchParams: URLSearchParams): 'topic' | 'rarity' | 'tags' {
+  const browse = searchParams.get('browse');
+  if (browse === 'rarity') return 'rarity';
+  if (browse === 'tags') return 'tags';
+  return 'topic';
 }
 
 /**
@@ -52,6 +61,9 @@ export function serializePageState(state: HomePageState | MonthlyViewState): str
     params.set('page', state.currentPage.toString());
     params.set('pageSize', state.pageSize.toString());
     params.set('viewMode', state.viewMode);
+    if (state.browseAxis === 'rarity' || state.browseAxis === 'tags') {
+      params.set('browse', state.browseAxis);
+    }
     if (state.sidebarMenu === 'topics') {
       params.set('sidebar', 'topics');
     }
@@ -102,6 +114,7 @@ export function deserializePageState(searchParams: URLSearchParams): HomePageSta
       currentPage: parseInt(searchParams.get('page') || '1', 10),
       pageSize: parseInt(searchParams.get('pageSize') || '50', 10),
       viewMode: (searchParams.get('viewMode') || 'keywords') as 'keywords' | 'topics',
+      browseAxis: parseBrowseAxis(searchParams),
       sidebarMenu: searchParams.get('sidebar') === 'topics' ? 'topics' : 'tags',
     };
     // EventsManager-specific fields
@@ -132,6 +145,7 @@ export function deserializePageState(searchParams: URLSearchParams): HomePageSta
         currentPage: parseInt(searchParams.get('page') || '1', 10),
         pageSize: parseInt(searchParams.get('pageSize') || '50', 10),
         viewMode: (searchParams.get('viewMode') || 'keywords') as 'keywords' | 'topics',
+        browseAxis: parseBrowseAxis(searchParams),
         sidebarMenu: searchParams.get('sidebar') === 'topics' ? 'topics' : 'tags',
       };
       // EventsManager-specific fields
@@ -146,7 +160,7 @@ export function deserializePageState(searchParams: URLSearchParams): HomePageSta
     
     // Otherwise, if we have homepage-related params, treat as homepage
     // This handles URLs without 'from=home' (which should be the default for homepage)
-    if (searchParams.has('entities') || searchParams.has('untagged') || searchParams.has('search') || searchParams.has('page') || searchParams.has('viewMode') || searchParams.has('sidebar')) {
+    if (searchParams.has('entities') || searchParams.has('untagged') || searchParams.has('search') || searchParams.has('page') || searchParams.has('viewMode') || searchParams.has('sidebar') || searchParams.has('browse')) {
       const entities = searchParams.get('entities');
       const state: HomePageState = {
         page: 'home',
@@ -156,6 +170,7 @@ export function deserializePageState(searchParams: URLSearchParams): HomePageSta
         currentPage: parseInt(searchParams.get('page') || '1', 10),
         pageSize: parseInt(searchParams.get('pageSize') || '50', 10),
         viewMode: (searchParams.get('viewMode') || 'keywords') as 'keywords' | 'topics',
+        browseAxis: parseBrowseAxis(searchParams),
         sidebarMenu: searchParams.get('sidebar') === 'topics' ? 'topics' : 'tags',
       };
       return state;
@@ -191,6 +206,9 @@ export function reconstructPageUrl(state: HomePageState | MonthlyViewState): str
     params.set('page', state.currentPage.toString());
     params.set('pageSize', state.pageSize.toString());
     params.set('viewMode', state.viewMode);
+    if (state.browseAxis === 'rarity' || state.browseAxis === 'tags') {
+      params.set('browse', state.browseAxis);
+    }
     if (state.sidebarMenu === 'topics') {
       params.set('sidebar', 'topics');
     }

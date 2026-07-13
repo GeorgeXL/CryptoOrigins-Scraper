@@ -6,7 +6,7 @@ export type QualityCheckPipelineScope =
   | "duplicates"
   | "date";
 
-export type QualityCheckAgentKind = "pipeline" | "remove-periods";
+export type QualityCheckAgentKind = "pipeline" | "remove-periods" | "rarity";
 
 export type QualityCheckAgentAction = {
   buttonLabel: string;
@@ -89,6 +89,20 @@ export const QUALITY_CHECK_AGENT_ACTIONS: Record<string, QualityCheckAgentAction
       "Runs the editorial pipeline (topics scope) to collapse multiple topic leaves down to one per day.",
     kind: "pipeline",
     checkScopes: ["topics"],
+  },
+  "locked-no-rarity": {
+    buttonLabel: "Run agent: assign rarity",
+    confirmTitle: "Assign collector rarity to locked days?",
+    confirmDescription:
+      "Runs the Rarity Agent (gpt-5.4-mini) on locked days missing a rarity label. One of: artifact, landmark, notable, infamous, chronicle.",
+    kind: "rarity",
+  },
+  "locked-invalid-rarity": {
+    buttonLabel: "Run agent: fix rarity",
+    confirmTitle: "Fix invalid rarity labels on locked days?",
+    confirmDescription:
+      "Re-runs the Rarity Agent on locked days whose stored rarity is not one of the five allowed values.",
+    kind: "rarity",
   },
   "missing-months": {
     buttonLabel: "Run agent: fill month gaps",

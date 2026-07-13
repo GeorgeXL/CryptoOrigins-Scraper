@@ -21,6 +21,7 @@ import {
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
 import { deriveVerificationBadge } from "@shared/verification-badge";
+import { RARITY_LABELS, normalizeRarity, type Rarity } from "@shared/rarity";
 import { TopicBadgeEditor } from "@/components/TopicBadgeEditor";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { SingleDayAgentDialog } from "@/components/SingleDayAgentDialog";
@@ -130,6 +131,7 @@ interface DayAnalysisData {
     veriBadge?: 'Manual' | 'Verified' | 'Not Available' | null;
     tagsVersion2?: string[];
     topicCategories?: string[];
+    rarity?: Rarity | null;
     articleTags?: {
       totalArticles: number;
       topSources: string[];
@@ -369,6 +371,7 @@ export default function DayAnalysis() {
             isLocked: false,
             tagsVersion2: [],
             topicCategories: [],
+            rarity: null,
             articleTags: {
               totalArticles: 0,
               topSources: [],
@@ -433,6 +436,7 @@ export default function DayAnalysis() {
                 })
                 .filter((topic: string) => topic.trim().length > 0)
             : [],
+          rarity: normalizeRarity(analysis.rarity),
           articleTags: {
             totalArticles: analysis.total_articles_fetched || 0,
             topSources: [],
@@ -2053,23 +2057,37 @@ export default function DayAnalysis() {
                     )}
                   </div>
 
-                  <div className="mt-4">
-                    <h5 className="mb-2 text-sm font-semibold text-foreground">Topics</h5>
-                    {dayData.analysis.id ? (
-                      isLocked ? (
+                  <div className="mt-4 grid grid-cols-2 gap-4">
+                    <div>
+                      <h5 className="mb-2 text-sm font-semibold text-foreground">Topics</h5>
+                      {dayData.analysis.id ? (
+                        isLocked ? (
+                          <Badge variant="outline" className="text-xs font-normal">
+                            {dayData.analysis.topicCategories?.[0]?.trim() || "No topic"}
+                          </Badge>
+                        ) : (
+                          <TopicBadgeEditor
+                            topic={dayData.analysis.topicCategories?.[0] ?? null}
+                            onTopicChange={(nextTopic) => updateTopicMutation.mutate(nextTopic)}
+                            disabled={updateTopicMutation.isPending}
+                          />
+                        )
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No analysis row yet</p>
+                      )}
+                    </div>
+                    <div>
+                      <h5 className="mb-2 text-sm font-semibold text-foreground">Rarity</h5>
+                      {dayData.analysis.id ? (
                         <Badge variant="outline" className="text-xs font-normal">
-                          {dayData.analysis.topicCategories?.[0]?.trim() || "No topic"}
+                          {dayData.analysis.rarity
+                            ? RARITY_LABELS[dayData.analysis.rarity]
+                            : "No rarity"}
                         </Badge>
                       ) : (
-                        <TopicBadgeEditor
-                          topic={dayData.analysis.topicCategories?.[0] ?? null}
-                          onTopicChange={(nextTopic) => updateTopicMutation.mutate(nextTopic)}
-                          disabled={updateTopicMutation.isPending}
-                        />
-                      )
-                    ) : (
-                      <p className="text-sm text-muted-foreground">No analysis row yet</p>
-                    )}
+                        <p className="text-sm text-muted-foreground">No analysis row yet</p>
+                      )}
+                    </div>
                   </div>
 
                   {!isLocked && pipelineReviewSummary?.latest ? (

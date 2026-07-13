@@ -24,6 +24,8 @@ test("every quality-check tab has an agent action", () => {
     "locked-no-topic",
     "locked-not-approved",
     "multi-topic",
+    "locked-no-rarity",
+    "locked-invalid-rarity",
     "missing-months",
     "too-short",
     "too-long",
@@ -90,6 +92,11 @@ test("slicePipelineWindow splits long ranges", () => {
   assert.ok(slices.length >= 3);
   assert.equal(slices[0]?.dateFrom, "2010-01-01");
   assert.equal(slices.at(-1)?.dateTo, "2010-03-15");
+});
+
+test("locked rarity tabs use rarity agent kind", () => {
+  assert.equal(QUALITY_CHECK_AGENT_ACTIONS["locked-no-rarity"]?.kind, "rarity");
+  assert.equal(QUALITY_CHECK_AGENT_ACTIONS["locked-invalid-rarity"]?.kind, "rarity");
 });
 
 test("ends-period uses deterministic remove-periods kind", () => {

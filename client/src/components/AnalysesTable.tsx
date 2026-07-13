@@ -18,8 +18,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Tag, Check, X, RefreshCw, FileText, ChevronDown, Lock, LockOpen, AlertTriangle } from "lucide-react";
+import { Loader2, Tag, Check, X, RefreshCw, FileText, ChevronDown, Lock, LockOpen, AlertTriangle, Search } from "lucide-react";
 import { formatTopicLeafWithGroup } from "@shared/topic-hierarchy";
+import { RARITY_LABELS, isValidRarity } from "@shared/rarity";
+import { extractTopicLabelsFromCategories } from "@shared/storyline-topic-eligibility";
 import { parseIsLocked } from "@/lib/parseIsLocked";
 import { fetchPendingAgentQueueByDates } from "@/lib/pendingAgentQueue";
 import {
@@ -48,6 +50,7 @@ export interface HistoricalNewsAnalysis {
   googleCheckHappened?: "yes" | "no" | "uncertain" | null;
   googleCheckCheckedAt?: string | null;
   topic_categories?: unknown;
+  rarity?: string | null;
 }
 
 interface CategoryData {
@@ -100,6 +103,9 @@ interface AnalysesTableProps {
   onRowClick?: (date: string) => void;
   onTagClick?: (tagName: string) => void;
   emptyMessage?: string;
+  /** Shown under emptyMessage when a search filter is active */
+  emptySearchHint?: string | null;
+  onClearSearch?: () => void;
   showCheckbox?: boolean;
   pageSize?: number;
   currentPage?: number;
@@ -122,6 +128,8 @@ interface AnalysesTableProps {
   onToggleFlag?: (analysis: HistoricalNewsAnalysis) => void;
   rowAnnotations?: Record<string, AnalysisRowAnnotation>;
   googleCheckSummary?: GoogleCheckSummary | null;
+  /** Right column: entity tags (default), storyline topic, or collector rarity */
+  metadataColumn?: "tags" | "topic" | "rarity";
 }
 
 export function AnalysesTable({
@@ -133,6 +141,8 @@ export function AnalysesTable({
   onRowClick,
   onTagClick,
   emptyMessage = "No analyses found",
+  emptySearchHint = null,
+  onClearSearch,
   showCheckbox = true,
   pageSize = 50,
   currentPage = 1,
@@ -152,6 +162,7 @@ export function AnalysesTable({
   onToggleFlag,
   rowAnnotations,
   googleCheckSummary,
+  metadataColumn = "tags",
 }: AnalysesTableProps) {
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -231,24 +242,39 @@ export function AnalysesTable({
 
   if (isLoading) {
     return (
-      <div className="rounded-md border">
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto mb-3" />
-            <p className="text-sm text-muted-foreground">Loading results...</p>
-          </div>
-        </div>
+      <div className="flex min-h-[14rem] flex-col items-center justify-center rounded-lg border border-dashed border-border/70 bg-muted/20 px-6 py-10 text-center">
+        <Loader2 className="mb-3 h-5 w-5 animate-spin text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">Loading results...</p>
       </div>
     );
   }
 
   if (analyses.length === 0) {
+    const hasSearchFilter = Boolean(emptySearchHint);
     return (
-      <div className="rounded-md border">
-        <div className="text-center py-12">
-          <Tag className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-          <p className="text-muted-foreground">{emptyMessage}</p>
+      <div className="flex min-h-[14rem] flex-col items-center justify-center rounded-lg border border-dashed border-border/70 bg-muted/20 px-6 py-10 text-center">
+        <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          {hasSearchFilter ? (
+            <Search className="h-4 w-4" aria-hidden />
+          ) : (
+            <Tag className="h-4 w-4" aria-hidden />
+          )}
         </div>
+        <p className="text-sm font-medium text-foreground">{emptyMessage}</p>
+        {emptySearchHint ? (
+          <p className="mt-1.5 max-w-sm text-sm text-muted-foreground">{emptySearchHint}</p>
+        ) : null}
+        {onClearSearch && hasSearchFilter ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            className="mt-4"
+            onClick={onClearSearch}
+          >
+            Clear search
+          </Button>
+        ) : null}
       </div>
     );
   }
@@ -416,7 +442,9 @@ export function AnalysesTable({
             <TableHead className="w-36">Date</TableHead>
             <TableHead className="w-8 px-1"><span className="sr-only">Lock</span></TableHead>
             <TableHead>Summary</TableHead>
-            <TableHead className="w-32">Tags</TableHead>
+            <TableHead className="w-32">
+              {metadataColumn === "rarity" ? "Rarity" : metadataColumn === "topic" ? "Topic" : "Tags"}
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -568,7 +596,27 @@ export function AnalysesTable({
                   </div>
                 </TableCell>
                 <TableCell>
-                  {analysis.tags_version2 && analysis.tags_version2.length > 0 ? (
+                  {metadataColumn === "rarity" ? (
+                    analysis.rarity && isValidRarity(analysis.rarity) ? (
+                      <Badge variant="outline" className="text-xs">
+                        {RARITY_LABELS[analysis.rarity]}
+                      </Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )
+                  ) : metadataColumn === "topic" ? (
+                    (() => {
+                      const topics = extractTopicLabelsFromCategories(analysis.topic_categories);
+                      const leaf = topics[0];
+                      return leaf ? (
+                        <Badge variant="outline" className="text-xs max-w-[120px] truncate" title={leaf}>
+                          {formatTopicLeafWithGroup(leaf)}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      );
+                    })()
+                  ) : analysis.tags_version2 && analysis.tags_version2.length > 0 ? (
                     <div className="flex flex-wrap gap-1">
                       {analysis.tags_version2.slice(0, 3).map((tagName, idx) => {
                         const category = getTagCategory(tagName, catalogData);

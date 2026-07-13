@@ -64,10 +64,25 @@ import { serializePageState, deserializePageState, type HomePageState } from "@/
 import {
   analysisMatchesTopicLeaf,
   buildTopicCatalogData,
+  extractTopicLabelsFromCategories,
   resolveSelectedTopicLeafFromSelection,
   resolveTopicLabelFromSelection,
   type AnalysisTopicRow,
 } from "@/lib/topicCatalog";
+import {
+  analysisMatchesRarity,
+  buildRarityCatalogData,
+  resolveRarityLabelFromSelection,
+  resolveSelectedRarityFromSelection,
+  type AnalysisRarityRow,
+} from "@/lib/rarityCatalog";
+import {
+  analysisMatchesTag,
+  buildTagCatalogData,
+  resolveSelectedTagFromSelection,
+  type AnalysisTagRow,
+} from "@/lib/tagCatalog";
+import { isValidRarity } from "@shared/rarity";
 import { fetchAllSupabaseRows } from "@/lib/supabaseBatch";
 import { downloadSummariesExcel } from "@/lib/exportSummariesExcel";
 import { PerplexityIcon } from "@/components/PerplexityIcon";
@@ -85,8 +100,28 @@ import {
   AnalysesBrowseBulkActions,
 } from "@/features/analyses-browse/AnalysesBrowseLayout";
 
-function isHomeDefaultBrowseView(showUntagged: boolean, selectedEntities: Set<string>): boolean {
-  return !showUntagged && selectedEntities.size === 0;
+type BrowseAxis = "topic" | "rarity" | "tags";
+
+function isHomeDefaultBrowseView(
+  browseAxis: BrowseAxis,
+  showUntagged: boolean,
+  selectedEntities: Set<string>,
+): boolean {
+  return browseAxis === "topic" && !showUntagged && selectedEntities.size === 0;
+}
+
+function isRarityDefaultBrowseView(
+  browseAxis: BrowseAxis,
+  selectedEntities: Set<string>,
+): boolean {
+  return browseAxis === "rarity" && selectedEntities.size === 0;
+}
+
+function isTagsDefaultBrowseView(
+  browseAxis: BrowseAxis,
+  selectedEntities: Set<string>,
+): boolean {
+  return browseAxis === "tags" && selectedEntities.size === 0;
 }
 
 function buildGoogleCheckSummary(
@@ -114,7 +149,10 @@ export default function HomePage() {
     searchQuery: "",
     currentPage: 1,
     pageSize: 50,
+    browseAxis: "topic" as BrowseAxis,
   });
+
+  const [browseAxis, setBrowseAxis] = useState<BrowseAxis>("topic");
 
   const updateUrl = (updates: Partial<HomePageState>) => {
     const currentState: HomePageState = {
@@ -125,6 +163,7 @@ export default function HomePage() {
       currentPage: updates.currentPage ?? stateRef.current.currentPage,
       pageSize: updates.pageSize ?? stateRef.current.pageSize,
       viewMode: "topics",
+      browseAxis: updates.browseAxis ?? stateRef.current.browseAxis,
       sidebarMenu: "topics",
     };
     const params = new URLSearchParams();
@@ -139,6 +178,9 @@ export default function HomePage() {
     }
     params.set("page", currentState.currentPage.toString());
     params.set("pageSize", currentState.pageSize.toString());
+    if (currentState.browseAxis === "rarity" || currentState.browseAxis === "tags") {
+      params.set("browse", currentState.browseAxis);
+    }
     const query = params.toString();
     const newUrl = `/${query ? `?${query}` : ""}`;
     prevSearchRef.current = query ? `?${query}` : "";
@@ -163,10 +205,69 @@ export default function HomePage() {
     [analysisTopicRows],
   );
 
+  const { data: analysisRarityRows = [] } = useQuery({
+    queryKey: ["supabase-analysis-rarity"],
+    queryFn: async (): Promise<AnalysisRarityRow[]> => {
+      const rows = await fetchAllSupabaseRows<AnalysisRarityRow>(
+        "historical_news_analyses",
+        "id, rarity, is_locked",
+        { orderBy: { column: "date", ascending: true } },
+      );
+      return rows.filter((row) => parseIsLocked(row.is_locked));
+    },
+    staleTime: 60_000,
+  });
+
+  const rarityCatalogData = useMemo(
+    () => buildRarityCatalogData(analysisRarityRows),
+    [analysisRarityRows],
+  );
+
+  const { data: analysisTagRows = [] } = useQuery({
+    queryKey: ["supabase-analysis-tags-catalog"],
+    queryFn: async (): Promise<AnalysisTagRow[]> => {
+      const rows = await fetchAllSupabaseRows<AnalysisTagRow>(
+        "historical_news_analyses",
+        "id, tags_version2, is_locked",
+        { orderBy: { column: "date", ascending: true } },
+      );
+      return rows.filter((row) => parseIsLocked(row.is_locked));
+    },
+    staleTime: 60_000,
+  });
+
+  const tagCatalogData = useMemo(
+    () => buildTagCatalogData(analysisTagRows),
+    [analysisTagRows],
+  );
+
+  const activeCatalogData =
+    browseAxis === "rarity"
+      ? rarityCatalogData
+      : browseAxis === "tags"
+        ? tagCatalogData
+        : topicCatalogData;
+
   const browseFilterRow = useCallback(
     (row: RawAnalysisRow, filters: AnalysesBrowseFilterState) => {
+      if (browseAxis === "rarity") {
+        if (!row.is_locked) return false;
+        if (!isValidRarity(row.rarity)) return false;
+        const selectedRarity = resolveSelectedRarityFromSelection(filters.selectedEntities);
+        if (selectedRarity) return analysisMatchesRarity(row, selectedRarity);
+        return true;
+      }
+
+      if (browseAxis === "tags") {
+        if (!row.is_locked) return false;
+        if (!Array.isArray(row.tags_version2) || row.tags_version2.length === 0) return false;
+        const selectedTag = resolveSelectedTagFromSelection(filters.selectedEntities);
+        if (selectedTag) return analysisMatchesTag(row, selectedTag);
+        return true;
+      }
+
       if (filters.showUntagged && !filterUntaggedRow(row)) return false;
-      const isDefault = isHomeDefaultBrowseView(filters.showUntagged, filters.selectedEntities);
+      const isDefault = isHomeDefaultBrowseView(browseAxis, filters.showUntagged, filters.selectedEntities);
       if (isDefault && !analysisHasStorylineTopic(row.topic_categories)) return false;
       if (filters.selectedEntities.size > 0 && !filters.showUntagged) {
         const selectedTopicLeaf = resolveSelectedTopicLeafFromSelection(
@@ -178,7 +279,7 @@ export default function HomePage() {
       }
       return true;
     },
-    [topicCatalogData],
+    [browseAxis, topicCatalogData],
   );
 
   const {
@@ -206,22 +307,30 @@ export default function HomePage() {
     fetchAllMatchingDates,
     fetchAllFilteredRows,
   } = useAnalysesBrowse({
-    queryKeyExtra: ["home"],
+    queryKeyExtra: ["home", browseAxis],
     refetchOnMount: "always",
     staleTime: 0,
     selectColumns:
-      "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked, google_check_happened, google_check_checked_at",
-    includeTopicCategories: true,
+      "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked, google_check_happened, google_check_checked_at, rarity",
+    includeTopicCategories: browseAxis === "topic",
     applyServerQuery: (query, filters) => {
-      if (isHomeDefaultBrowseView(filters.showUntagged, filters.selectedEntities)) {
+      if (browseAxis === "rarity") {
+        return query.eq("is_locked", true).not("rarity", "is", null);
+      }
+      if (browseAxis === "tags") {
+        return query.eq("is_locked", true);
+      }
+      if (isHomeDefaultBrowseView(browseAxis, filters.showUntagged, filters.selectedEntities)) {
         return query.eq("is_locked", true);
       }
       return query;
     },
     needsFullFetch: (filters) =>
+      browseAxis === "rarity" ||
+      browseAxis === "tags" ||
       filters.showUntagged ||
       filters.selectedEntities.size > 0 ||
-      isHomeDefaultBrowseView(filters.showUntagged, filters.selectedEntities),
+      isHomeDefaultBrowseView(browseAxis, filters.showUntagged, filters.selectedEntities),
     filterRow: browseFilterRow,
     mapRow: (row) => ({
       date: row.date,
@@ -234,13 +343,15 @@ export default function HomePage() {
       googleCheckHappened: row.google_check_happened ?? null,
       googleCheckCheckedAt: row.google_check_checked_at ?? null,
       topic_categories: row.topic_categories,
+      rarity: row.rarity ?? null,
     }),
     buildExtra: (filteredRows, filters) => {
+      if (browseAxis === "rarity" || browseAxis === "tags") return { googleCheckSummary: null };
       const topicLeaf =
         filters.selectedEntities.size > 0 && !filters.showUntagged
           ? resolveSelectedTopicLeafFromSelection(filters.selectedEntities, topicCatalogData)
           : null;
-      const isDefault = isHomeDefaultBrowseView(filters.showUntagged, filters.selectedEntities);
+      const isDefault = isHomeDefaultBrowseView(browseAxis, filters.showUntagged, filters.selectedEntities);
       return {
         googleCheckSummary:
           topicLeaf || isDefault ? buildGoogleCheckSummary(filteredRows) : null,
@@ -250,8 +361,8 @@ export default function HomePage() {
   });
 
   useEffect(() => {
-    stateRef.current = { selectedEntities, showUntagged, searchQuery, currentPage, pageSize };
-  }, [selectedEntities, showUntagged, searchQuery, currentPage, pageSize]);
+    stateRef.current = { selectedEntities, showUntagged, searchQuery, currentPage, pageSize, browseAxis };
+  }, [selectedEntities, showUntagged, searchQuery, currentPage, pageSize, browseAxis]);
 
   // Restore state from URL params on mount and when navigating back
   useEffect(() => {
@@ -272,6 +383,7 @@ export default function HomePage() {
         if (state.searchQuery) setSearchQuery(state.searchQuery);
         if (state.currentPage) setCurrentPage(state.currentPage);
         if (state.pageSize) setPageSize(state.pageSize);
+        if (state.browseAxis) setBrowseAxis(state.browseAxis);
       }
     };
 
@@ -285,10 +397,14 @@ export default function HomePage() {
       window.removeEventListener("popstate", checkAndRestore);
       window.removeEventListener("hashchange", checkAndRestore);
     };
-  }, [setCurrentPage, setPageSize, setSearchQuery, setSelectedEntities, setShowUntagged]);
+  }, [setCurrentPage, setPageSize, setSearchQuery, setSelectedEntities, setShowUntagged, setBrowseAxis]);
 
-  const defaultBrowseView = isHomeDefaultBrowseView(showUntagged, selectedEntities);
+  const defaultBrowseView = isHomeDefaultBrowseView(browseAxis, showUntagged, selectedEntities);
+  const rarityDefaultView = isRarityDefaultBrowseView(browseAxis, selectedEntities);
+  const tagsDefaultView = isTagsDefaultBrowseView(browseAxis, selectedEntities);
   const selectedTopicLabel = resolveTopicLabelFromSelection(selectedEntities, topicCatalogData);
+  const selectedRarityLabel = resolveRarityLabelFromSelection(selectedEntities);
+  const selectedTagLabel = resolveSelectedTagFromSelection(selectedEntities);
   const canExportTopicExcel =
     selectedEntities.size === 1 && !!selectedTopicLabel && totalCount > 0;
   const selectedTopicLeaf = resolveSelectedTopicLeafFromSelection(selectedEntities, topicCatalogData);
@@ -994,46 +1110,116 @@ export default function HomePage() {
   return (
     <AnalysesBrowseLayout
       sidebar={
-        !topicCatalogData ? (
-          <Card className="p-4 text-sm text-muted-foreground rounded-xl border bg-sidebar/40">
-            No storylines in catalog yet. Assign{" "}
-            <code className="text-xs">topic_categories</code> on day rows.
-          </Card>
-        ) : (
-          <TagsSidebar
-            catalogData={topicCatalogData}
-            selectedEntities={selectedEntities}
-            showUntagged={showUntagged}
-            searchQuery={searchQuery}
-            mode="inline"
-            showOverview={false}
-            onEntitySelect={(entityKey) => {
-              const newSelected = selectedEntities.has(entityKey)
-                ? new Set<string>()
-                : new Set([entityKey]);
-              setSelectedEntities(newSelected);
-              setShowUntagged(false);
-              setCurrentPage(1);
-              updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1 });
-            }}
-            onUntaggedToggle={() => {
-              const newShowUntagged = !showUntagged;
-              setShowUntagged(newShowUntagged);
-              setSelectedEntities(new Set());
-              setCurrentPage(1);
-              updateUrl({ showUntagged: newShowUntagged, selectedEntities: new Set(), currentPage: 1 });
-            }}
-            onSearchChange={(value) => {
-              setSearchQuery(value);
-              setCurrentPage(1);
-            }}
-          />
-        )
+        <div className="space-y-3">
+          <div className="flex gap-1 rounded-lg border border-border bg-muted/30 p-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={browseAxis === "topic" ? "default" : "ghost"}
+              className="flex-1 px-2"
+              onClick={() => {
+                setBrowseAxis("topic");
+                setSelectedEntities(new Set());
+                setShowUntagged(false);
+                setCurrentPage(1);
+                updateUrl({ browseAxis: "topic", selectedEntities: new Set(), showUntagged: false, currentPage: 1 });
+              }}
+            >
+              Topic
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={browseAxis === "rarity" ? "default" : "ghost"}
+              className="flex-1 px-2"
+              onClick={() => {
+                setBrowseAxis("rarity");
+                setSelectedEntities(new Set());
+                setShowUntagged(false);
+                setCurrentPage(1);
+                updateUrl({ browseAxis: "rarity", selectedEntities: new Set(), showUntagged: false, currentPage: 1 });
+              }}
+            >
+              Rarity
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={browseAxis === "tags" ? "default" : "ghost"}
+              className="flex-1 px-2"
+              onClick={() => {
+                setBrowseAxis("tags");
+                setSelectedEntities(new Set());
+                setShowUntagged(false);
+                setCurrentPage(1);
+                updateUrl({ browseAxis: "tags", selectedEntities: new Set(), showUntagged: false, currentPage: 1 });
+              }}
+            >
+              Tags
+            </Button>
+          </div>
+
+          {!activeCatalogData ? (
+            <Card className="p-4 text-sm text-muted-foreground rounded-xl border bg-sidebar/40">
+              {browseAxis === "rarity"
+                ? "No locked days with rarity yet. Assign rarity from Quality Check."
+                : browseAxis === "tags"
+                  ? "No frequent entity tags yet on locked days."
+                  : "No storylines in catalog yet. Assign topic_categories on day rows."}
+            </Card>
+          ) : (
+            <TagsSidebar
+              catalogData={activeCatalogData}
+              selectedEntities={selectedEntities}
+              showUntagged={browseAxis === "topic" ? showUntagged : false}
+              searchQuery={searchQuery}
+              mode="inline"
+              showOverview={false}
+              onEntitySelect={(entityKey) => {
+                const newSelected = selectedEntities.has(entityKey)
+                  ? new Set<string>()
+                  : new Set([entityKey]);
+                setSelectedEntities(newSelected);
+                setShowUntagged(false);
+                setCurrentPage(1);
+                updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1 });
+              }}
+              onUntaggedToggle={() => {
+                if (browseAxis !== "topic") return;
+                const newShowUntagged = !showUntagged;
+                setShowUntagged(newShowUntagged);
+                setSelectedEntities(new Set());
+                setCurrentPage(1);
+                updateUrl({ showUntagged: newShowUntagged, selectedEntities: new Set(), currentPage: 1 });
+              }}
+              onSearchChange={(value) => {
+                setSearchQuery(value);
+                setCurrentPage(1);
+              }}
+            />
+          )}
+        </div>
       }
     >
       <AnalysesBrowseTableCard>
         <AnalysesBrowseHeader
-          title={showUntagged ? "Untagged Analyses" : "Bitcoinpedia"}
+          title={
+            browseAxis === "rarity"
+              ? selectedRarityLabel
+                ? `${selectedRarityLabel} days`
+                : rarityDefaultView
+                  ? "Locked by rarity"
+                  : "Rarity browse"
+              : browseAxis === "tags"
+                ? selectedTagLabel
+                  ? `${selectedTagLabel} days`
+                  : tagsDefaultView
+                    ? "Locked by tag"
+                    : "Tags browse"
+              : showUntagged
+                ? "Untagged Analyses"
+                : "Bitcoinpedia"
+          }
           totalCount={totalCount}
           actions={
             <DropdownMenu>
@@ -1101,6 +1287,9 @@ export default function HomePage() {
         <AnalysesTable
               analyses={paginatedAnalyses}
               googleCheckSummary={googleCheckSummary}
+              metadataColumn={
+                browseAxis === "rarity" ? "rarity" : browseAxis === "tags" ? "tags" : "topic"
+              }
               isLoading={isLoading}
               selectedDates={selectedDates}
               onDateSelect={(date) => {
@@ -1122,6 +1311,7 @@ export default function HomePage() {
                   currentPage,
                   pageSize,
                   viewMode: 'topics',
+                  browseAxis,
                   sidebarMenu: 'topics',
                 };
                 const query = serializePageState(state);
@@ -1140,17 +1330,41 @@ export default function HomePage() {
               }}
               rowAnnotations={rowAnnotations}
               emptyMessage={
-                showUntagged
-                  ? "No untagged analyses found"
-                  : selectedEntities.size > 0
-                  ? "No analyses match the selected storylines"
-                  : defaultBrowseView
-                  ? debouncedSearchQuery
-                    ? "No locked analyses with a topic match your search"
-                    : "No locked analyses with a topic found"
-                  : debouncedSearchQuery
-                  ? "No analyses match your search"
-                  : "No tagged analyses found"
+                debouncedSearchQuery.trim()
+                  ? "No matching days"
+                  : browseAxis === "rarity"
+                    ? selectedRarityLabel
+                      ? `No locked days with rarity ${selectedRarityLabel}`
+                      : rarityDefaultView
+                        ? "No locked days with rarity assigned yet"
+                        : "Select a rarity"
+                    : browseAxis === "tags"
+                      ? selectedTagLabel
+                        ? `No locked days tagged ${selectedTagLabel}`
+                        : tagsDefaultView
+                          ? "No locked days with tags found"
+                          : "Select a tag"
+                      : showUntagged
+                        ? "No untagged analyses found"
+                        : selectedEntities.size > 0
+                          ? "No analyses match the selected storylines"
+                          : defaultBrowseView
+                            ? "No locked analyses with a topic found"
+                            : "No tagged analyses found"
+              }
+              emptySearchHint={
+                debouncedSearchQuery.trim()
+                  ? `Nothing matched "${debouncedSearchQuery.trim()}" in this view. Clear the search to see all results.`
+                  : null
+              }
+              onClearSearch={
+                debouncedSearchQuery.trim()
+                  ? () => {
+                      setSearchQuery("");
+                      setCurrentPage(1);
+                      updateUrl({ searchQuery: "", currentPage: 1 });
+                    }
+                  : undefined
               }
               showCheckbox={true}
               pageSize={pageSize}

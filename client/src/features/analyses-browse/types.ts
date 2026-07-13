@@ -35,6 +35,7 @@ export interface RawAnalysisRow {
   is_locked?: unknown;
   google_check_happened?: "yes" | "no" | "uncertain" | null;
   google_check_checked_at?: string | null;
+  rarity?: string | null;
 }
 
 export interface AnalysesBrowseQueryResult {

@@ -55,6 +55,7 @@ import { TagsSidebar, QualityCheckItem, type LockStatsItem } from "@/components/
 import { getCategoryColor, buildFlatEntityCatalog } from "@/utils/tagHelpers";
 import { serializePageState, deserializePageState, type HomePageState } from "@/lib/navigationState";
 import { extractTopicLabelsFromCategories } from "@/lib/topicCatalog";
+import { rarityIsInvalid, rarityIsMissing } from "@shared/rarity";
 import type { QualityCheckDateInput } from "@shared/quality-check-agent-actions";
 import { getQualityCheckAgentAction, isEmptyQualityCheckSummary } from "@shared/quality-check-agent-actions";
 import { parseIsLocked } from "@/lib/parseIsLocked";
@@ -645,6 +646,84 @@ export default function EventsManager() {
     staleTime: 1000 * 60 * 5,
   });
 
+  const { data: rarityQualityData, isLoading: rarityQualityLoading } = useQuery<{
+    lockedNoRarity: { entries: { date: string; summary: string; rarity: string | null }[]; totalCount: number };
+    lockedInvalidRarity: {
+      entries: { date: string; summary: string; rarity: string }[];
+      totalCount: number;
+    };
+  }>({
+    queryKey: ["events-manager-rarity-quality"],
+    queryFn: async () => {
+      if (!supabase) {
+        return {
+          lockedNoRarity: { entries: [], totalCount: 0 },
+          lockedInvalidRarity: { entries: [], totalCount: 0 },
+        };
+      }
+
+      let allData: {
+        date: string;
+        summary: string | null;
+        rarity: string | null;
+        is_locked: boolean | null;
+      }[] = [];
+      let from = 0;
+      const batchSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data: batchData, error: batchError } = await supabase
+          .from("historical_news_analyses")
+          .select("date, summary, rarity, is_locked")
+          .range(from, from + batchSize - 1);
+
+        if (batchError) throw batchError;
+
+        if (batchData && batchData.length > 0) {
+          allData = allData.concat(batchData);
+          from += batchSize;
+          hasMore = batchData.length === batchSize;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      const lockedNoRarityEntries: { date: string; summary: string; rarity: string | null }[] = [];
+      const lockedInvalidRarityEntries: { date: string; summary: string; rarity: string }[] = [];
+
+      for (const entry of allData) {
+        if (!parseIsLocked(entry.is_locked)) continue;
+        const summary = entry.summary || "";
+        if (rarityIsMissing(entry.rarity)) {
+          lockedNoRarityEntries.push({
+            date: entry.date,
+            summary,
+            rarity: entry.rarity,
+          });
+        } else if (rarityIsInvalid(entry.rarity)) {
+          lockedInvalidRarityEntries.push({
+            date: entry.date,
+            summary,
+            rarity: String(entry.rarity),
+          });
+        }
+      }
+
+      return {
+        lockedNoRarity: {
+          entries: lockedNoRarityEntries,
+          totalCount: lockedNoRarityEntries.length,
+        },
+        lockedInvalidRarity: {
+          entries: lockedInvalidRarityEntries,
+          totalCount: lockedInvalidRarityEntries.length,
+        },
+      };
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
   // Locked days count + entries for sidebar stats / filter view
   const { data: lockedDaysData, isLoading: lockedDaysLoading } = useQuery<{
     entries: { date: string; summary: string }[];
@@ -930,11 +1009,18 @@ export default function EventsManager() {
       qualityCheckRowHasSummary,
     ).length;
     const multiTopicCount = (topicQualityData?.multiTopic.entries || []).filter(qualityCheckRowHasSummary).length;
+    const lockedNoRarityCount = (rarityQualityData?.lockedNoRarity.entries || []).filter(
+      qualityCheckRowHasSummary,
+    ).length;
+    const lockedInvalidRarityCount = (rarityQualityData?.lockedInvalidRarity.entries || []).filter(
+      qualityCheckRowHasSummary,
+    ).length;
     const isEmptyLoading = emptySummaryLoading;
     const isUntaggedLoading = untaggedLoading;
     const isMissingMonthsLoading = missingMonthsLoading;
     const isFlaggedLoading = flaggedLoading;
     const isTopicQualityLoading = topicQualityLoading;
+    const isRarityQualityLoading = rarityQualityLoading;
     const isViolationsLoading = !qualityViolationsData && qualityLoading;
 
     // Empty summary
@@ -1014,6 +1100,22 @@ export default function EventsManager() {
       isLoading: isTopicQualityLoading,
     });
 
+    items.push({
+      id: 'locked-no-rarity',
+      label: 'Locked, no rarity',
+      count: lockedNoRarityCount,
+      hasIssues: lockedNoRarityCount > 0,
+      isLoading: isRarityQualityLoading,
+    });
+
+    items.push({
+      id: 'locked-invalid-rarity',
+      label: 'Locked, bad rarity',
+      count: lockedInvalidRarityCount,
+      hasIssues: lockedInvalidRarityCount > 0,
+      isLoading: isRarityQualityLoading,
+    });
+
     // Incomplete months
     items.push({
       id: 'missing-months',
@@ -1039,7 +1141,7 @@ export default function EventsManager() {
     }
 
     return items;
-  }, [qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, qualityLoading, emptySummaryLoading, untaggedLoading, missingMonthsLoading, flaggedLoading, topicQualityLoading]);
+  }, [qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, rarityQualityData, qualityLoading, emptySummaryLoading, untaggedLoading, missingMonthsLoading, flaggedLoading, topicQualityLoading, rarityQualityLoading]);
 
   // Build Google Check items for sidebar
   const veriBadgeItems = useMemo<QualityCheckItem[]>(() => {
@@ -1276,6 +1378,34 @@ export default function EventsManager() {
       );
     }
 
+    if (selectedQualityCheck === 'locked-no-rarity') {
+      return applyQualityCheckSummaryFilter(
+        (rarityQualityData?.lockedNoRarity.entries || []).map((entry) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: ['Locked but no collector rarity assigned'],
+          length: entry.summary?.length || 0,
+          tags_version2: null,
+          isLocked: true,
+        })),
+        selectedQualityCheck,
+      );
+    }
+
+    if (selectedQualityCheck === 'locked-invalid-rarity') {
+      return applyQualityCheckSummaryFilter(
+        (rarityQualityData?.lockedInvalidRarity.entries || []).map((entry) => ({
+          date: entry.date,
+          summary: entry.summary || '',
+          violations: [`Invalid rarity: ${entry.rarity}`],
+          length: entry.summary?.length || 0,
+          tags_version2: null,
+          isLocked: true,
+        })),
+        selectedQualityCheck,
+      );
+    }
+
     if (selectedQualityCheck === 'missing-months') {
       return (missingMonthsData?.entries || []).map((entry: any) => ({
         date: entry.date,
@@ -1297,7 +1427,7 @@ export default function EventsManager() {
     if (!type) return violations;
 
     return applyQualityCheckSummaryFilter(violations.filter(type.filterFn), selectedQualityCheck);
-  }, [selectedLocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, lockedDaysData, datesApprovedData, uncertainData, notVerifiedData, didntHappenData]);
+  }, [selectedLocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, rarityQualityData, lockedDaysData, datesApprovedData, uncertainData, notVerifiedData, didntHappenData]);
 
   const qualityCheckAgentRows = useMemo<QualityCheckDateInput[]>(() => {
     return filteredQualityViolations.map((violation) => ({
@@ -1880,6 +2010,9 @@ export default function EventsManager() {
                         selectedQualityCheck === 'locked-not-approved' ||
                         selectedQualityCheck === 'multi-topic'
                       ? topicQualityLoading
+                      : selectedQualityCheck === 'locked-no-rarity' ||
+                        selectedQualityCheck === 'locked-invalid-rarity'
+                      ? rarityQualityLoading
                       : selectedQualityCheck === 'flagged'
                       ? flaggedLoading
                       : selectedQualityCheck === 'missing-months'
