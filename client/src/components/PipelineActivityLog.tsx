@@ -60,7 +60,15 @@ export function PipelineActivityLog({
                 <span className="mt-0.5 flex w-4 justify-center">
                   <StatusGlyph status={line.status} />
                 </span>
-                <span className="min-w-0 flex-1 pt-0.5 text-foreground/90">{line.text}</span>
+                <span className="min-w-0 flex-1 pt-0.5 text-foreground/90">
+                  {line.text}
+                  {line.emphasis ? (
+                    <>
+                      {" "}
+                      <strong className="font-semibold text-foreground">{line.emphasis}</strong>
+                    </>
+                  ) : null}
+                </span>
               </motion.li>
             ))
           )}

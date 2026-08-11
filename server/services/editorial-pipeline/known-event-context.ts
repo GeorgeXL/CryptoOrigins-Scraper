@@ -9,6 +9,7 @@ import {
   manualNewsEntries,
 } from "@shared/schema";
 import { isValidPipelineTopArticleId } from "./editorial-quality";
+import { queryIfRelationExists } from "./optional-tables";
 
 export type KnownEventKind =
   | "milestone"
@@ -158,15 +159,24 @@ export async function resolveKnownEventContextBatch(
     }
   }
 
-  const milestones = await db
-    .select({
-      expectedDate: canonicalMilestones.expectedDate,
-      slug: canonicalMilestones.slug,
-      label: canonicalMilestones.label,
-      description: canonicalMilestones.description,
-    })
-    .from(canonicalMilestones)
-    .where(inArray(canonicalMilestones.expectedDate, uniqueDates));
+  const milestones = await queryIfRelationExists(
+    () =>
+      db
+        .select({
+          expectedDate: canonicalMilestones.expectedDate,
+          slug: canonicalMilestones.slug,
+          label: canonicalMilestones.label,
+          description: canonicalMilestones.description,
+        })
+        .from(canonicalMilestones)
+        .where(inArray(canonicalMilestones.expectedDate, uniqueDates)),
+    [] as {
+      expectedDate: string;
+      slug: string;
+      label: string;
+      description: string | null;
+    }[],
+  );
 
   const milestoneByDate = new Map<string, (typeof milestones)[number]>();
   for (const row of milestones) {
@@ -174,14 +184,18 @@ export async function resolveKnownEventContextBatch(
     if (ymd) milestoneByDate.set(ymd, row);
   }
 
-  const manualRows = await db
-    .select({
-      date: manualNewsEntries.date,
-      title: manualNewsEntries.title,
-      description: manualNewsEntries.description,
-    })
-    .from(manualNewsEntries)
-    .where(inArray(manualNewsEntries.date, uniqueDates));
+  const manualRows = await queryIfRelationExists(
+    () =>
+      db
+        .select({
+          date: manualNewsEntries.date,
+          title: manualNewsEntries.title,
+          description: manualNewsEntries.description,
+        })
+        .from(manualNewsEntries)
+        .where(inArray(manualNewsEntries.date, uniqueDates)),
+    [] as { date: string; title: string; description: string | null }[],
+  );
 
   const manualByDate = new Map<string, typeof manualRows>();
   for (const row of manualRows) {

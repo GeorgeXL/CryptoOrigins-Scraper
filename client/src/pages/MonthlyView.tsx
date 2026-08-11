@@ -203,7 +203,7 @@ export default function MonthlyView() {
         .select("date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked")
         .gte("date", startDate)
         .lte("date", endDate)
-        .order("date", { ascending: false })
+        .order("date", { ascending: true })
         .range((currentPage - 1) * pageSize, currentPage * pageSize - 1);
 
       if (error) throw error;

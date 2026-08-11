@@ -611,13 +611,19 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
   };
 
   if (!proposals.length) {
+    const packageNote =
+      item.package && typeof item.package === "object" && item.package !== null && "note" in item.package ?
+        String((item.package as { note?: unknown }).note ?? "")
+      : "";
+    const tagsStillEmpty = /tags are still empty|no grounded tags/i.test(packageNote);
     return (
       <div className="space-y-2">
         <p className="text-xs text-muted-foreground">
-          No safe automatic fix is available. Use the day page to edit the record, or reject this item and rerun
-          candidate selection.
+          {tagsStillEmpty ?
+            "No grounded entity tags could be inferred from this summary. Add tags on the day page, then rerun final agent."
+          : "No safe automatic fix is available. Use the day page to edit the record, or reject this item and rerun candidate selection."}
         </p>
-        {isPending ? (
+        {isPending && !tagsStillEmpty ? (
           <Button
             type="button"
             size="sm"

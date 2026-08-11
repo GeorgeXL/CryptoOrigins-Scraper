@@ -9,7 +9,11 @@ import {
   filterEditorialTagAdds,
   preferredEditorialTagDisplay,
 } from "./editorial-tag-rules";
-import { isTagGroundedInTexts } from "./tag-grounding";
+import {
+  findGroundedTaxonomyTagsMissingFromRow,
+  isTagGroundedInTexts,
+  type CanonicalTagIndex,
+} from "./tag-grounding";
 
 export type TagAgentConfidence = "high" | "medium" | "low";
 
@@ -152,4 +156,58 @@ Set reason to "" (preferred) or at most 6 words — internal only, not shown to 
       reason: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+/** Collect grounded entity tags for a row — used when tags_version2 is empty. */
+export async function collectGroundedEntityTagsForSummary(opts: {
+  date: string;
+  summary: string;
+  currentTags: string[];
+  canonicalTagIndex?: CanonicalTagIndex | null;
+  /** When true, include Tag Agent medium-confidence adds (not only high). */
+  allowMediumAgentTags?: boolean;
+}): Promise<string[]> {
+  const summary = opts.summary.trim();
+  if (!summary || isRoundupMultiStorySummary(summary)) return [];
+
+  const currentV2 = opts.currentTags.filter(Boolean);
+  const allowedAddCandidates =
+    opts.canonicalTagIndex ?
+      findGroundedTaxonomyTagsMissingFromRow({
+        texts: [summary],
+        currentTags: currentV2,
+        index: opts.canonicalTagIndex,
+        limit: 12,
+      }).filter(isEditorialEntityTagCandidate)
+    : [];
+
+  const tagAgent = await suggestTagsWithAgent({
+    date: opts.date,
+    summary,
+    tags: currentV2,
+    allowedAddCandidates,
+  });
+
+  const agentAdds =
+    tagAgent.confidence === "high" || (opts.allowMediumAgentTags !== false && tagAgent.confidence === "medium") ?
+      tagAgent.addTags
+    : [];
+
+  const heuristic: string[] = [];
+  if (/\b(bitcoin|btc)\b/i.test(summary)) heuristic.push("Bitcoin");
+
+  const taxonomy =
+    opts.canonicalTagIndex ?
+      findGroundedTaxonomyTagsMissingFromRow({
+        texts: [summary],
+        currentTags: [...currentV2, ...heuristic, ...agentAdds],
+        index: opts.canonicalTagIndex,
+        limit: 6,
+      }).filter(isEditorialEntityTagCandidate)
+    : [];
+
+  return filterEditorialTagAdds(
+    [...heuristic, ...agentAdds, ...taxonomy].filter((tag) => isTagGroundedInTexts(tag, [summary])),
+    currentV2,
+  ).slice(0, 6);
 }

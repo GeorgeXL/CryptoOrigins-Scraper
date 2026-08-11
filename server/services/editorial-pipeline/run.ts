@@ -70,6 +70,7 @@ import {
   shouldUseUnifiedExistingDayClean,
 } from "./unified-pipeline";
 import { loadCanonicalTagIndex } from "./tag-grounding";
+import { collectGroundedEntityTagsForSummary } from "./tag-agent";
 import { applyCorrectionProposals } from "./approved-writer";
 import { invalidTopicReasons } from "./topic-validation";
 
@@ -115,6 +116,35 @@ async function applyAutomaticCorrectionProposals(opts: {
     throw new Error(result.message);
   }
   return result.applied;
+}
+
+async function autoApplyGroundedTagsWhenEmpty(opts: {
+  date: string;
+  summary: string;
+  currentTags: string[];
+  canonicalTagIndex: Awaited<ReturnType<typeof loadCanonicalTagIndex>>;
+}): Promise<string[]> {
+  if (normalizedTagsFromRow(opts.currentTags).length > 0) return [];
+
+  const grounded = await collectGroundedEntityTagsForSummary({
+    date: opts.date,
+    summary: opts.summary,
+    currentTags: opts.currentTags,
+    canonicalTagIndex: opts.canonicalTagIndex,
+    allowMediumAgentTags: true,
+  });
+  if (grounded.length === 0) return [];
+
+  const proposal: CorrectionProposal = {
+    id: `${opts.date}:add_grounded_tags_auto`,
+    kind: "add_grounded_tags",
+    proposedAdd: grounded,
+    rationale: `Auto-assigned grounded entity tag(s): ${grounded.join(", ")}`,
+  };
+  return applyAutomaticCorrectionProposals({
+    date: opts.date,
+    proposals: [proposal],
+  });
 }
 
 type StartOpts = {
@@ -1639,7 +1669,16 @@ async function runV3ExistingDayChecks(opts: {
 
   if (autoApplied.length > 0) {
     const [freshRow] = await db
-      .select({ topicCategories: historicalNewsAnalyses.topicCategories })
+      .select({
+        summary: historicalNewsAnalyses.summary,
+        tagsVersion2: historicalNewsAnalyses.tagsVersion2,
+        topicCategories: historicalNewsAnalyses.topicCategories,
+        topArticleId: historicalNewsAnalyses.topArticleId,
+        isFlagged: historicalNewsAnalyses.isFlagged,
+        suppressedTagSuggestions: historicalNewsAnalyses.suppressedTagSuggestions,
+        tieredArticles: historicalNewsAnalyses.tieredArticles,
+        analyzedArticles: historicalNewsAnalyses.analyzedArticles,
+      })
       .from(historicalNewsAnalyses)
       .where(eq(historicalNewsAnalyses.date, triage.date))
       .limit(1);
@@ -1653,15 +1692,15 @@ async function runV3ExistingDayChecks(opts: {
         await buildCorrectionProposalsAsync(
           {
             date: triage.date,
-            summary: row.summary,
-            topArticleId: row.topArticleId,
-            isFlagged: row.isFlagged,
-            tagsVersion2: row.tagsVersion2,
+            summary: freshRow?.summary ?? row.summary,
+            topArticleId: freshRow?.topArticleId ?? row.topArticleId,
+            isFlagged: freshRow?.isFlagged ?? row.isFlagged,
+            tagsVersion2: freshRow?.tagsVersion2 ?? row.tagsVersion2,
             topicCategories: freshRow?.topicCategories ?? row.topicCategories,
             legacyTags: null,
             articleText,
             canonicalTagIndex,
-            suppressedGroundedTags: row.suppressedTagSuggestions,
+            suppressedGroundedTags: freshRow?.suppressedTagSuggestions ?? row.suppressedTagSuggestions,
           },
           { neighborHints: neighborHintsFromDuplicateContext(duplicateCtx) },
         )
@@ -1702,6 +1741,160 @@ async function runV3ExistingDayChecks(opts: {
         reviewedAt: null,
       });
       return { nextStepIndex: stepIndex, autoApproved: false };
+    }
+
+    // Summary auto-fixes used to auto-approve immediately and skip empty tags.
+    // Re-infer tags from the fresh summary; never approve an untagged day.
+    if (checkScopes.has("tags") && normalizedTagsFromRow(freshRow?.tagsVersion2).length === 0) {
+      const freshArticleText = collectArticleTextForGrounding(
+        freshRow?.tieredArticles ?? row.tieredArticles,
+        freshRow?.analyzedArticles ?? row.analyzedArticles,
+      );
+      const followUpTagProposals = (
+        await buildScopedCorrectionProposals({
+          input: {
+            date: triage.date,
+            summary: freshRow?.summary ?? row.summary,
+            topArticleId: freshRow?.topArticleId ?? row.topArticleId,
+            isFlagged: freshRow?.isFlagged ?? row.isFlagged,
+            tagsVersion2: freshRow?.tagsVersion2 ?? [],
+            topicCategories: freshRow?.topicCategories ?? row.topicCategories,
+            legacyTags: null,
+            articleText: freshArticleText,
+            canonicalTagIndex,
+            suppressedGroundedTags: freshRow?.suppressedTagSuggestions ?? row.suppressedTagSuggestions,
+          },
+          neighborHints: neighborHintsFromDuplicateContext(duplicateCtx),
+          checkScopes,
+        })
+      ).filter(
+        (proposal) =>
+          proposal.kind === "add_grounded_tags" ||
+          proposal.kind === "drop_ungrounded_tags" ||
+          proposal.kind === "merge_redundant_tags" ||
+          proposal.kind === "promote_v1_to_v2_tags",
+      );
+      const { automatic: followAutoTags, manual: followManualTags } =
+        splitAutomaticCorrectionProposals(followUpTagProposals);
+      if (followAutoTags.length > 0) {
+        await applyAutomaticCorrectionProposals({
+          date: triage.date,
+          proposals: followAutoTags,
+        });
+      }
+      const [tagsAfterFollowUp] = await db
+        .select({ tagsVersion2: historicalNewsAnalyses.tagsVersion2 })
+        .from(historicalNewsAnalyses)
+        .where(eq(historicalNewsAnalyses.date, triage.date))
+        .limit(1);
+
+      if (followManualTags.length > 0) {
+        const correctionPkg: CorrectionApprovalPackage = {
+          phase: "awaiting_correction_approval",
+          triage,
+          proposals: followManualTags,
+          note: `Auto-applied ${automaticProposals.length} safe fix(es). Review suggested tag(s) below — day is still untagged until you accept.`,
+        };
+        const stepId = await createStep({
+          runId,
+          stepIndex,
+          agentName: "TagManagerAgent",
+          status: "completed",
+          confidence: 0.8,
+          input: { date: triage.date, route: triage.route },
+          output: buildStepOutput({
+            summary: `Auto-applied ${automaticProposals.length} safe correction(s); ${followManualTags.length} tag proposal(s) need review.`,
+            findings: [
+              ...automaticProposals.map((p) => `auto:${p.kind}`),
+              ...followManualTags.map((p) => `${p.kind}`),
+            ],
+          }),
+          evidence: {
+            autoAppliedCorrections: automaticProposals.map((p) => p.kind),
+            followUpTagProposals: followManualTags.map((p) => p.kind),
+          },
+        });
+        stepIndex += 1;
+
+        await db.insert(humanReviewQueue).values({
+          runId,
+          stepId,
+          status: "pending",
+          priority: 74,
+          eventDate: triage.date,
+          package: correctionPkg,
+          reviewer: null,
+          reviewedAt: null,
+        });
+        return { nextStepIndex: stepIndex, autoApproved: false };
+      }
+
+      if (normalizedTagsFromRow(tagsAfterFollowUp?.tagsVersion2).length === 0) {
+        const tagAutoApplied = await autoApplyGroundedTagsWhenEmpty({
+          date: triage.date,
+          summary: freshRow?.summary ?? row.summary,
+          currentTags: normalizedTagsFromRow(tagsAfterFollowUp?.tagsVersion2),
+          canonicalTagIndex,
+        });
+        if (tagAutoApplied.length > 0) {
+          const [tagsAfterAuto] = await db
+            .select({ tagsVersion2: historicalNewsAnalyses.tagsVersion2 })
+            .from(historicalNewsAnalyses)
+            .where(eq(historicalNewsAnalyses.date, triage.date))
+            .limit(1);
+          if (normalizedTagsFromRow(tagsAfterAuto?.tagsVersion2).length > 0) {
+            await createStep({
+              runId,
+              stepIndex,
+              agentName: "TagManagerAgent",
+              status: "approved",
+              confidence: 0.88,
+              input: { date: triage.date, route: triage.route },
+              output: buildStepOutput({
+                summary: `Auto-assigned grounded tags after summary fix: ${tagAutoApplied.join("; ")}`,
+                findings: tagAutoApplied,
+              }),
+            });
+            stepIndex += 1;
+            return { nextStepIndex: stepIndex, autoApproved: true };
+          }
+        }
+
+        const correctionPkg: CorrectionApprovalPackage = {
+          phase: "awaiting_correction_approval",
+          triage,
+          proposals: [],
+          note: `Auto-applied ${automaticProposals.length} safe fix(es), but tags are still empty. Add tags on the day page — Google Check will not run until tags exist.`,
+        };
+        const stepId = await createStep({
+          runId,
+          stepIndex,
+          agentName: "TagManagerAgent",
+          status: "completed",
+          confidence: 0.55,
+          input: { date: triage.date, route: triage.route },
+          output: buildStepOutput({
+            summary: `Approved summary fixes, but tags_version2 is still empty`,
+            findings: [...automaticProposals.map((p) => `auto:${p.kind}`), "tags_version2 is empty"],
+          }),
+          evidence: {
+            autoAppliedCorrections: automaticProposals.map((p) => p.kind),
+          },
+        });
+        stepIndex += 1;
+
+        await db.insert(humanReviewQueue).values({
+          runId,
+          stepId,
+          status: "pending",
+          priority: 72,
+          eventDate: triage.date,
+          package: correctionPkg,
+          reviewer: null,
+          reviewedAt: null,
+        });
+        return { nextStepIndex: stepIndex, autoApproved: false };
+      }
     }
 
     await createStep({
@@ -1772,11 +1965,34 @@ async function runV3ExistingDayChecks(opts: {
     normalizedTagsFromRow(row.tagsVersion2).length === 0 &&
     proposals.filter((proposal) => proposalMatchesCheckScopes(proposal, checkScopes)).length === 0
   ) {
+    const tagAutoApplied = await autoApplyGroundedTagsWhenEmpty({
+      date: triage.date,
+      summary: row.summary,
+      currentTags: normalizedTagsFromRow(row.tagsVersion2),
+      canonicalTagIndex,
+    });
+    if (tagAutoApplied.length > 0) {
+      await createStep({
+        runId,
+        stepIndex,
+        agentName: "TagManagerAgent",
+        status: "approved",
+        confidence: 0.88,
+        input: { date: triage.date, route: triage.route },
+        output: buildStepOutput({
+          summary: `Auto-assigned grounded tags: ${tagAutoApplied.join("; ")}`,
+          findings: tagAutoApplied,
+        }),
+      });
+      stepIndex += 1;
+      return { nextStepIndex: stepIndex, autoApproved: true };
+    }
+
     const correctionPkg: CorrectionApprovalPackage = {
       phase: "awaiting_correction_approval",
       triage,
       proposals: [],
-      note: "Tag Agent found no grounded tags to add for this summary. Review manually or reject.",
+      note: "Tag Agent found no grounded tags to add for this summary. Add tags on the day page — Google Check will not run until tags exist.",
     };
     const stepId = await createStep({
       runId,

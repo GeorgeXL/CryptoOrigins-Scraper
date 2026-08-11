@@ -5,6 +5,7 @@ import type { TieredArticles } from "@shared/schema";
 import type { TriageItem } from "./contracts";
 import { triageItemSchema } from "./contracts";
 import { evaluateSummaryQuality, isValidPipelineTopArticleId } from "./editorial-quality";
+import { queryIfRelationExists } from "./optional-tables";
 import { invalidTopicReasons } from "./topic-validation";
 
 function isoDateRange(from: string, to: string): string[] {
@@ -226,15 +227,23 @@ export async function retriageSingleExistingDate(date: string): Promise<TriageIt
   const tagLinkCount = Array.isArray(existing.tagsVersion2)
     ? existing.tagsVersion2.filter((x) => typeof x === "string" && x.trim().length > 0).length
     : 0;
-  const [manualRow] = await db
-    .select({ n: count() })
-    .from(manualNewsEntries)
-    .where(eq(manualNewsEntries.date, date));
-  const [milestoneRow] = await db
-    .select({ label: canonicalMilestones.label })
-    .from(canonicalMilestones)
-    .where(eq(canonicalMilestones.expectedDate, date))
-    .limit(1);
+  const manualRows = await queryIfRelationExists(
+    () =>
+      db
+        .select({ n: count() })
+        .from(manualNewsEntries)
+        .where(eq(manualNewsEntries.date, date)),
+    [] as { n: number | string }[],
+  );
+  const milestoneRows = await queryIfRelationExists(
+    () =>
+      db
+        .select({ label: canonicalMilestones.label })
+        .from(canonicalMilestones)
+        .where(eq(canonicalMilestones.expectedDate, date))
+        .limit(1),
+    [] as { label: string }[],
+  );
 
   return triageExistingDay({
     date,
@@ -247,8 +256,8 @@ export async function retriageSingleExistingDate(date: string): Promise<TriageIt
     tagsVersion2: existing.tagsVersion2,
     topicCategories: existing.topicCategories,
     tagLinkCount,
-    manualEntryCount: Number(manualRow?.n ?? 0),
-    milestoneLabel: milestoneRow?.label ?? null,
+    manualEntryCount: Number(manualRows[0]?.n ?? 0),
+    milestoneLabel: milestoneRows[0]?.label ?? null,
   });
 }
 
@@ -284,29 +293,37 @@ export async function triageRange(opts: {
   const milestoneLabelByDate = new Map<string, string>();
   if (rows.length) {
     const dates = rows.map((r) => r.date);
-    const manualAgg = await db
-      .select({
-        date: manualNewsEntries.date,
-        n: count(),
-      })
-      .from(manualNewsEntries)
-      .where(inArray(manualNewsEntries.date, dates))
-      .groupBy(manualNewsEntries.date);
+    const manualAgg = await queryIfRelationExists(
+      () =>
+        db
+          .select({
+            date: manualNewsEntries.date,
+            n: count(),
+          })
+          .from(manualNewsEntries)
+          .where(inArray(manualNewsEntries.date, dates))
+          .groupBy(manualNewsEntries.date),
+      [] as { date: string; n: number | string }[],
+    );
     for (const row of manualAgg) {
       manualCountByDate.set(row.date, Number(row.n));
     }
-    const milestones = await db
-      .select({
-        expectedDate: canonicalMilestones.expectedDate,
-        label: canonicalMilestones.label,
-      })
-      .from(canonicalMilestones)
-      .where(
-        and(
-          gte(canonicalMilestones.expectedDate, opts.dateFrom),
-          lte(canonicalMilestones.expectedDate, opts.dateTo),
-        ),
-      );
+    const milestones = await queryIfRelationExists(
+      () =>
+        db
+          .select({
+            expectedDate: canonicalMilestones.expectedDate,
+            label: canonicalMilestones.label,
+          })
+          .from(canonicalMilestones)
+          .where(
+            and(
+              gte(canonicalMilestones.expectedDate, opts.dateFrom),
+              lte(canonicalMilestones.expectedDate, opts.dateTo),
+            ),
+          ),
+      [] as { expectedDate: string; label: string }[],
+    );
     for (const ms of milestones) {
       milestoneLabelByDate.set(ms.expectedDate, ms.label);
     }

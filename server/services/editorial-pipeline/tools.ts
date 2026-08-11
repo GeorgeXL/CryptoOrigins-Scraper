@@ -2,6 +2,7 @@ import { and, count, eq, gte, lte, ne } from "drizzle-orm";
 import { db } from "../../db";
 import { canonicalMilestones, historicalNewsAnalyses } from "@shared/schema";
 import { NewsAnalyzerService } from "../news-analyzer";
+import { queryIfRelationExists } from "./optional-tables";
 
 const newsAnalyzer = new NewsAnalyzerService();
 
@@ -533,10 +534,14 @@ export async function getTagCoverageForDate(date: string): Promise<{
 }
 
 export async function listCanonicalMilestonesInRange(dateFrom: string, dateTo: string) {
-  return db
-    .select()
-    .from(canonicalMilestones)
-    .where(and(eq(canonicalMilestones.category, "bitcoin-history")));
+  return queryIfRelationExists(
+    () =>
+      db
+        .select()
+        .from(canonicalMilestones)
+        .where(and(eq(canonicalMilestones.category, "bitcoin-history"))),
+    [],
+  );
 }
 
 // Wrapper around existing mature search/analyze pipeline (preserved path).

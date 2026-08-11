@@ -277,7 +277,7 @@ export type ReviewQueuePage = {
 
 export async function fetchReviewQueue(
   status: "pending" | "approved" | "rejected" | "all",
-  opts?: { limit?: number; offset?: number; phase?: string },
+  opts?: { limit?: number; offset?: number; phase?: string; eventDate?: string },
 ): Promise<ReviewQueuePage> {
   const limit = opts?.limit ?? 50;
   const offset = opts?.offset ?? 0;
@@ -288,6 +288,9 @@ export async function fetchReviewQueue(
   });
   if (opts?.phase && opts.phase !== "all") {
     params.set("phase", opts.phase);
+  }
+  if (opts?.eventDate) {
+    params.set("eventDate", opts.eventDate);
   }
   const res = await fetch(`/api/agent/pipeline/review?${params.toString()}`, {
     headers: jsonHeaders,

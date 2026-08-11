@@ -41,7 +41,6 @@ import {
   Copy,
   Bot,
   Loader2,
-  FileSpreadsheet,
   FileText,
   RefreshCw,
   StopCircle,
@@ -84,7 +83,6 @@ import {
 } from "@/lib/tagCatalog";
 import { isValidRarity } from "@shared/rarity";
 import { fetchAllSupabaseRows } from "@/lib/supabaseBatch";
-import { downloadSummariesExcel } from "@/lib/exportSummariesExcel";
 import { PerplexityIcon } from "@/components/PerplexityIcon";
 import { analysisHasStorylineTopic } from "@shared/storyline-topic-eligibility";
 import {
@@ -413,7 +411,6 @@ export default function HomePage() {
   // New state for the copy dialog
   const [showCopyDialog, setShowCopyDialog] = useState(false);
   const [textToCopy, setTextToCopy] = useState("");
-  const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [rowAnnotations, setRowAnnotations] = useState<Record<string, AnalysisRowAnnotation>>({});
   const [storylineFitRunning, setStorylineFitRunning] = useState(false);
   const [googleCheckRunning, setGoogleCheckRunning] = useState(false);
@@ -640,54 +637,6 @@ export default function HomePage() {
   };
 
   // Copy all filtered results to clipboard as TXT
-  const handleDownloadExcel = async () => {
-    if (!canExportTopicExcel || !selectedTopicLabel) {
-      toast({
-        title: "Select one topic",
-        description: "Choose a single storyline in the sidebar to export.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsExportingExcel(true);
-    try {
-      const analyses = await fetchAllFilteredRows();
-      if (analyses.length === 0) {
-        toast({
-          title: "Nothing to export",
-          description: "No analyses match the current topic filter.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      downloadSummariesExcel(
-        analyses.map((analysis) => ({
-          date: analysis.date,
-          summary: analysis.summary ?? "",
-          tags: Array.isArray(analysis.tags_version2) ? analysis.tags_version2.join(", ") : "",
-          topic: selectedTopicLabel,
-        })),
-        selectedTopicLabel,
-      );
-
-      toast({
-        title: "Download started",
-        description: `Exported ${analyses.length.toLocaleString()} summaries to ${selectedTopicLabel}.xlsx`,
-      });
-    } catch (error) {
-      console.error("Excel export error:", error);
-      toast({
-        title: "Export failed",
-        description: error instanceof Error ? error.message : "Failed to export summaries",
-        variant: "destructive",
-      });
-    } finally {
-      setIsExportingExcel(false);
-    }
-  };
-
   const handleCopyToClipboard = async () => {
     try {
       // If selecting all matching (potentially huge), don't allow copy or warn
@@ -1235,18 +1184,6 @@ export default function HomePage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuItem
-                  onClick={handleDownloadExcel}
-                  disabled={!canExportTopicExcel || isExportingExcel}
-                  data-testid="button-download-excel"
-                >
-                  {isExportingExcel ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  ) : (
-                    <FileSpreadsheet className="w-4 h-4 mr-2" />
-                  )}
-                  Download Excel
-                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={handleCopyToClipboard}
                   disabled={selectAllMatching || selectedDates.size > 50}

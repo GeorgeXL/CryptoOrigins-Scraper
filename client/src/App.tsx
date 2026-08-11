@@ -14,7 +14,6 @@ import IsolatedLab from "@/pages/IsolatedLab";
 import Admin from "@/pages/Admin";
 import AdminAgentsV2Page from "@/pages/AdminAgentsV2Page";
 import EventsManager from "@/pages/EventsManager";
-import MainEventsCheckPage from "@/pages/MainEventsCheckPage";
 import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
 import AppLayout from "@/components/AppLayout";
@@ -28,7 +27,6 @@ function Router() {
         <Route path="/month/:year/:month" component={MonthView} />
         <Route path="/day/:date" component={DayAnalysis} />
         <Route path="/events-manager" component={EventsManager} />
-        <Route path="/main-events-check" component={MainEventsCheckPage} />
         <Route path="/settings" component={Settings} />
         <Route path="/admin/agents/agent" component={AdminAgentsV2Page} />
         <Route path="/admin/agents/metrics" component={AdminAgentsV2Page} />

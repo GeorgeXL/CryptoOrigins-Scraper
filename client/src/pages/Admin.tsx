@@ -2,8 +2,7 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import CSVImportDialog from "@/components/CSVImportDialog";
-import { Upload, Loader2, Download, FileText, Database, CheckCircle2 } from "lucide-react";
+import { Loader2, Download, FileText, Database, CheckCircle2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 
@@ -325,32 +324,11 @@ export default function Admin() {
       <div>
         <h1 className="text-3xl font-bold text-foreground">Admin</h1>
         <p className="text-muted-foreground mt-1">
-          Manage data imports and system administration
+          Manage data exports and system administration
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Data Import Section */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Upload className="w-5 h-5" />
-              <CardTitle>Import Bitcoin Events</CardTitle>
-            </div>
-            <CardDescription>
-              Upload CSV files to import Bitcoin news events into the database
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <CSVImportDialog buttonVariant="default" buttonSize="default" showLabel={true} />
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Upload a CSV file with Bitcoin events. The file should have two columns: Date (YYYY-MM-DD format) and Summary.
-            </p>
-          </CardContent>
-        </Card>
-
         {/* Data Export Section */}
         <Card>
           <CardHeader>

@@ -675,6 +675,11 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
     const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 100);
     const offset = Math.max(0, Number(req.query.offset) || 0);
     const phaseParam = typeof req.query.phase === "string" ? req.query.phase.trim() : "";
+    const eventDateParam =
+      typeof req.query.eventDate === "string" ? req.query.eventDate.trim() : "";
+    if (eventDateParam && !isIsoDate(eventDateParam)) {
+      return res.status(400).json({ error: "Invalid eventDate (YYYY-MM-DD)" });
+    }
     const scenarioPhase: ReviewQueueScenarioPhase | null =
       phaseParam && phaseParam !== "all" ?
         (phaseParam as ReviewQueueScenarioPhase)
@@ -698,6 +703,7 @@ router.get("/api/agent/pipeline/review", async (req, res) => {
     const whereParts = [];
     if (statusFilter) whereParts.push(eq(humanReviewQueue.status, statusFilter));
     if (scenarioPhase) whereParts.push(reviewQueuePhaseWhere(scenarioPhase));
+    if (eventDateParam) whereParts.push(eq(humanReviewQueue.eventDate, eventDateParam));
     const queueWhere = whereParts.length === 0 ? undefined : whereParts.length === 1 ? whereParts[0] : and(...whereParts);
 
     const [countRow] = await db

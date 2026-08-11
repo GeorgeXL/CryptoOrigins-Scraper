@@ -34,6 +34,7 @@ export interface QualityCheckItem {
 
 export interface LockStatsItem {
   lockedCount: number;
+  unlockedCount: number;
   totalCount: number;
   isLoading?: boolean;
 }
@@ -79,6 +80,8 @@ interface TagsSidebarProps {
   lockStats?: LockStatsItem;
   selectedLocked?: boolean;
   onLockedSelect?: () => void;
+  selectedUnlocked?: boolean;
+  onUnlockedSelect?: () => void;
 }
 
 export function TagsSidebar({
@@ -103,9 +106,13 @@ export function TagsSidebar({
   lockStats,
   selectedLocked,
   onLockedSelect,
+  selectedUnlocked,
+  onUnlockedSelect,
 }: TagsSidebarProps) {
   const activeSidebarButtonClass =
-    "data-[active=true]:bg-white data-[active=true]:text-black data-[active=true]:[&_[data-sidebar=menu-badge]]:!text-black";
+    "data-[active=true]:bg-white data-[active=true]:text-black";
+  // Keep count chips dark + white even when the row is active (shadcn badge uses text-inherit on active).
+  const countBadgeClass = "bg-zinc-800 !text-white tabular-nums group-data-[active=true]/menu-button:!bg-zinc-800 group-data-[active=true]/menu-button:!text-white";
 
   const memoizedCatalog = useMemo(() => {
     if (!catalogData) return null;
@@ -185,7 +192,10 @@ export function TagsSidebar({
   const isInline = mode === "inline";
 
   return (
-    <Sidebar collapsible={isInline ? "none" : undefined} className={isInline ? "rounded-xl bg-sidebar/40" : undefined}>
+    <Sidebar
+      collapsible={isInline ? "none" : undefined}
+      className={isInline ? "!w-full rounded-xl bg-sidebar/40" : undefined}
+    >
       <SidebarHeader className="pt-0">
         {showSearch && (
           <SidebarGroup className="py-0 px-2">
@@ -277,7 +287,7 @@ export function TagsSidebar({
 
         {lockStats && (
           <SidebarGroup>
-            <SidebarGroupLabel>Locked</SidebarGroupLabel>
+            <SidebarGroupLabel>Lock status</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
@@ -292,11 +302,32 @@ export function TagsSidebar({
                     }
                   >
                     <span className="truncate">Days locked</span>
-                    <SidebarMenuBadge className="bg-muted text-muted-foreground tabular-nums">
+                    <SidebarMenuBadge className={countBadgeClass}>
                       {lockStats.isLoading ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
                       ) : (
                         `${lockStats.lockedCount.toLocaleString()} / ${lockStats.totalCount.toLocaleString()}`
+                      )}
+                    </SidebarMenuBadge>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    onClick={() => onUnlockedSelect?.()}
+                    isActive={selectedUnlocked}
+                    className={activeSidebarButtonClass}
+                    tooltip={
+                      lockStats.isLoading
+                        ? "Loading..."
+                        : `${lockStats.unlockedCount.toLocaleString()} unlocked of ${lockStats.totalCount.toLocaleString()} days`
+                    }
+                  >
+                    <span className="truncate">Days unlocked</span>
+                    <SidebarMenuBadge className={countBadgeClass}>
+                      {lockStats.isLoading ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        `${lockStats.unlockedCount.toLocaleString()} / ${lockStats.totalCount.toLocaleString()}`
                       )}
                     </SidebarMenuBadge>
                   </SidebarMenuButton>
@@ -327,7 +358,7 @@ export function TagsSidebar({
                         )}
                       </span>
                       {!item.isLoading && (
-                        <SidebarMenuBadge className="bg-muted text-muted-foreground">
+                        <SidebarMenuBadge className={countBadgeClass}>
                           {item.count}
                         </SidebarMenuBadge>
                       )}

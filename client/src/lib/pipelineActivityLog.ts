@@ -2,7 +2,7 @@ import type { PipelineRunDetail } from "@/lib/editorial-pipeline";
 
 export type LogStatus = "pending" | "approved" | "rejected" | "review";
 
-export type LogLine = { id: string; text: string; status: LogStatus };
+export type LogLine = { id: string; text: string; status: LogStatus; emphasis?: string };
 
 function stepToLogStatus(status: string): LogStatus {
   if (status === "completed" || status === "skipped" || status === "approved") return "approved";
@@ -199,7 +199,9 @@ export function logLinesEqual(a: LogLine[], b: LogLine[]): boolean {
   for (let i = 0; i < a.length; i++) {
     const x = a[i];
     const y = b[i];
-    if (!y || x.id !== y.id || x.text !== y.text || x.status !== y.status) return false;
+    if (!y || x.id !== y.id || x.text !== y.text || x.status !== y.status || x.emphasis !== y.emphasis) {
+      return false;
+    }
   }
   return true;
 }

@@ -795,21 +795,35 @@ function parsePerplexityDate(dateText: string | null): string | null {
       } else {
         console.log(`🔄 [${requestId}] Force reanalysis requested, skipping database check...`);
         
-        // Clear existing tags when re-analyzing
+        // Wipe prior day state so Manual / Google Check / topic / rarity / tags cannot stick.
         try {
           const existingAnalysis = await storage.getAnalysisByDate(date);
           if (existingAnalysis) {
-            console.log(`🏷️ [${requestId}] Clearing existing tags for ${date}...`);
-            
-            // Clear tags_version2 array and old tags JSONB field
+            console.log(`🧹 [${requestId}] Clearing prior day state for ${date}...`);
             await storage.updateAnalysis(date, {
-              tagsVersion2: []
-            });
-            
-            console.log(`✅ [${requestId}] Tags cleared for ${date}`);
+              summary: "",
+              topArticleId: "none",
+              reasoning: "Analyse Day in progress — previous day state cleared",
+              isManualOverride: false,
+              isFlagged: false,
+              flaggedAt: null,
+              topicCategories: [],
+              tagsVersion2: [],
+              suppressedTagSuggestions: [],
+              googleCheckHappened: null,
+              googleCheckCheckedAt: null,
+              rarity: null,
+              winningTier: "none",
+              tierUsed: null,
+              articleTags: null,
+              tieredArticles: { bitcoin: [], crypto: [], macro: [] },
+              analyzedArticles: [],
+            } as Partial<InsertHistoricalNewsAnalysis>);
+            await syncStorylineAssignmentsForDate(date, []);
+            console.log(`✅ [${requestId}] Prior day state cleared for ${date}`);
           }
-        } catch (tagClearError) {
-          console.warn(`⚠️ [${requestId}] Failed to clear tags, continuing anyway:`, tagClearError);
+        } catch (clearError) {
+          console.warn(`⚠️ [${requestId}] Failed to clear prior day state, continuing anyway:`, clearError);
         }
       }
 
@@ -905,15 +919,25 @@ function parsePerplexityDate(dateText: string | null): string | null {
           }
         });
         try {
-          // Save the analysis state with articles but no summary yet
+          // Save the analysis state with articles but no summary yet.
+          // Keep editorial fields wiped so prior Manual / Google Check / rarity cannot stick.
           const initialAnalysisData: Partial<InsertHistoricalNewsAnalysis> = {
             summary: '',
             topArticleId: 'none',
             reasoning: analysisResult.reasoning,
             winningTier: 'none',
+            tierUsed: null,
             tieredArticles: tieredArticles,
             topicCategories: [],
-          };
+            tagsVersion2: [],
+            suppressedTagSuggestions: [],
+            isManualOverride: false,
+            isFlagged: false,
+            flaggedAt: null,
+            googleCheckHappened: null,
+            googleCheckCheckedAt: null,
+            rarity: null,
+          } as Partial<InsertHistoricalNewsAnalysis>;
           
           const existingAnalysis = await storage.getAnalysisByDate(date);
           if (existingAnalysis) {
@@ -921,6 +945,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
           } else {
             await storage.createAnalysis(initialAnalysisData as any);
           }
+          await syncStorylineAssignmentsForDate(date, []);
           
           console.log(`✅ [${requestId}] Analysis state saved, returning selection data`);
         } catch (dbError) {
@@ -957,9 +982,17 @@ function parsePerplexityDate(dateText: string | null): string | null {
         summary: analysisResult.summary || '',
         topArticleId: analysisResult.topArticleId || 'none',
         isManualOverride: false,
+        isFlagged: false,
+        flaggedAt: null,
         reasoning: analysisResult.reasoning || 'Analysis completed with no summary generated.',
         topicCategories: analysisResult.topicCategories || [],
+        tagsVersion2: [],
+        suppressedTagSuggestions: [],
+        googleCheckHappened: null,
+        googleCheckCheckedAt: null,
+        rarity: null,
         winningTier: analysisResult.winningTier || 'none',
+        tierUsed: analysisResult.winningTier || 'none',
         tieredArticles: finalTieredArticles,
         analyzedArticles: [
           ...(finalTieredArticles?.bitcoin || []),
@@ -983,7 +1016,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
             analyzedArticles: [],
           },
         },
-      };
+      } as InsertHistoricalNewsAnalysis;
 
       // Try to save to database (even if analysis failed, save what we have)
       try {
@@ -999,6 +1032,10 @@ function parsePerplexityDate(dateText: string | null): string | null {
         } else {
           await storage.createAnalysis(analysisData);
         }
+        const topicLabels = Array.isArray(analysisData.topicCategories)
+          ? analysisData.topicCategories.filter((t): t is string => typeof t === "string")
+          : [];
+        await syncStorylineAssignmentsForDate(date, topicLabels);
         console.log(`✅ [${requestId}] Analysis saved to database successfully`);
       } catch (dbError) {
         console.error(`💥 [${requestId}] Failed to save to database:`, dbError);
@@ -1184,15 +1221,24 @@ function parsePerplexityDate(dateText: string | null): string | null {
       
       console.log(`   ✅ Summary generated: "${summaryResult.summary.substring(0, 60)}..." (${summaryResult.summary.length} chars)`);
       
-      // Update analysis with new summary, mark as orphan
+      // Update analysis with new summary from Exa/candidate pick — not a Manual entry.
       const updateData: Partial<InsertHistoricalNewsAnalysis> = {
         summary: summaryResult.summary,
         topArticleId: articleId,
-        reasoning: `Manually selected article from ${winningTier} tier`,
+        reasoning: `Operator-selected article from ${winningTier} tier`,
+        isManualOverride: false,
+        isFlagged: false,
+        flaggedAt: null,
+        tagsVersion2: [],
+        suppressedTagSuggestions: [],
+        rarity: null,
         topicCategories: summaryResult.topicCategories,
         winningTier: winningTier,
-        tieredArticles: tieredArticles
-      };
+        tierUsed: winningTier,
+        tieredArticles: tieredArticles,
+        googleCheckHappened: null,
+        googleCheckCheckedAt: null,
+      } as Partial<InsertHistoricalNewsAnalysis>;
       
       await storage.updateAnalysis(date, updateData);
       
@@ -1271,20 +1317,28 @@ function parsePerplexityDate(dateText: string | null): string | null {
       
       console.log(`   ✅ Summary generated: "${summaryResult.summary.substring(0, 60)}..." (${summaryResult.summary.length} chars)`);
       
-      // Update analysis with new summary
-      // Exclude agentCreated and other fields that might not exist in the database
+      // Update analysis with new summary.
+      // Operator picked from the Exa/candidate pool — never a typed Manual entry.
+      // Always clear isManualOverride so orphan/multiple selection cannot leave a stale Manual source badge.
       const updateData: Partial<InsertHistoricalNewsAnalysis> = {
         summary: summaryResult.summary,
         topArticleId: articleId,
         reasoning: selectionMode === 'orphan' 
-          ? `Manually selected article from ${winningTier} tier (no intersection found)`
+          ? `Operator-selected article from ${winningTier} tier (no intersection found)`
           : `User confirmed selection from ${winningTier} tier (multiple matches)`,
+        isManualOverride: false,
+        isFlagged: false,
+        flaggedAt: null,
+        tagsVersion2: [],
+        suppressedTagSuggestions: [],
+        rarity: null,
         topicCategories: summaryResult.topicCategories,
         winningTier: winningTier,
+        tierUsed: winningTier,
         tieredArticles: tieredArticles,
         googleCheckHappened: selectionMode === 'orphan' ? 'uncertain' : 'yes',
         googleCheckCheckedAt: new Date(),
-      };
+      } as Partial<InsertHistoricalNewsAnalysis>;
       
       // Remove any undefined values and exclude agentCreated
       const cleanUpdateData = Object.fromEntries(

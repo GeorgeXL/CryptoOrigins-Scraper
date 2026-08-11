@@ -1,6 +1,7 @@
 import { and, eq, gte, lte } from "drizzle-orm";
 import { db } from "../../db";
 import { canonicalMilestones, historicalNewsAnalyses } from "@shared/schema";
+import { queryIfRelationExists } from "./optional-tables";
 
 export type MilestoneGap = {
   milestoneId: string;
@@ -12,10 +13,14 @@ export type MilestoneGap = {
 };
 
 export async function detectMilestoneGapsInWindow(dateFrom: string, dateTo: string): Promise<MilestoneGap[]> {
-  const milestones = await db
-    .select()
-    .from(canonicalMilestones)
-    .where(and(gte(canonicalMilestones.expectedDate, dateFrom), lte(canonicalMilestones.expectedDate, dateTo)));
+  const milestones = await queryIfRelationExists(
+    () =>
+      db
+        .select()
+        .from(canonicalMilestones)
+        .where(and(gte(canonicalMilestones.expectedDate, dateFrom), lte(canonicalMilestones.expectedDate, dateTo))),
+    [],
+  );
 
   const out: MilestoneGap[] = [];
   for (const ms of milestones) {

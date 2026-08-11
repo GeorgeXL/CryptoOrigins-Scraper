@@ -149,6 +149,18 @@ export class DatabaseStorage implements IStorage {
     }
     if (analysis.googleCheckHappened !== undefined) updateData.googleCheckHappened = analysis.googleCheckHappened;
     if (analysis.googleCheckCheckedAt !== undefined) updateData.googleCheckCheckedAt = analysis.googleCheckCheckedAt;
+    if (analysis.isFlagged !== undefined) {
+      updateData.isFlagged = analysis.isFlagged;
+      if (analysis.flaggedAt !== undefined) {
+        updateData.flaggedAt = analysis.flaggedAt;
+      } else if (analysis.isFlagged === false) {
+        updateData.flaggedAt = null;
+      }
+    } else if (analysis.flaggedAt !== undefined) {
+      updateData.flaggedAt = analysis.flaggedAt;
+    }
+    if (analysis.rarity !== undefined) updateData.rarity = analysis.rarity;
+    if (analysis.articleTags !== undefined) updateData.articleTags = analysis.articleTags;
 
     const nextTopics =
       analysis.topicCategories !== undefined ? analysis.topicCategories : existing?.topicCategories;

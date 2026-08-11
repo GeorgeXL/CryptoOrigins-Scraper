@@ -138,7 +138,7 @@ export function useAnalysesBrowse(options: UseAnalysesBrowseOptions) {
         query = query.ilike("summary", `%${debouncedSearchQuery}%`);
       }
 
-      query = query.order("date", { ascending: false });
+      query = query.order("date", { ascending: true });
 
       const shouldFetchAll = needsFullFetch?.(filters) ?? false;
       let analyses: RawAnalysisRow[] = [];
@@ -257,7 +257,7 @@ export function useAnalysesBrowse(options: UseAnalysesBrowseOptions) {
       query = query.ilike("summary", `%${debouncedSearchQuery}%`);
     }
 
-    query = query.order("date", { ascending: false });
+    query = query.order("date", { ascending: true });
 
     const analyses = await fetchAnalysesBatch(query as Parameters<typeof fetchAnalysesBatch>[0]);
     if (!filterRow) return analyses;

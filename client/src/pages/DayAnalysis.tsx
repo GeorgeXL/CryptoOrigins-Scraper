@@ -26,11 +26,13 @@ import { TopicBadgeEditor } from "@/components/TopicBadgeEditor";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { SingleDayAgentDialog } from "@/components/SingleDayAgentDialog";
 import { ManualDayEntryDialog } from "@/components/ManualDayEntryDialog";
+import { DayPendingReviewPanel } from "@/components/DayPendingReviewPanel";
 import { useToast } from "@/hooks/use-toast";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { queryClient, clearCacheForDate, invalidateAnalysisListQueries, patchAnalysisListLockInCache } from "@/lib/queryClient";
@@ -132,6 +134,8 @@ interface DayAnalysisData {
     tagsVersion2?: string[];
     topicCategories?: string[];
     rarity?: Rarity | null;
+    googleCheckHappened?: "yes" | "no" | "uncertain" | null;
+    googleCheckCheckedAt?: string | null;
     articleTags?: {
       totalArticles: number;
       topSources: string[];
@@ -372,6 +376,8 @@ export default function DayAnalysis() {
             tagsVersion2: [],
             topicCategories: [],
             rarity: null,
+            googleCheckHappened: null,
+            googleCheckCheckedAt: null,
             articleTags: {
               totalArticles: 0,
               topSources: [],
@@ -437,6 +443,13 @@ export default function DayAnalysis() {
                 .filter((topic: string) => topic.trim().length > 0)
             : [],
           rarity: normalizeRarity(analysis.rarity),
+          googleCheckHappened:
+            analysis.google_check_happened === "yes" ||
+            analysis.google_check_happened === "no" ||
+            analysis.google_check_happened === "uncertain"
+              ? analysis.google_check_happened
+              : null,
+          googleCheckCheckedAt: analysis.google_check_checked_at ?? null,
           articleTags: {
             totalArticles: analysis.total_articles_fetched || 0,
             topSources: [],
@@ -514,13 +527,13 @@ export default function DayAnalysis() {
         <button
           type="button"
           className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-orange-400 hover:bg-orange-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label="Pending admin agent review"
+          aria-label="Pending decisions on this day"
         >
           <AlertTriangle className="h-4 w-4" strokeWidth={2.25} />
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-xs">
-        <p className="font-medium text-foreground">Pending admin agent review</p>
+        <p className="font-medium text-foreground">Pending decisions</p>
         <ul className="mt-1.5 space-y-1 text-xs text-muted-foreground">
           {pendingQueueItems.map((item) => (
             <li key={item.id}>
@@ -530,6 +543,7 @@ export default function DayAnalysis() {
             </li>
           ))}
         </ul>
+        <p className="mt-2 text-xs text-muted-foreground">Answer them in the panel below on this page.</p>
       </TooltipContent>
     </Tooltip>
   ) : null;
@@ -1793,22 +1807,23 @@ export default function DayAnalysis() {
                 onClick={handleAnalyzeDay}
                 disabled={analyzeDayMutation.isPending || isAnalyzing}
               >
-                <RefreshCw className="w-4 h-4 mr-2" />
+                <Search className="w-4 h-4 mr-2" />
                 Analyse Day
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={handleRedoSummary}
-                disabled={redoSummaryMutation.isPending || !dayData?.analysis?.topArticleId || dayData?.analysis?.topArticleId === 'none'}
-              >
-                <FileText className="w-4 h-4 mr-2" />
-                Redo Summary
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => setShowSingleDayAgentDialog(true)}
                 disabled={!date}
               >
                 <Bot className="w-4 h-4 mr-2" />
-                Run editorial agent
+                Run final agent
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleRedoSummary}
+                disabled={redoSummaryMutation.isPending || !dayData?.analysis?.topArticleId || dayData?.analysis?.topArticleId === 'none'}
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Rewrite summary
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setShowManualEntryDialog(true)} disabled={!date}>
                 <PenLine className="w-4 h-4 mr-2" />
@@ -1820,6 +1835,16 @@ export default function DayAnalysis() {
           )}
         </div>
       </div>
+
+      {date ? (
+        <DayPendingReviewPanel
+          date={date}
+          onResolved={() => {
+            void queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+            void queryClient.invalidateQueries({ queryKey: ["pending-agent-queue", date] });
+          }}
+        />
+      ) : null}
 
       {/* AI Summary Card */}
       {isLoading || !dayData?.analysis ? (
@@ -2057,7 +2082,7 @@ export default function DayAnalysis() {
                     )}
                   </div>
 
-                  <div className="mt-4 grid grid-cols-2 gap-4">
+                  <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
                     <div>
                       <h5 className="mb-2 text-sm font-semibold text-foreground">Topics</h5>
                       {dayData.analysis.id ? (
@@ -2083,6 +2108,38 @@ export default function DayAnalysis() {
                           {dayData.analysis.rarity
                             ? RARITY_LABELS[dayData.analysis.rarity]
                             : "No rarity"}
+                        </Badge>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No analysis row yet</p>
+                      )}
+                    </div>
+                    <div>
+                      <h5 className="mb-2 text-sm font-semibold text-foreground">Google Check</h5>
+                      {dayData.analysis.id ? (
+                        <Badge
+                          variant="outline"
+                          className={
+                            dayData.analysis.googleCheckHappened === "yes"
+                              ? "text-xs font-normal border-emerald-500/45 bg-emerald-950/35 text-emerald-100"
+                              : dayData.analysis.googleCheckHappened === "no"
+                                ? "text-xs font-normal border-red-500/50 bg-red-950/30 text-red-100"
+                                : dayData.analysis.googleCheckHappened === "uncertain"
+                                  ? "text-xs font-normal border-amber-500/45 bg-amber-950/30 text-amber-100"
+                                  : "text-xs font-normal"
+                          }
+                          title={
+                            dayData.analysis.googleCheckCheckedAt
+                              ? `Checked ${new Date(dayData.analysis.googleCheckCheckedAt).toLocaleString()}`
+                              : undefined
+                          }
+                        >
+                          {dayData.analysis.googleCheckHappened === "yes"
+                            ? "Happened"
+                            : dayData.analysis.googleCheckHappened === "no"
+                              ? "Didn't happen"
+                              : dayData.analysis.googleCheckHappened === "uncertain"
+                                ? "Uncertain"
+                                : "Not checked"}
                         </Badge>
                       ) : (
                         <p className="text-sm text-muted-foreground">No analysis row yet</p>
@@ -2276,19 +2333,19 @@ export default function DayAnalysis() {
        dayData.analysis.topArticleId !== 'none' &&
        analyzedArticles.length > 0 && 
        !analyzedArticles.find(article => article.id === dayData.analysis.topArticleId) && (
-        <Card className="border-amber-200 bg-amber-50">
+        <Card className="border-border bg-muted/30">
           <CardContent className="p-4">
             <div className="flex items-start space-x-3">
               <div className="flex-shrink-0">
-                <div className="w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center">
-                  <TrendingUp className="w-4 h-4 text-amber-600" />
+                <div className="flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background">
+                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
                 </div>
               </div>
               <div className="flex-1">
-                <h4 className="text-sm font-medium text-amber-800 mb-1">
+                <h4 className="mb-1 text-sm font-medium text-foreground">
                   Analysis Based on Older Articles
                 </h4>
-                <p className="text-sm text-amber-700 mb-3">
+                <p className="mb-3 text-sm text-muted-foreground">
                   This analysis was created using different articles than what's currently available. 
                   News sources change over time, so the summary and featured article may not match the current articles below.
                 </p>
@@ -2298,21 +2355,20 @@ export default function DayAnalysis() {
                     variant="outline"
                     onClick={handleAnalyzeDay}
                     disabled={analyzeDayMutation.isPending || isAnalyzing}
-                    className="text-amber-700 border-amber-300 hover:bg-amber-100"
                   >
                     {analyzeDayMutation.isPending ? (
                       <>
-                        <span className="animate-spin w-3 h-3 border border-amber-600 border-t-transparent rounded-full mr-2"></span>
+                        <Loader2 className="mr-2 h-3 w-3 animate-spin" />
                         Analysing...
                       </>
                     ) : (
                       <>
-                        <TrendingUp className="w-3 h-3 mr-1" />
+                        <TrendingUp className="mr-1 h-3 w-3" />
                         Update Analysis
                       </>
                     )}
                   </Button>
-                  <span className="text-xs text-amber-600">
+                  <span className="text-xs text-muted-foreground">
                     This will analyze the current articles and update the summary.
                   </span>
                 </div>
@@ -2681,9 +2737,13 @@ export default function DayAnalysis() {
           open={showSingleDayAgentDialog}
           onOpenChange={setShowSingleDayAgentDialog}
           date={date}
+          topicLeaf={dayData?.analysis?.topicCategories?.[0] ?? null}
           onRunFinished={() => {
             queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
             queryClient.invalidateQueries({ queryKey: ["analyses-browse"] });
+            queryClient.invalidateQueries({ queryKey: ["pending-agent-queue", date] });
+            queryClient.invalidateQueries({ queryKey: ["day-pending-reviews", date] });
+            queryClient.invalidateQueries({ queryKey: ["pipeline-review-summary", date] });
           }}
         />
       ) : null}

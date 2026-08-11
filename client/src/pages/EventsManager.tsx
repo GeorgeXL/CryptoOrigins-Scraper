@@ -135,6 +135,7 @@ export default function EventsManager() {
   const [selectedQualityCheck, setSelectedQualityCheck] = useState<string | null>(null);
   const [selectedVeriBadge, setSelectedVeriBadge] = useState<string | null>(null);
   const [selectedLocked, setSelectedLocked] = useState(false);
+  const [selectedUnlocked, setSelectedUnlocked] = useState(false);
   const [qualityCheckPage, setQualityCheckPage] = useState(1);
 
   const prevSearchRef = useRef<string>("");
@@ -728,12 +729,13 @@ export default function EventsManager() {
   const { data: lockedDaysData, isLoading: lockedDaysLoading } = useQuery<{
     entries: { date: string; summary: string }[];
     lockedCount: number;
+    unlockedCount: number;
     totalCount: number;
   }>({
     queryKey: ["events-manager-locked-days"],
     queryFn: async () => {
       if (!supabase) {
-        return { entries: [], lockedCount: 0, totalCount: 0 };
+        return { entries: [], lockedCount: 0, unlockedCount: 0, totalCount: 0 };
       }
 
       const { count: totalCount, error: totalError } = await supabase
@@ -741,6 +743,13 @@ export default function EventsManager() {
         .select("*", { count: "exact", head: true });
 
       if (totalError) throw totalError;
+
+      const { count: lockedCount, error: lockedCountError } = await supabase
+        .from("historical_news_analyses")
+        .select("*", { count: "exact", head: true })
+        .eq("is_locked", true);
+
+      if (lockedCountError) throw lockedCountError;
 
       let entries: { date: string; summary: string }[] = [];
       let from = 0;
@@ -752,7 +761,7 @@ export default function EventsManager() {
           .from("historical_news_analyses")
           .select("date, summary")
           .eq("is_locked", true)
-          .order("date", { ascending: false })
+          .order("date", { ascending: true })
           .range(from, from + batchSize - 1);
 
         if (batchError) throw batchError;
@@ -768,11 +777,57 @@ export default function EventsManager() {
         hasMore = batchData.length === batchSize;
       }
 
+      const total = totalCount ?? 0;
+      const locked = lockedCount ?? entries.length;
+
       return {
         entries,
-        lockedCount: entries.length,
-        totalCount: totalCount ?? 0,
+        lockedCount: locked,
+        unlockedCount: Math.max(0, total - locked),
+        totalCount: total,
       };
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  // Unlocked days entries — loaded when the unlocked filter is selected
+  const { data: unlockedDaysData, isLoading: unlockedDaysLoading } = useQuery<{
+    entries: { date: string; summary: string }[];
+  }>({
+    queryKey: ["events-manager-unlocked-days"],
+    enabled: selectedUnlocked,
+    queryFn: async () => {
+      if (!supabase) {
+        return { entries: [] };
+      }
+
+      let entries: { date: string; summary: string }[] = [];
+      let from = 0;
+      const batchSize = 1000;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data: batchData, error: batchError } = await supabase
+          .from("historical_news_analyses")
+          .select("date, summary")
+          .or("is_locked.eq.false,is_locked.is.null")
+          .order("date", { ascending: true })
+          .range(from, from + batchSize - 1);
+
+        if (batchError) throw batchError;
+        if (!batchData || batchData.length === 0) break;
+
+        entries = entries.concat(
+          batchData.map((row) => ({
+            date: row.date,
+            summary: row.summary || "",
+          })),
+        );
+        from += batchSize;
+        hasMore = batchData.length === batchSize;
+      }
+
+      return { entries };
     },
     staleTime: 1000 * 60 * 5,
   });
@@ -1180,10 +1235,11 @@ export default function EventsManager() {
   const lockStats = useMemo<LockStatsItem>(
     () => ({
       lockedCount: lockedDaysData?.lockedCount ?? 0,
+      unlockedCount: lockedDaysData?.unlockedCount ?? 0,
       totalCount: lockedDaysData?.totalCount ?? 0,
-      isLoading: lockedDaysLoading,
+      isLoading: lockedDaysLoading || (selectedUnlocked && unlockedDaysLoading),
     }),
-    [lockedDaysData, lockedDaysLoading],
+    [lockedDaysData, lockedDaysLoading, selectedUnlocked, unlockedDaysLoading],
   );
 
   // Get filtered violations based on selected quality check or veriBadge
@@ -1195,6 +1251,17 @@ export default function EventsManager() {
         violations: ["Locked"],
         length: entry.summary?.length || 0,
         tags_version2: null,
+      }));
+    }
+
+    if (selectedUnlocked) {
+      return (unlockedDaysData?.entries || []).map((entry) => ({
+        date: entry.date,
+        summary: entry.summary || "",
+        violations: ["Unlocked"],
+        length: entry.summary?.length || 0,
+        tags_version2: null,
+        isLocked: false,
       }));
     }
 
@@ -1427,7 +1494,7 @@ export default function EventsManager() {
     if (!type) return violations;
 
     return applyQualityCheckSummaryFilter(violations.filter(type.filterFn), selectedQualityCheck);
-  }, [selectedLocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, rarityQualityData, lockedDaysData, datesApprovedData, uncertainData, notVerifiedData, didntHappenData]);
+  }, [selectedLocked, selectedUnlocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, rarityQualityData, lockedDaysData, unlockedDaysData, datesApprovedData, uncertainData, notVerifiedData, didntHappenData]);
 
   const qualityCheckAgentRows = useMemo<QualityCheckDateInput[]>(() => {
     return filteredQualityViolations.map((violation) => ({
@@ -1843,6 +1910,7 @@ export default function EventsManager() {
                 setSelectedQualityCheck(newQualityCheck);
                 setSelectedVeriBadge(null); // Clear VeriBadge selection
                 setSelectedLocked(false);
+                setSelectedUnlocked(false);
                 setQualityCheckPage(1);
                 setShowUntagged(false);
                 setSelectedEntities(new Set());
@@ -1853,6 +1921,19 @@ export default function EventsManager() {
               onLockedSelect={() => {
                 const next = !selectedLocked;
                 setSelectedLocked(next);
+                setSelectedUnlocked(false);
+                setSelectedQualityCheck(null);
+                setSelectedVeriBadge(null);
+                setQualityCheckPage(1);
+                setShowUntagged(false);
+                setSelectedEntities(new Set());
+                updateUrl({ selectedQualityCheck: null, selectedVeriBadge: null, qualityCheckPage: 1, selectedEntities: new Set() });
+              }}
+              selectedUnlocked={selectedUnlocked}
+              onUnlockedSelect={() => {
+                const next = !selectedUnlocked;
+                setSelectedUnlocked(next);
+                setSelectedLocked(false);
                 setSelectedQualityCheck(null);
                 setSelectedVeriBadge(null);
                 setQualityCheckPage(1);
@@ -1867,6 +1948,7 @@ export default function EventsManager() {
                 setSelectedVeriBadge(newVeriBadge);
                 setSelectedQualityCheck(null); // Clear quality check selection
                 setSelectedLocked(false);
+                setSelectedUnlocked(false);
                 setQualityCheckPage(1);
                 setShowUntagged(false);
                 setSelectedEntities(new Set());
@@ -1884,6 +1966,7 @@ export default function EventsManager() {
                 setSelectedQualityCheck(null);
                 setSelectedVeriBadge(null);
                 setSelectedLocked(false);
+                setSelectedUnlocked(false);
                 setCurrentPage(1);
                 updateUrl({ selectedEntities: newSelected, showUntagged: false, currentPage: 1, selectedQualityCheck: null, selectedVeriBadge: null });
               }}
@@ -1894,6 +1977,7 @@ export default function EventsManager() {
                 setSelectedQualityCheck(null);
                 setSelectedVeriBadge(null);
                 setSelectedLocked(false);
+                setSelectedUnlocked(false);
                 setCurrentPage(1);
                 updateUrl({ showUntagged: newShowUntagged, selectedEntities: new Set(), currentPage: 1, selectedQualityCheck: null, selectedVeriBadge: null });
               }}
@@ -1906,14 +1990,16 @@ export default function EventsManager() {
       }
     >
       <AnalysesBrowseTableCard>
-            {(selectedQualityCheck || selectedVeriBadge || selectedLocked) ? (
+            {(selectedQualityCheck || selectedVeriBadge || selectedLocked || selectedUnlocked) ? (
               <>
-                {/* Quality Check, Locked, or Google Check View */}
+                {/* Quality Check, Locked, Unlocked, or Google Check View */}
                 <div className="mb-3 flex items-start justify-between gap-4">
                   <div className="flex items-center space-x-3">
                     <h2 className="text-lg font-semibold text-foreground">
                       {selectedLocked
                         ? "Locked"
+                        : selectedUnlocked
+                          ? "Unlocked"
                         : selectedVeriBadge 
                         ? veriBadgeItems.find(t => t.id === selectedVeriBadge)?.label || 'Google Check'
                         : qualityCheckItems.find(t => t.id === selectedQualityCheck)?.label || 'Quality Check'}
@@ -1921,6 +2007,8 @@ export default function EventsManager() {
                     <Badge variant="secondary" className="font-normal">
                       {selectedLocked
                         ? `${lockStats.lockedCount.toLocaleString()} / ${lockStats.totalCount.toLocaleString()} locked`
+                        : selectedUnlocked
+                          ? `${lockStats.unlockedCount.toLocaleString()} / ${lockStats.totalCount.toLocaleString()} unlocked`
                         : `${filteredQualityViolations.length.toLocaleString()} ${selectedVeriBadge 
                         ? `entr${filteredQualityViolations.length !== 1 ? 'ies' : 'y'}`
                         : `issue${filteredQualityViolations.length !== 1 ? 's' : ''}`}`}
@@ -1991,6 +2079,8 @@ export default function EventsManager() {
                   isLoading={
                     selectedLocked
                       ? lockedDaysLoading
+                      : selectedUnlocked
+                      ? unlockedDaysLoading
                       : selectedVeriBadge === "dates-approved"
                       ? datesApprovedLoading
                       : selectedVeriBadge === "uncertain"

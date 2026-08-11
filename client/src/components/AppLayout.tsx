@@ -43,11 +43,6 @@ const managerItems = [
     description: "Run cleanup agents and review proposed actions.",
   },
   {
-    path: "/main-events-check",
-    label: "Main events check",
-    description: "Gemini main-events pass per storyline leaf; auto-locks matches.",
-  },
-  {
     path: "/events-manager",
     label: "Quality Check",
     description: "Quality checks, tags, and locked summaries.",

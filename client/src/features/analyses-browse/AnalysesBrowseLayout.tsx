@@ -20,11 +20,12 @@ interface AnalysesBrowseLayoutProps {
 export function AnalysesBrowseLayout({ sidebar, children }: AnalysesBrowseLayoutProps) {
   return (
     <SidebarProvider className="w-full" defaultOpen={true}>
-      <div className="space-y-6">
-        <div className="flex flex-col gap-6 lg:flex-row">
-          <div className="lg:w-72 shrink-0 space-y-2">{sidebar}</div>
-          <div className="flex-1 space-y-4">
-            <div className="space-y-6">{children}</div>
+      {/* SidebarProvider is `display:flex`; force full remaining width so the table isn't cramped. */}
+      <div className="w-full min-w-0 flex-1 space-y-6">
+        <div className="flex w-full flex-col gap-6 lg:flex-row">
+          <div className="w-full shrink-0 space-y-2 lg:w-72">{sidebar}</div>
+          <div className="min-w-0 flex-1 space-y-4">
+            <div className="w-full space-y-6">{children}</div>
           </div>
         </div>
       </div>
@@ -57,7 +58,7 @@ interface AnalysesBrowseTableCardProps {
 }
 
 export function AnalysesBrowseTableCard({ children }: AnalysesBrowseTableCardProps) {
-  return <Card className="pt-0 px-6 pb-6 border-0">{children}</Card>;
+  return <Card className="w-full min-w-0 border-0 px-6 pb-6 pt-0">{children}</Card>;
 }
 
 interface AnalysesBrowseBulkActionsProps {

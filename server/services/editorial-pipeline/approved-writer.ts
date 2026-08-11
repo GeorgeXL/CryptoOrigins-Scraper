@@ -212,7 +212,8 @@ export async function applyArticlePickApproval(opts: {
       summary: "",
       reasoning: `Created by editorial pipeline v3 article-pick (operator=${opts.reviewer ?? "unknown"})`,
       topArticleId: candidate.id,
-      isManualOverride: true,
+      // Operator picked from Exa/candidate pool — not a typed Manual entry.
+      isManualOverride: false,
       tieredArticles: tiered,
       analyzedArticles: opts.candidates.map(candidateToArticleData),
       winningTier: candidate.tier,
@@ -221,7 +222,8 @@ export async function applyArticlePickApproval(opts: {
   } else {
     await storage.updateAnalysis(opts.date, {
       topArticleId: candidate.id,
-      isManualOverride: true,
+      reasoning: `Article pick from ${candidate.tier} tier (operator=${opts.reviewer ?? "unknown"})`,
+      isManualOverride: false,
       tieredArticles: tiered,
       analyzedArticles: opts.candidates.map(candidateToArticleData),
       winningTier: candidate.tier,

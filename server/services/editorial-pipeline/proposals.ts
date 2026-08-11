@@ -442,11 +442,17 @@ export function buildCorrectionProposals(input: DayProposalInputs): CorrectionPr
     const suppressedGrounded = new Set(
       (input.suppressedGroundedTags ?? []).map((tag) => editorialTagKey(tag)).filter(Boolean),
     );
+    const tagAgentAddsForProposal =
+      currentV2.length === 0 ?
+        input.tagAgentConfidence !== "low" ? (input.tagAgentAdd ?? [])
+        : []
+      : input.tagAgentConfidence === "high" ? (input.tagAgentAdd ?? [])
+      : [];
     const inferredMissingTags = filterEditorialTagAdds(
       Array.from(
         new Set([
           ...inferredMissingTagsFromSummary(summary, currentV2, input.canonicalTagIndex),
-          ...(input.tagAgentConfidence === "high" ? (input.tagAgentAdd ?? []) : []),
+          ...tagAgentAddsForProposal,
         ]),
       ).filter((tag) => isTagGroundedInTexts(tag, [summary])),
       currentV2,
