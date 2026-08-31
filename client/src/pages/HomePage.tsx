@@ -1254,6 +1254,20 @@ export default function HomePage() {
                 const query = serializePageState(state);
                 setLocation(`/day/${date}?${query}`);
               }}
+              getRowHref={(analysis) => {
+                const state: HomePageState = {
+                  page: 'home',
+                  selectedEntities,
+                  showUntagged,
+                  searchQuery,
+                  currentPage,
+                  pageSize,
+                  viewMode: 'topics',
+                  browseAxis,
+                  sidebarMenu: 'topics',
+                };
+                return `/day/${analysis.date}?${serializePageState(state)}`;
+              }}
               onTagClick={(tagName) => {
                 setSearchQuery(tagName);
                 setCurrentPage(1);

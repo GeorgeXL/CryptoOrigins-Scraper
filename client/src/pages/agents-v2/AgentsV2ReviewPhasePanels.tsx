@@ -14,7 +14,7 @@ import {
 } from "@/lib/editorial-pipeline";
 import {
   buildCorrectionApprovePayload,
-  formatCorrectionChangeLines,
+  computeCorrectionOutcomePreview,
   summarizeCorrectionProposals,
 } from "@/lib/correction-proposal-view";
 import {
@@ -39,11 +39,41 @@ const TOPIC_SELECT_GROUPS = TOPIC_HIERARCHY.map((group) => ({
   leaves: [...group.leaves].sort((a, b) => a.localeCompare(b)),
 }));
 
+type CorrectionLayoutContext = {
+  date: string;
+  summary: string;
+  tags: string[];
+  topics: string[];
+};
+
 type PanelProps = {
   item: EditorialReviewItem;
   onApprove: (id: string, opts?: ApproveReviewOpts) => void;
   busy?: boolean;
+  layoutContext?: CorrectionLayoutContext;
 };
+
+function MetadataList({
+  label,
+  values,
+  empty,
+  formatValue,
+}: {
+  label: string;
+  values: string[];
+  empty: string;
+  formatValue?: (value: string) => string;
+}) {
+  const display = values.length
+    ? values.map((value) => (formatValue ? formatValue(value) : value)).join(", ")
+    : empty;
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 text-xs leading-relaxed text-foreground">{display}</p>
+    </div>
+  );
+}
 
 function knownEventKindLabel(kind: string | null | undefined): string {
   switch (kind) {
@@ -554,7 +584,7 @@ function SummaryApprovalPanel({ item, onApprove, busy }: PanelProps) {
   );
 }
 
-function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
+function CorrectionPanel({ item, onApprove, busy, layoutContext }: PanelProps) {
   const proposals = item.proposals ?? [];
   const isPending = item.status === "pending";
   const changeSummary = useMemo(() => summarizeCorrectionProposals(proposals), [proposals]);
@@ -681,9 +711,87 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
       ? "Regenerate summary & apply fixes"
       : "Apply changes";
 
+  const outcomePreview = useMemo(() => {
+    if (!layoutContext) return null;
+    return computeCorrectionOutcomePreview(
+      {
+        summary: layoutContext.summary,
+        tags: layoutContext.tags,
+        topics: layoutContext.topics,
+      },
+      changeSummary,
+      {
+        selectedAdds,
+        selectedRemoves,
+        includeTopic,
+        topicSelection,
+        includeSummaryEdit,
+        editedSummary: summaryDraft,
+      },
+    );
+  }, [
+    layoutContext,
+    changeSummary,
+    selectedAdds,
+    selectedRemoves,
+    includeTopic,
+    topicSelection,
+    includeSummaryEdit,
+    summaryDraft,
+  ]);
+
   return (
-    <div className="max-h-none space-y-3 sm:max-h-56 sm:overflow-y-auto">
+    <div className="space-y-4">
       <KnownEventExplanation item={item} />
+
+      {layoutContext ? (
+        <div className="rounded-lg border border-border/70 bg-background/40 p-4">
+          <p className="text-sm font-semibold text-foreground">{layoutContext.date}</p>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <div className="space-y-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Now</p>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Summary</p>
+                <p className="mt-1 text-sm leading-relaxed text-foreground">
+                  {layoutContext.summary || "No summary"}
+                </p>
+              </div>
+              <MetadataList label="Tags" values={layoutContext.tags} empty="No tags" />
+              <MetadataList
+                label="Topics"
+                values={layoutContext.topics}
+                empty="Unassigned"
+                formatValue={formatTopicLeafWithGroup}
+              />
+            </div>
+            <div className="space-y-3 rounded-md border border-emerald-500/30 bg-emerald-500/[0.05] p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-400">
+                After approval
+              </p>
+              {outcomePreview ? (
+                <>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Summary</p>
+                    <p className="mt-1 text-sm leading-relaxed text-foreground">
+                      {outcomePreview.summary || "No summary"}
+                    </p>
+                  </div>
+                  <MetadataList label="Tags" values={outcomePreview.tags} empty="No tags" />
+                  <MetadataList
+                    label="Topics"
+                    values={outcomePreview.topics}
+                    empty="Unassigned"
+                    formatValue={formatTopicLeafWithGroup}
+                  />
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">No changes selected.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {showSummarySourcePanel && summarySource ? (
         <CorrectionSummarySourcePanel
           source={summarySource}
@@ -718,68 +826,81 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
         </div>
       ) : null}
 
-      {showAddSection ? (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/[0.04] p-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">Add</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {changeSummary.tagsToAdd.map((tag) => {
-              const on = selectedAdds.has(tag);
-              return (
+      {showAddSection || hasRemoves ? (
+        <div className="space-y-2">
+          {isPending && (hasAdds || hasRemoves) ? (
+            <p className="text-xs text-muted-foreground">
+              Tap a chip to include or exclude it from the update.
+            </p>
+          ) : null}
+          {showAddSection ? (
+            <div className="flex flex-wrap gap-1.5">
+              {changeSummary.tagsToAdd.map((tag) => {
+                const on = selectedAdds.has(tag);
+                return (
+                  <button
+                    key={`add-${tag}`}
+                    type="button"
+                    disabled={!isPending || busy}
+                    onClick={() => toggleInSet(tag, !on, setSelectedAdds)}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[11px]",
+                      on
+                        ? "border-emerald-500 bg-emerald-500/10 text-foreground"
+                        : "border-border/70 text-muted-foreground line-through opacity-60",
+                    )}
+                  >
+                    {on ? "+ " : ""}
+                    {tag}
+                  </button>
+                );
+              })}
+              {changeSummary.topicOptions.map((leaf) => {
+                const label = formatTopicLeafWithGroup(leaf);
+                const selected = includeTopic && topicSelection === leaf;
+                return (
+                  <button
+                    key={`topic-opt-${leaf}`}
+                    type="button"
+                    disabled={!isPending || busy}
+                    onClick={() => {
+                      setIncludeTopic(true);
+                      setTopicSelection(leaf);
+                    }}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[11px]",
+                      selected
+                        ? "border-emerald-500 bg-emerald-500/10 text-foreground"
+                        : "border-border/70 text-muted-foreground",
+                    )}
+                  >
+                    {selected ? "✓ " : ""}
+                    Topic: {label}
+                  </button>
+                );
+              })}
+              {changeSummary.topicToAdd ? (
                 <button
-                  key={`add-${tag}`}
                   type="button"
                   disabled={!isPending || busy}
-                  onClick={() => toggleInSet(tag, !on, setSelectedAdds)}
+                  onClick={() => setIncludeTopic((v) => !v)}
                   className={cn(
                     "rounded-full border px-2 py-0.5 text-[11px]",
-                    on ? "border-emerald-500 bg-emerald-500/10" : "border-border/70 text-muted-foreground",
+                    includeTopic
+                      ? "border-emerald-500 bg-emerald-500/10 text-foreground"
+                      : "border-border/70 text-muted-foreground line-through opacity-60",
                   )}
                 >
-                  {on ? "✓ " : ""}{tag}
+                  {includeTopic ? "+ " : ""}
+                  Topic: {changeSummary.topicToAdd}
                 </button>
-              );
-            })}
-            {changeSummary.topicOptions.map((leaf) => {
-              const label = formatTopicLeafWithGroup(leaf);
-              const selected = includeTopic && topicSelection === leaf;
-              return (
-                <button
-                  key={`topic-opt-${leaf}`}
-                  type="button"
-                  disabled={!isPending || busy}
-                  onClick={() => {
-                    setIncludeTopic(true);
-                    setTopicSelection(leaf);
-                  }}
-                  className={cn(
-                    "rounded-full border px-2 py-0.5 text-[11px]",
-                    selected ? "border-emerald-500 bg-emerald-500/10" : "border-border/70 text-muted-foreground",
-                  )}
-                >
-                  {selected ? "✓ " : ""}Topic: {label}
-                </button>
-              );
-            })}
-            {changeSummary.topicToAdd ? (
-              <button
-                type="button"
-                disabled={!isPending || busy}
-                onClick={() => setIncludeTopic((v) => !v)}
-                className={cn(
-                  "rounded-full border px-2 py-0.5 text-[11px]",
-                  includeTopic ? "border-emerald-500 bg-emerald-500/10" : "border-border/70 text-muted-foreground",
-                )}
-              >
-                {includeTopic ? "✓ " : ""}Topic: {changeSummary.topicToAdd}
-              </button>
-            ) : null}
-          </div>
+              ) : null}
+            </div>
+          ) : null}
           {needsTopicPick && changeSummary.topicOptions.length === 0 ? (
-            <div className="mt-2 space-y-1">
+            <div className="space-y-1">
               {!changeSummary.topicToAdd ? (
-                <p className="text-[11px] text-muted-foreground">
-                  Choose a replacement topic for this summary.
-                </p>
+                <p className="text-[11px] text-muted-foreground">Choose a topic for this summary.</p>
               ) : null}
               <Select
                 value={topicSelection || undefined}
@@ -808,43 +929,40 @@ function CorrectionPanel({ item, onApprove, busy }: PanelProps) {
               </Select>
             </div>
           ) : changeSummary.topicOptions.length > 1 ? (
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              Pick the topic that best matches the summary.
-            </p>
+            <p className="text-[11px] text-muted-foreground">Pick the topic that best matches the summary.</p>
           ) : null}
-        </div>
-      ) : null}
-
-      {!isReplaceMode && hasRemoves ? (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/[0.04] p-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-red-400">Remove</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {changeSummary.tagsToRemove.map((tag) => {
-              const on = selectedRemoves.has(tag);
-              return (
-                <button
-                  key={`remove-${tag}`}
-                  type="button"
-                  disabled={!isPending || busy}
-                  onClick={() => toggleInSet(tag, !on, setSelectedRemoves)}
-                  className={cn(
-                    "rounded-full border px-2 py-0.5 text-[11px]",
-                    on ? "border-red-500 bg-red-500/10" : "border-border/70 text-muted-foreground",
-                  )}
+          {hasRemoves ? (
+            <div className="flex flex-wrap gap-1.5">
+              {changeSummary.tagsToRemove.map((tag) => {
+                const on = selectedRemoves.has(tag);
+                return (
+                  <button
+                    key={`remove-${tag}`}
+                    type="button"
+                    disabled={!isPending || busy}
+                    onClick={() => toggleInSet(tag, !on, setSelectedRemoves)}
+                    className={cn(
+                      "rounded-full border px-2 py-0.5 text-[11px]",
+                      on
+                        ? "border-red-500 bg-red-500/10 text-foreground"
+                        : "border-border/70 text-muted-foreground opacity-60",
+                    )}
+                  >
+                    {on ? "− " : ""}
+                    {tag}
+                  </button>
+                );
+              })}
+              {changeSummary.topicsToRemove.map((topic) => (
+                <span
+                  key={`topic-remove-${topic}`}
+                  className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] text-red-200"
                 >
-                  {on ? "✓ " : ""}{tag}
-                </button>
-              );
-            })}
-            {changeSummary.topicsToRemove.map((topic) => (
-              <span
-                key={`topic-remove-${topic}`}
-                className="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] text-red-200"
-              >
-                Topic: {topic}
-              </span>
-            ))}
-          </div>
+                  − Topic: {formatTopicLeafWithGroup(topic)}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -1007,7 +1125,7 @@ function DuplicatePanel({ item, onApprove, busy }: PanelProps) {
   );
 }
 
-export function AgentsV2ReviewPhasePanel({ item, onApprove, busy }: PanelProps) {
+export function AgentsV2ReviewPhasePanel({ item, onApprove, busy, layoutContext }: PanelProps) {
   const phase = effectiveReviewItemPhase(item) ?? item.reviewPhase ?? "legacy";
   switch (phase) {
     case "awaiting_article_pick":
@@ -1015,7 +1133,7 @@ export function AgentsV2ReviewPhasePanel({ item, onApprove, busy }: PanelProps) 
     case "awaiting_summary_approval":
       return <SummaryApprovalPanel item={item} onApprove={onApprove} busy={busy} />;
     case "awaiting_correction_approval":
-      return <CorrectionPanel item={item} onApprove={onApprove} busy={busy} />;
+      return <CorrectionPanel item={item} onApprove={onApprove} busy={busy} layoutContext={layoutContext} />;
     case "awaiting_calendar_decision":
       return <CalendarPanel item={item} onApprove={onApprove} busy={busy} />;
     case "awaiting_duplicate_decision":

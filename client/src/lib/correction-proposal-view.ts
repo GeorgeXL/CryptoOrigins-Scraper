@@ -226,6 +226,56 @@ export function buildCorrectionApprovePayload(opts: {
   };
 }
 
+export function computeCorrectionOutcomePreview(
+  current: { summary: string; tags: string[]; topics: string[] },
+  changeSummary: CorrectionChangeSummary,
+  opts: {
+    selectedAdds: Set<string>;
+    selectedRemoves: Set<string>;
+    includeTopic: boolean;
+    topicSelection: string;
+    includeSummaryEdit: boolean;
+    editedSummary: string;
+  },
+): { summary: string; tags: string[]; topics: string[] } {
+  const removeKeys = new Set([...opts.selectedRemoves].map(tagKey));
+  const tagKeys = new Set<string>();
+  const tags: string[] = [];
+
+  for (const tag of current.tags) {
+    if (removeKeys.has(tagKey(tag))) continue;
+    const key = tagKey(tag);
+    if (!tagKeys.has(key)) {
+      tags.push(tag);
+      tagKeys.add(key);
+    }
+  }
+  for (const add of opts.selectedAdds) {
+    const key = tagKey(add);
+    if (!tagKeys.has(key)) {
+      tags.push(add);
+      tagKeys.add(key);
+    }
+  }
+  tags.sort((a, b) => a.localeCompare(b));
+
+  let topics = [...current.topics];
+  if (changeSummary.topicsToRemove.length > 0) {
+    const removeTopicSet = new Set(changeSummary.topicsToRemove);
+    topics = topics.filter((topic) => !removeTopicSet.has(topic));
+  }
+  if (opts.includeTopic && opts.topicSelection.trim()) {
+    topics = [opts.topicSelection.trim()];
+  }
+
+  let summary = current.summary;
+  if (opts.includeSummaryEdit && changeSummary.summaryEdit) {
+    summary = opts.editedSummary.trim();
+  }
+
+  return { summary, tags, topics };
+}
+
 export function formatCorrectionChangeLines(summary: CorrectionChangeSummary): string[] {
   const lines: string[] = [];
   if (summary.tagsToAdd.length) lines.push(`Add: ${summary.tagsToAdd.join(", ")}`);

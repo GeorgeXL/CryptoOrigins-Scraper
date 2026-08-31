@@ -16,6 +16,7 @@ import {
 test("every quality-check tab has an agent action", () => {
   const expectedTabs = [
     "empty-summary",
+    "unlocked-url-no-summary",
     "untagged",
     "flagged",
     "no-topic",
@@ -44,6 +45,9 @@ test("every quality-check tab has an agent action", () => {
     assert.ok(action, `missing action for ${tab}`);
     if (action.kind === "pipeline") {
       assert.ok(action.checkScopes?.length, `${tab} pipeline action needs scopes`);
+    }
+    if (action.kind === "final") {
+      assert.equal(action.buttonLabel, "Run final agent", `${tab} final agent label`);
     }
   }
 });
@@ -124,7 +128,12 @@ test("filterQualityCheckAgentRows skips empty summaries except empty-summary tab
   );
 });
 
-test("resolveQualityCheckRunWindows ignores empty-summary days for tag agent", () => {
+test("untagged and unlocked-url-no-summary use final agent kind", () => {
+  assert.equal(QUALITY_CHECK_AGENT_ACTIONS.untagged?.kind, "final");
+  assert.equal(QUALITY_CHECK_AGENT_ACTIONS["unlocked-url-no-summary"]?.kind, "final");
+});
+
+test("resolveQualityCheckRunWindows ignores empty summaries for untagged final agent", () => {
   const windows = resolveQualityCheckRunWindows(
     "untagged",
     [

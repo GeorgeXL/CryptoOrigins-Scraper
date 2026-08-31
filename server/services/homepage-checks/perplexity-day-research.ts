@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { isGenericPublisherLandingUrl } from "@shared/article-url-quality";
 import { apiMonitor } from "../api-monitor";
 
 export type ResearchTier = "bitcoin" | "crypto" | "macro";
@@ -113,18 +114,29 @@ function isRateLimitError(error: unknown): boolean {
   return message.includes("429") || message.toLowerCase().includes("rate limit");
 }
 
-function normalizeHttpsUrl(raw: string | null | undefined): string | null {
+export function normalizeHttpsUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const trimmed = raw.trim();
   if (!trimmed) return null;
   try {
     const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
     const parsed = new URL(withProtocol);
+    if (parsed.protocol === "http:") {
+      parsed.protocol = "https:";
+    }
     if (parsed.protocol !== "https:") return null;
     return parsed.toString();
   } catch {
     return null;
   }
+}
+
+export function isGenesisForumUrl(url: string, targetDate: string): boolean {
+  if (Number(targetDate.slice(0, 4)) >= 2011) return false;
+  const host = citationHost(url);
+  if (!host || isBlockedSourceUrl(url)) return false;
+  const genesisHosts = ["bitcointalk.org", "slashdot.org", "news.bitcoin.com", "bitcoinmagazine.com"];
+  return genesisHosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
 }
 
 function citationHost(url: string): string | null {
@@ -236,10 +248,15 @@ export function evaluateResearchAcceptance(input: {
 
   if (!input.sourceUrl) {
     reasons.push("no recognised-media citation URL");
-  } else if (!isRecognizedMediaUrl(input.sourceUrl)) {
+  } else if (
+    !isRecognizedMediaUrl(input.sourceUrl) &&
+    !isGenesisForumUrl(input.sourceUrl, input.targetDate)
+  ) {
     reasons.push("citation is not recognised media");
   } else if (isBlockedSourceUrl(input.sourceUrl)) {
     reasons.push("citation host is blocked");
+  } else if (isGenericPublisherLandingUrl(input.sourceUrl)) {
+    reasons.push("citation is a publisher homepage or section index, not a specific article");
   }
 
   return { accepted: reasons.length === 0, reasons };
@@ -255,7 +272,7 @@ function tierScope(tier: ResearchTier): string {
   return "Global macroeconomics: central banks, rates, inflation, GDP, geopolitics, major financial markets — only when no relevant Bitcoin or crypto event exists for that date.";
 }
 
-function buildTierPrompt(
+export function buildTierPrompt(
   date: string,
   tier: ResearchTier,
   opts?: { priorSummary?: string; topicLeaf?: string | null },
@@ -290,7 +307,7 @@ Return JSON only:
 }`;
 }
 
-const TIER_SYSTEM_PROMPT =
+export const TIER_SYSTEM_PROMPT =
   "You are a strict historical news researcher. Use web search. Only accept events that occurred on the exact target calendar date with contemporaneous recognised-media reporting from that same date. If unsure, set found=false. Respond with valid JSON only.";
 
 type FetchImpl = typeof fetch;

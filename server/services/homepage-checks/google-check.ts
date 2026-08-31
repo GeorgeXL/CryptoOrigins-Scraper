@@ -88,13 +88,13 @@ const MAX_ITEMS = 50;
 const DEFAULT_CONCURRENCY = 1;
 const MAX_RATE_LIMIT_RETRIES = 5;
 
-/** Homepage verify provider (env: GOOGLE_CHECK_PROVIDER, default openai). */
+/** Homepage verify provider (env: GOOGLE_CHECK_PROVIDER, default gemini). */
 export function getGoogleCheckProviderType(): AiProviderType {
   const raw = process.env.GOOGLE_CHECK_PROVIDER?.trim().toLowerCase();
   if (raw === "openai" || raw === "gemini" || raw === "perplexity") {
     return raw;
   }
-  return "openai";
+  return "gemini";
 }
 
 /** Parallel row checks (env: GOOGLE_CHECK_CONCURRENCY, legacy PERPLEXITY_CHECK_CONCURRENCY). */
@@ -119,31 +119,39 @@ function isRateLimitError(error: unknown): boolean {
   return message.includes("429") || message.toLowerCase().includes("rate limit");
 }
 
-async function callVerifyHomepageEvent(
+function isBillingExhaustedError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    message.includes("no credits remaining") ||
+    message.includes("insufficient_quota") ||
+    message.includes("exceeded your current quota")
+  );
+}
+
+function isRetryableRateLimitError(error: unknown): boolean {
+  if (isBillingExhaustedError(error)) return false;
+  return isRateLimitError(error);
+}
+
+function googleCheckFallbackProvider(primary: AiProviderType): AiProviderType | null {
+  if (primary === "openai") return "gemini";
+  if (primary === "gemini") return "openai";
+  return "gemini";
+}
+
+async function verifyHomepageWithProvider(
+  providerType: AiProviderType,
   item: GoogleCheckInputItem,
 ): Promise<GoogleCheckRowResult> {
-  const summary = item.summary?.trim() ?? "";
-  if (!summary) {
-    return { happened: "uncertain" };
-  }
-
-  const retrospective = evaluateGoogleCheckRetrospectiveHeuristic(summary);
-  if (retrospective.isRetrospective) {
-    return { happened: "no" };
-  }
-
-  const providerType = getGoogleCheckProviderType();
   let verifyProvider;
   try {
     verifyProvider = aiService.getProvider(providerType);
   } catch (error) {
-    console.warn(`${providerType} check skipped for ${item.date}: provider unavailable`, error);
-    return { happened: "uncertain" };
+    throw error instanceof Error ? error : new Error(String(error));
   }
 
   if (!verifyProvider || !("verifyHomepageEvent" in verifyProvider)) {
-    console.warn(`${providerType} check skipped for ${item.date}: verifyHomepageEvent not supported`);
-    return { happened: "uncertain" };
+    throw new Error(`${providerType} does not support verifyHomepageEvent`);
   }
 
   let lastError: unknown;
@@ -157,10 +165,10 @@ async function callVerifyHomepageEvent(
             topicLeaf?: string | null,
           ) => Promise<GoogleCheckRowResult>;
         }
-      ).verifyHomepageEvent(summary, item.date, item.topicLeaf?.trim() || null);
+      ).verifyHomepageEvent(item.summary.trim(), item.date, item.topicLeaf?.trim() || null);
     } catch (error) {
       lastError = error;
-      if (!isRateLimitError(error) || attempt >= MAX_RATE_LIMIT_RETRIES) {
+      if (!isRetryableRateLimitError(error) || attempt >= MAX_RATE_LIMIT_RETRIES) {
         break;
       }
       const waitMs = BASE_RETRY_MS * 2 ** (attempt - 1);
@@ -172,6 +180,41 @@ async function callVerifyHomepageEvent(
   }
 
   console.warn(`${providerType} check failed for ${item.date}:`, (lastError as Error)?.message ?? lastError);
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+async function callVerifyHomepageEvent(
+  item: GoogleCheckInputItem,
+): Promise<GoogleCheckRowResult> {
+  const summary = item.summary?.trim() ?? "";
+  if (!summary) {
+    return { happened: "uncertain" };
+  }
+
+  const retrospective = evaluateGoogleCheckRetrospectiveHeuristic(summary);
+  if (retrospective.isRetrospective) {
+    return { happened: "no" };
+  }
+
+  const primary = getGoogleCheckProviderType();
+  const providers: AiProviderType[] = [primary];
+  const fallback = googleCheckFallbackProvider(primary);
+  if (fallback) providers.push(fallback);
+
+  let lastError: unknown;
+  for (const providerType of providers) {
+    try {
+      return await verifyHomepageWithProvider(providerType, item);
+    } catch (error) {
+      lastError = error;
+      if (providerType !== providers[providers.length - 1]) {
+        console.warn(
+          `${providerType} Google Check failed for ${item.date}; trying ${providers[providers.indexOf(providerType) + 1]}.`,
+        );
+      }
+    }
+  }
+
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 

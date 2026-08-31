@@ -25,8 +25,15 @@ import {
 } from "@shared/manual-day-entry-build";
 import { saveManualDayEntryWithSupabase } from "@shared/manual-day-entry-save";
 import { getSupabaseAdmin } from "../lib/supabase-admin";
+import { RARITY_LABELS, normalizeRarity } from "@shared/rarity";
 import { TOPIC_HIERARCHY_LEAVES } from "@shared/topic-hierarchy";
 import { buildEmptySummaryEntries } from "@shared/empty-summaries-build";
+import { buildUnlockedUrlNoSummaryEntries } from "@shared/unlocked-url-no-summary-build";
+import {
+  finishDayAfterV3SummaryApproval,
+  runFullFinalAgentForDay,
+  runGoogleCheckAndRarityForDay,
+} from "../services/editorial-pipeline/finish-day-after-v3-approval";
 import { ensureTopicCategoryAndStorylineLinks, syncStorylineAssignmentsForDate } from "../services/editorial-pipeline/storyline-taxonomy";
 import { invalidTopicReasons } from "../services/editorial-pipeline/topic-validation";
 import { assertDayNotLocked, DayLockedError, setDayLocked } from "../services/day-lock";
@@ -662,6 +669,44 @@ function parsePerplexityDate(dateText: string | null): string | null {
       });
     } catch (error) {
       console.error(`💥 Error updating topic for ${req.params.date}:`, error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post("/api/analysis/date/:date/rarity", async (req, res) => {
+    try {
+      const { date } = req.params;
+      const { rarity } = req.body as { rarity?: string | null };
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD" });
+      }
+
+      const existingAnalysis = await storage.getAnalysisByDate(date);
+      if (!existingAnalysis) {
+        return res.status(404).json({ error: `Analysis not found for date: ${date}` });
+      }
+
+      if (rarity == null || (typeof rarity === "string" && rarity.trim() === "")) {
+        await storage.updateAnalysis(date, { rarity: null });
+        return res.json({ success: true, date, rarity: null, message: "Rarity cleared" });
+      }
+
+      const normalized = normalizeRarity(rarity);
+      if (!normalized) {
+        return res.status(400).json({ error: `"${rarity}" is not a valid rarity label` });
+      }
+
+      await storage.updateAnalysis(date, { rarity: normalized });
+
+      res.json({
+        success: true,
+        date,
+        rarity: normalized,
+        message: `Rarity set to ${RARITY_LABELS[normalized]}`,
+      });
+    } catch (error) {
+      console.error(`💥 Error updating rarity for ${req.params.date}:`, error);
       res.status(500).json({ error: (error as Error).message });
     }
   });
@@ -2521,6 +2566,21 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
     }
   });
 
+  router.get("/api/quality-check/unlocked-url-no-summary", async (_req, res) => {
+    try {
+      const analyses = await storage.getAllAnalyses();
+      const entries = buildUnlockedUrlNoSummaryEntries(analyses);
+
+      res.json({
+        entries,
+        totalCount: entries.length,
+      });
+    } catch (error) {
+      console.error("❌ Error fetching unlocked URL / no summary rows:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
   router.post("/api/quality-check/bulk-remove-periods", async (req, res) => {
     try {
       const { testDate, dates } = req.body ?? {};
@@ -3302,6 +3362,39 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
       const message = (error as Error).message;
       const status = message.includes("Cannot verify more than") ? 400 : 500;
       res.status(status).json({ error: message });
+    }
+  });
+
+  router.post("/api/quality-check/final-agent", async (req, res) => {
+    try {
+      const { date } = req.body ?? {};
+      if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "date is required (YYYY-MM-DD)" });
+      }
+
+      const result = await runFullFinalAgentForDay({
+        date,
+        reviewer: "quality-check-bulk",
+      });
+      res.json(result);
+    } catch (error) {
+      console.error("final-agent failed:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  router.post("/api/quality-check/final-agent-tail", async (req, res) => {
+    try {
+      const { date } = req.body ?? {};
+      if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: "date is required (YYYY-MM-DD)" });
+      }
+
+      const result = await runGoogleCheckAndRarityForDay({ date });
+      res.json(result);
+    } catch (error) {
+      console.error("final-agent-tail failed:", error);
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 

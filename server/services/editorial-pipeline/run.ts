@@ -61,8 +61,10 @@ import {
 } from "./relevance-agent";
 import {
   badWinnerOperatorNote,
+  evaluateSummaryQuality,
   isRoundupArticleContent,
   isRoundupMultiStorySummary,
+  isValidPipelineTopArticleId,
   summaryNeedsBetterArticleSource,
 } from "./editorial-quality";
 import {
@@ -72,6 +74,7 @@ import {
 import { loadCanonicalTagIndex } from "./tag-grounding";
 import { collectGroundedEntityTagsForSummary } from "./tag-agent";
 import { applyCorrectionProposals } from "./approved-writer";
+import { enrichArticlePickCandidatesWithGoogle } from "./article-pick-google";
 import { invalidTopicReasons } from "./topic-validation";
 
 const controllers = new Map<string, AbortController>();
@@ -965,15 +968,34 @@ export async function continueExistingDayChecksAfterKeepingStoryline(opts: {
     return { ok: false, message: `Could not continue checks because ${opts.date} has no analysis row.` };
   }
 
-  const articleText = collectArticleTextForGrounding(row.tieredArticles, row.analyzedArticles);
+  const { ensureEditorialSummaryForDay } = await import("./summary-agent");
+  await ensureEditorialSummaryForDay(opts.date);
+
+  const [freshRow] = await db
+    .select({
+      summary: historicalNewsAnalyses.summary,
+      topArticleId: historicalNewsAnalyses.topArticleId,
+      isFlagged: historicalNewsAnalyses.isFlagged,
+      tagsVersion2: historicalNewsAnalyses.tagsVersion2,
+      topicCategories: historicalNewsAnalyses.topicCategories,
+      tieredArticles: historicalNewsAnalyses.tieredArticles,
+      analyzedArticles: historicalNewsAnalyses.analyzedArticles,
+      suppressedTagSuggestions: historicalNewsAnalyses.suppressedTagSuggestions,
+    })
+    .from(historicalNewsAnalyses)
+    .where(eq(historicalNewsAnalyses.date, opts.date))
+    .limit(1);
+  const workingRow = freshRow ?? row;
+
+  const articleText = collectArticleTextForGrounding(workingRow.tieredArticles, workingRow.analyzedArticles);
   const canonicalTagIndex = await loadCanonicalTagIndex();
   const proposals = await buildCorrectionProposalsAsync({
     date: opts.date,
-    summary: row.summary,
-    topArticleId: row.topArticleId,
-    isFlagged: row.isFlagged,
-    tagsVersion2: row.tagsVersion2,
-    topicCategories: row.topicCategories,
+    summary: workingRow.summary,
+    topArticleId: workingRow.topArticleId,
+    isFlagged: workingRow.isFlagged,
+    tagsVersion2: workingRow.tagsVersion2,
+    topicCategories: workingRow.topicCategories,
     legacyTags: null,
     articleText,
     canonicalTagIndex,
@@ -1046,6 +1068,27 @@ export async function continueExistingDayChecksAfterKeepingStoryline(opts: {
   };
 }
 
+async function finalizeArticlePickPackage(opts: {
+  date: string;
+  scenario: ArticlePickPackage["scenario"];
+  candidates: ArticleCandidate[];
+  note?: string;
+  currentSummary?: string;
+}): Promise<Pick<ArticlePickPackage, "candidates" | "hasCandidates" | "note">> {
+  const enriched = await enrichArticlePickCandidatesWithGoogle({
+    date: opts.date,
+    scenario: opts.scenario,
+    candidates: opts.candidates,
+    currentSummary: opts.currentSummary,
+  });
+  const noteParts = [opts.note, enriched.googleNote].filter(Boolean);
+  return {
+    candidates: enriched.candidates,
+    hasCandidates: enriched.candidates.length > 0,
+    note: noteParts.length ? noteParts.join(" ") : undefined,
+  };
+}
+
 /**
  * V3 deterministic checks for existing days. Priority: canonical mismatch
  * (very serious — wrong-date data) > strong duplicate (operator must decide
@@ -1088,13 +1131,17 @@ async function queueRefetchArticlePickForExistingDay(opts: {
     suggestedAction: "manual_review",
   });
 
+  const pickFields = await finalizeArticlePickPackage({
+    date: opts.triage.date,
+    scenario: "better_storyline",
+    candidates: pool.candidates,
+    note: pool.poolNote ?? opts.note,
+  });
   const pickPkg: ArticlePickPackage = {
     phase: "awaiting_article_pick",
     scenario: "better_storyline",
     triage: opts.triage,
-    candidates: pool.candidates,
-    hasCandidates: pool.hasCandidates,
-    note: opts.note,
+    ...pickFields,
   };
 
   await db.insert(humanReviewQueue).values({
@@ -1111,6 +1158,93 @@ async function queueRefetchArticlePickForExistingDay(opts: {
   return opts.stepIndex + 1;
 }
 
+async function bootstrapSummaryBeforeExistingDayChecks(opts: {
+  runId: string;
+  stepIndex: number;
+  triage: TriageItem;
+  row: {
+    summary: string | null;
+    topArticleId: string | null;
+  };
+  checkScopes: Set<PipelineCheckScope>;
+}): Promise<
+  | { kind: "continue"; stepIndex: number; summary: string }
+  | { kind: "stop"; nextStepIndex: number; autoApproved: false }
+> {
+  const summary = (opts.row.summary ?? "").trim();
+  const summaryIssue = evaluateSummaryQuality(summary);
+  const needsSummary =
+    opts.checkScopes.has("summary") &&
+    isValidPipelineTopArticleId(opts.row.topArticleId) &&
+    summaryIssue != null &&
+    (summaryIssue.code === "empty" || summaryIssue.code === "too_short");
+
+  if (!needsSummary) {
+    return { kind: "continue", stepIndex: opts.stepIndex, summary };
+  }
+
+  const { ensureEditorialSummaryForDay } = await import("./summary-agent");
+  const ensured = await ensureEditorialSummaryForDay(opts.triage.date);
+
+  await createStep({
+    runId: opts.runId,
+    stepIndex: opts.stepIndex,
+    agentName: "SummaryAgent",
+    status: ensured.ok ? "approved" : "rejected",
+    confidence: ensured.ok ? 0.9 : 0.4,
+    input: { date: opts.triage.date, route: opts.triage.route, bootstrap: true },
+    output: buildStepOutput({
+      summary: ensured.ok
+        ? ensured.bootstrapped
+          ? `Built editorial summary (${ensured.summary?.length ?? 0} chars) before tag/topic checks.`
+          : "Summary already present — skipped bootstrap."
+        : `Could not build summary: ${ensured.message ?? "unknown error"}`,
+      findings: ensured.summary ? [ensured.summary] : [ensured.message ?? "summary bootstrap failed"],
+    }),
+    rejectionReason: ensured.ok ? null : ensured.message ?? "Summary bootstrap failed",
+    suggestedAction: ensured.ok ? null : "manual_review",
+  });
+  let stepIndex = opts.stepIndex + 1;
+
+  if (!ensured.ok) {
+    if (ensured.missingArticlePayload) {
+      stepIndex = await queueRefetchArticlePickForExistingDay({
+        runId: opts.runId,
+        stepIndex,
+        triage: opts.triage,
+        note: "URL is set but article text is not stored — pick or refetch the winning article before tags and topics can run.",
+        rejectionReason: ensured.message ?? "Missing article payload for summary generation",
+      });
+      return { kind: "stop", nextStepIndex: stepIndex, autoApproved: false };
+    }
+
+    await db.insert(humanReviewQueue).values({
+      runId: opts.runId,
+      stepId: null,
+      status: "pending",
+      priority: 78,
+      eventDate: opts.triage.date,
+      package: {
+        phase: "awaiting_correction_approval",
+        triage: opts.triage,
+        proposals: [],
+        note:
+          ensured.message ??
+          "Pipeline could not build a summary from the winning article. Fix the article or summary on the day page, then re-run the final agent.",
+      },
+      reviewer: null,
+      reviewedAt: null,
+    });
+    return { kind: "stop", nextStepIndex: stepIndex, autoApproved: false };
+  }
+
+  return {
+    kind: "continue",
+    stepIndex,
+    summary: (ensured.summary ?? summary).trim(),
+  };
+}
+
 async function runV3ExistingDayChecks(opts: {
   runId: string;
   triage: TriageItem;
@@ -1122,7 +1256,7 @@ async function runV3ExistingDayChecks(opts: {
   let stepIndex = opts.startStepIndex;
   const checkScopes = opts.checkScopes;
 
-  const [row] = await db
+  const [initialRow] = await db
     .select({
       id: historicalNewsAnalyses.id,
       summary: historicalNewsAnalyses.summary,
@@ -1138,7 +1272,7 @@ async function runV3ExistingDayChecks(opts: {
     .where(eq(historicalNewsAnalyses.date, triage.date))
     .limit(1);
 
-  if (!row || !triage.analysisId) {
+  if (!initialRow || !triage.analysisId) {
     // Defensive: triage said the row exists but we can't load it. Fall back to a
     // bare review item so the operator sees something rather than nothing.
     await db.insert(humanReviewQueue).values({
@@ -1154,7 +1288,38 @@ async function runV3ExistingDayChecks(opts: {
     return { nextStepIndex: stepIndex, autoApproved: false };
   }
 
-  const summary = (row.summary ?? "").trim();
+  let row = initialRow;
+
+  const bootstrap = await bootstrapSummaryBeforeExistingDayChecks({
+    runId,
+    stepIndex,
+    triage,
+    row,
+    checkScopes,
+  });
+  if (bootstrap.kind === "stop") {
+    return { nextStepIndex: bootstrap.nextStepIndex, autoApproved: bootstrap.autoApproved };
+  }
+  stepIndex = bootstrap.stepIndex;
+
+  const [refreshedRow] = await db
+    .select({
+      id: historicalNewsAnalyses.id,
+      summary: historicalNewsAnalyses.summary,
+      topArticleId: historicalNewsAnalyses.topArticleId,
+      isFlagged: historicalNewsAnalyses.isFlagged,
+      tagsVersion2: historicalNewsAnalyses.tagsVersion2,
+      topicCategories: historicalNewsAnalyses.topicCategories,
+      tieredArticles: historicalNewsAnalyses.tieredArticles,
+      analyzedArticles: historicalNewsAnalyses.analyzedArticles,
+      suppressedTagSuggestions: historicalNewsAnalyses.suppressedTagSuggestions,
+    })
+    .from(historicalNewsAnalyses)
+    .where(eq(historicalNewsAnalyses.date, triage.date))
+    .limit(1);
+  if (refreshedRow) row = refreshedRow;
+
+  const summary = bootstrap.summary || (row.summary ?? "").trim();
 
   // 1. Canonical / LLM date consistency (highest priority)
   if (checkScopes.has("date") && summary && triage.analysisId) {
@@ -1413,13 +1578,18 @@ async function runV3ExistingDayChecks(opts: {
 
   if (badWinner) {
     if (storedCandidates.length > 0) {
+      const pickFields = await finalizeArticlePickPackage({
+        date: triage.date,
+        scenario: "better_storyline",
+        candidates: storedCandidates,
+        note: `${badWinnerNote}. Pick a single dated article from stored candidates.`,
+        currentSummary: summary,
+      });
       const pickPkg: ArticlePickPackage = {
         phase: "awaiting_article_pick",
         scenario: "better_storyline",
         triage,
-        candidates: storedCandidates,
-        hasCandidates: true,
-        note: `${badWinnerNote}. Pick a single dated article from stored candidates.`,
+        ...pickFields,
       };
       const stepId = await createStep({
         runId,
@@ -1472,13 +1642,18 @@ async function runV3ExistingDayChecks(opts: {
     const needsArticlePick = relevanceRequiresArticlePick(relevance);
 
     if (needsArticlePick && storedCandidates.length > 0) {
+      const pickFields = await finalizeArticlePickPackage({
+        date: triage.date,
+        scenario: "better_storyline",
+        candidates: storedCandidates,
+        note: relevanceOperatorNote(relevance.classification),
+        currentSummary: summary,
+      });
       const pickPkg: ArticlePickPackage = {
         phase: "awaiting_article_pick",
         scenario: "better_storyline",
         triage,
-        candidates: storedCandidates,
-        hasCandidates: true,
-        note: relevanceOperatorNote(relevance.classification),
+        ...pickFields,
       };
       const stepId = await createStep({
         runId,
@@ -1547,14 +1722,19 @@ async function runV3ExistingDayChecks(opts: {
     candidateMatchesCurrentStory(recommendedStored!, row.summary).matches;
 
   if (checkScopes.has("relevance") && hasBetterStoredCandidate && storedCandidates.length > 1) {
+    const pickFields = await finalizeArticlePickPackage({
+      date: triage.date,
+      scenario: "better_storyline",
+      candidates: storedCandidates,
+      note:
+        "Current summary is valid but generic. Pick a stronger Bitcoin-specific article from the already fetched candidates, or keep the current day by rejecting this review.",
+      currentSummary: summary,
+    });
     const pickPkg: ArticlePickPackage = {
       phase: "awaiting_article_pick",
       scenario: "better_storyline",
       triage,
-      candidates: storedCandidates,
-      hasCandidates: true,
-      note:
-        "Current summary is valid but generic. Pick a stronger Bitcoin-specific article from the already fetched candidates, or keep the current day by rejecting this review.",
+      ...pickFields,
     };
     const stepId = await createStep({
       runId,
@@ -2166,18 +2346,24 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
 
       const removedCtx =
         opts.removedDayContext && item.date === opts.dateFrom ? opts.removedDayContext : undefined;
+      const baseNote = pool.poolNote
+        ?? (removedCtx
+          ? removedDayArticlePickNote(removedCtx, pool.hasCandidates)
+          : pool.hasCandidates
+            ? "Exa returned candidates for this day. Pick the winning article (or reject as empty). Summary, tags, and topics will be generated after your pick."
+            : "No eligible Bitcoin/crypto candidates found. If this day really has no significant news, confirm as empty. Otherwise reject and we'll widen the search.");
+      const pickFields = await finalizeArticlePickPackage({
+        date: item.date,
+        scenario: item.route === "empty_day" ? "empty_day" : "missing_day",
+        candidates: pool.candidates,
+        note: baseNote,
+      });
       const pickPackage: ArticlePickPackage = {
         phase: "awaiting_article_pick",
         scenario: item.route === "empty_day" ? "empty_day" : "missing_day",
         triage: item,
-        candidates: pool.candidates,
-        hasCandidates: pool.hasCandidates,
         removedDayContext: removedCtx,
-        note: removedCtx
-          ? removedDayArticlePickNote(removedCtx, pool.hasCandidates)
-          : pool.hasCandidates
-            ? "Exa returned candidates for this day. Pick the winning article (or reject as empty). Summary, tags, and topics will be generated after your pick."
-            : "Exa returned zero candidates across all three tiers. If this day really has no significant news, confirm as empty. Otherwise reject and we'll widen the search.",
+        ...pickFields,
       };
 
       await db.insert(humanReviewQueue).values({

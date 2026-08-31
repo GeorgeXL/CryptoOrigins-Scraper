@@ -122,7 +122,10 @@ export class DatabaseStorage implements IStorage {
     return newAnalysis;
   }
 
-  async updateAnalysis(date: string, analysis: Partial<InsertHistoricalNewsAnalysis>): Promise<HistoricalNewsAnalysis> {
+  async updateAnalysis(
+    date: string,
+    analysis: Partial<InsertHistoricalNewsAnalysis> & { flaggedAt?: Date | null },
+  ): Promise<HistoricalNewsAnalysis> {
     const existing = await this.getAnalysisByDate(date);
 
     // Simple update - only update fields that are provided

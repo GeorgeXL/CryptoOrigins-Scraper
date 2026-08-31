@@ -204,6 +204,8 @@ export type ApproveReviewOpts = {
   editedSummary?: string;
   editedTags?: string[];
   editedTopics?: string[];
+  /** Agents review queue runs Google Check + rarity client-side with live activity log. */
+  skipFinishTail?: boolean;
 };
 
 export type PipelineAgentName =
@@ -354,7 +356,19 @@ export async function approveReviewItem(id: string, opts?: ApproveReviewOpts) {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await parseError(res));
-  return res.json();
+  return res.json() as Promise<{
+    success?: boolean;
+    itemId?: string;
+    runId?: string;
+    execution?: { ok?: boolean; message?: string };
+    finishTail?: {
+      ok: boolean;
+      phase: string;
+      message: string;
+      googleHappened?: "yes" | "no" | "uncertain";
+      rarity?: string | null;
+    };
+  }>;
 }
 
 export async function rejectReviewItem(id: string, notes?: string) {

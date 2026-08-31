@@ -185,13 +185,23 @@ export function AnalysesTable({
     return getRowHref ? getRowHref(analysis) : `/day/${analysis.date}`;
   };
 
+  const openHrefInNewTab = (href: string) => {
+    const url = new URL(href, window.location.origin).href;
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
   const handleOpenInNewTab = () => {
     if (!contextTarget) return;
     if (onOpenInNewTab) {
       onOpenInNewTab(contextTarget);
     } else {
-      const url = resolveRowHref(contextTarget);
-      window.open(url, "_blank", "noreferrer");
+      openHrefInNewTab(resolveRowHref(contextTarget));
     }
     setContextMenuOpen(false);
   };

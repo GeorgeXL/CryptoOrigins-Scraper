@@ -13,8 +13,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { BulkDayActivityLog } from "@/components/BulkDayActivityLog";
 import { PipelineActivityLog } from "@/components/PipelineActivityLog";
-import type { LogLine } from "@/lib/pipelineActivityLog";
+import type { DayActivityGroup, LogLine } from "@/lib/pipelineActivityLog";
 import { getQualityCheckAgentAction } from "@shared/quality-check-agent-actions";
 
 type QualityCheckAgentToolbarProps = {
@@ -24,9 +25,12 @@ type QualityCheckAgentToolbarProps = {
   running: boolean;
   progressLabel: string | null;
   logLines: LogLine[];
+  dayGroups?: DayActivityGroup[];
+  planLine?: LogLine | null;
   logScrollRef: React.RefObject<HTMLDivElement | null>;
   onRun: () => void;
   onStop: () => void;
+  onToggleDay?: (dayId: string) => void;
   /** Render only the run/stop button (header right). */
   compact?: boolean;
   /** Render only progress + activity log (below header). */
@@ -90,14 +94,21 @@ function QualityCheckAgentLogPanel({
   running,
   progressLabel,
   logLines,
+  dayGroups,
+  planLine,
   logScrollRef,
+  onToggleDay,
 }: {
   running: boolean;
   progressLabel: string | null;
   logLines: LogLine[];
+  dayGroups?: DayActivityGroup[];
+  planLine?: LogLine | null;
   logScrollRef: React.RefObject<HTMLDivElement | null>;
+  onToggleDay?: (dayId: string) => void;
 }) {
-  if (!running && logLines.length === 0) return null;
+  const useDayGroups = (dayGroups?.length ?? 0) > 0;
+  if (!running && logLines.length === 0 && !useDayGroups) return null;
 
   return (
     <div className="mb-3 space-y-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
@@ -109,7 +120,17 @@ function QualityCheckAgentLogPanel({
       ) : null}
       <section className="space-y-2">
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Activity log</Label>
-        <PipelineActivityLog lines={logLines} scrollRef={logScrollRef} scrollClassName="h-[200px]" />
+        {useDayGroups ? (
+          <BulkDayActivityLog
+            planLine={planLine ?? null}
+            groups={dayGroups ?? []}
+            scrollRef={logScrollRef}
+            scrollClassName="h-[200px]"
+            onToggleDay={onToggleDay ?? (() => undefined)}
+          />
+        ) : (
+          <PipelineActivityLog lines={logLines} scrollRef={logScrollRef} scrollClassName="h-[200px]" />
+        )}
       </section>
     </div>
   );
@@ -122,9 +143,12 @@ export function QualityCheckAgentToolbar({
   running,
   progressLabel,
   logLines,
+  dayGroups,
+  planLine,
   logScrollRef,
   onRun,
   onStop,
+  onToggleDay,
   compact,
   logOnly,
 }: QualityCheckAgentToolbarProps) {
@@ -156,7 +180,10 @@ export function QualityCheckAgentToolbar({
         running={running}
         progressLabel={progressLabel}
         logLines={logLines}
+        dayGroups={dayGroups}
+        planLine={planLine}
         logScrollRef={logScrollRef}
+        onToggleDay={onToggleDay}
       />
     );
   }
@@ -177,7 +204,10 @@ export function QualityCheckAgentToolbar({
         running={running}
         progressLabel={progressLabel}
         logLines={logLines}
+        dayGroups={dayGroups}
+        planLine={planLine}
         logScrollRef={logScrollRef}
+        onToggleDay={onToggleDay}
       />
     </div>
   );

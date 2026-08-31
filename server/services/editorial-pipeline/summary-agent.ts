@@ -325,3 +325,77 @@ export async function expandShortSummaryWithAgent(date: string): Promise<{
 
   return { ok: false, message: "Expansion failed to produce 100–110 character summary after 3 attempts" };
 }
+
+export type EnsureEditorialSummaryResult = {
+  ok: boolean;
+  bootstrapped: boolean;
+  summary?: string;
+  message?: string;
+  /** Winning article id is set but tiered/analyzed payloads lack that article. */
+  missingArticlePayload?: boolean;
+};
+
+/**
+ * When a day has a winning article but no usable summary yet, build the summary
+ * before tag/topic agents run. Used by the final-agent path for unlocked URL days.
+ */
+export async function ensureEditorialSummaryForDay(date: string): Promise<EnsureEditorialSummaryResult> {
+  const { storage } = await import("../../storage");
+  const analysis = await storage.getAnalysisByDate(date);
+  if (!analysis) {
+    return { ok: false, bootstrapped: false, message: `No analysis row for ${date}` };
+  }
+
+  const current = normalizeEditorialSummaryText(String(analysis.summary ?? "").trim());
+  const quality = evaluateSummaryQuality(current);
+  if (!quality) {
+    return { ok: true, bootstrapped: false, summary: current };
+  }
+
+  if (!isValidPipelineTopArticleId(analysis.topArticleId)) {
+    return {
+      ok: false,
+      bootstrapped: false,
+      message: "Top article id missing or invalid — cannot build summary",
+    };
+  }
+
+  const { resolveStoredWinningArticle } = await import("./run");
+  const resolved = resolveStoredWinningArticle({
+    topArticleId: analysis.topArticleId,
+    tieredArticles: analysis.tieredArticles,
+    analyzedArticles: analysis.analyzedArticles,
+    winningTier: analysis.winningTier,
+  });
+  if (!resolved) {
+    return {
+      ok: false,
+      bootstrapped: false,
+      message:
+        "Winning article missing from stored payloads (not in tiered or analyzed articles). Re-pick or refetch the article.",
+      missingArticlePayload: true,
+    };
+  }
+
+  if (quality.code === "too_short" && current.length > 0) {
+    const expanded = await expandShortSummaryWithAgent(date);
+    if (expanded.ok) {
+      const fresh = await storage.getAnalysisByDate(date);
+      const summary = normalizeEditorialSummaryText(String(fresh?.summary ?? "").trim());
+      return { ok: true, bootstrapped: true, summary };
+    }
+  }
+
+  const regen = await regenerateSummaryWithAgent(date);
+  if (regen.ok) {
+    const fresh = await storage.getAnalysisByDate(date);
+    const summary = normalizeEditorialSummaryText(String(fresh?.summary ?? "").trim());
+    return { ok: true, bootstrapped: true, summary };
+  }
+
+  return {
+    ok: false,
+    bootstrapped: false,
+    message: regen.message ?? "Summary generation failed",
+  };
+}

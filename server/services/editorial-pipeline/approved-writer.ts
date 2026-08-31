@@ -673,7 +673,7 @@ async function applySummaryApproval(opts: {
 
   return {
     ok: true,
-    message: `Summary approved for ${opts.date}: ${finalTags.length} tag(s), ${persistedTopicLabels.length} storyline(s) written; orphan flag cleared.`,
+    message: `Summary approved for ${opts.date}: ${finalTags.length} tag(s), ${persistedTopicLabels.length} storyline(s) written.`,
   };
 }
 

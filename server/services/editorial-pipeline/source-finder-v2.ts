@@ -15,6 +15,23 @@ import { hierarchicalSearch } from "../hierarchical-search";
 import type { ArticleData } from "@shared/schema";
 import { detectCanonicalDateMismatch } from "./tools";
 import type { ArticleCandidate } from "./review-package";
+import { researchSignificantEventForDateWithGoogle } from "../homepage-checks/google-day-research";
+import {
+  isBlockedSourceUrl,
+  isGenesisForumUrl,
+  isRecognizedMediaUrl,
+  normalizeHttpsUrl,
+} from "../homepage-checks/perplexity-day-research";
+import {
+  canRecommendCandidate,
+  candidateTopicRejectionReason,
+  filterEligibleCandidates,
+  GENESIS_EMPTY_POOL_NOTE,
+  hasCryptoSignalText,
+  isBlockedArticlePickUrl,
+  isGenesisEraDate,
+  isOffTopicJunkText,
+} from "./article-pick-quality";
 
 const MAX_CANDIDATES_PER_TIER = 8;
 const MAX_TOTAL_CANDIDATES = 18;
@@ -164,15 +181,22 @@ export function evaluateCandidateStorySanity(input: {
     notes.push(`Mentions future year(s) ${futureYears.slice(0, 3).join(", ")} relative to ${input.targetDate}`);
   }
 
+  // 12. Off-topic junk that Exa sometimes returns for early dates
+  if (isOffTopicJunkText(corpus)) {
+    notes.push("Off-topic junk (philanthropy, pharma, clickbait, penny-stock, etc.)");
+  }
+
   return { ok: notes.length === 0, notes };
 }
 
 function computeCalendarSanity(input: {
   targetDate: string;
+  tier: "bitcoin" | "crypto" | "macro";
   candidateTitle: string;
   candidatePublishedDate: string | null | undefined;
   candidateText: string;
   candidateSummary: string;
+  candidateUrl?: string;
 }): { ok: boolean; offsetDays: number | null; notes: string[] } {
   const notes: string[] = [];
   const target = parseYmd(input.targetDate);
@@ -205,6 +229,21 @@ function computeCalendarSanity(input: {
     text: input.candidateText,
   });
   notes.push(...story.notes);
+
+  if (input.candidateUrl && isBlockedArticlePickUrl(input.candidateUrl)) {
+    notes.push("Blocked low-quality or blog domain");
+  }
+
+  const topicReason = candidateTopicRejectionReason({
+    title: input.candidateTitle,
+    summary: input.candidateSummary,
+    url: input.candidateUrl ?? "",
+    tier: input.tier,
+    date: input.targetDate,
+  });
+  if (topicReason) {
+    notes.push(topicReason);
+  }
 
   return { ok: notes.length === 0, offsetDays, notes };
 }
@@ -253,6 +292,10 @@ function computeRelevance(input: {
       hits.push(group.words[0]);
     }
   }
+  if (kwBoost === 0 && (input.tier === "bitcoin" || input.tier === "crypto")) {
+    score -= 0.35;
+    notes.push("no crypto keywords (-0.35)");
+  }
   if (kwBoost > 0) {
     // Cap keyword contribution.
     kwBoost = Math.min(kwBoost, 0.45);
@@ -285,10 +328,12 @@ function toCandidate(input: {
 }): ArticleCandidate {
   const sanity = computeCalendarSanity({
     targetDate: input.targetDate,
+    tier: input.tier,
     candidateTitle: input.article.title ?? "",
     candidatePublishedDate: input.article.publishedDate,
     candidateText: typeof input.article.text === "string" ? input.article.text : "",
     candidateSummary: typeof input.article.summary === "string" ? input.article.summary : "",
+    candidateUrl: input.article.url,
   });
   let host: string | undefined;
   try {
@@ -335,12 +380,145 @@ function dedupeByUrl(candidates: ArticleCandidate[]): ArticleCandidate[] {
   return out;
 }
 
+function hasCryptoSignal(candidate: ArticleCandidate): boolean {
+  return hasCryptoSignalText(`${candidate.title} ${candidate.summary ?? ""}`);
+}
+
+function isCandidatePoolWeak(candidates: ArticleCandidate[], date: string): boolean {
+  if (candidates.length === 0) return true;
+  const sane = candidates.filter((candidate) => candidate.calendarSanityOk);
+  if (sane.length === 0) return true;
+
+  const topSane = [...sane].sort((a, b) => (b.relevanceScore ?? 0) - (a.relevanceScore ?? 0))[0];
+  if ((topSane?.relevanceScore ?? 0) < 0.42) return true;
+
+  const year = Number(date.slice(0, 4));
+  if (year < 2011 && !sane.some(hasCryptoSignal)) return true;
+
+  return false;
+}
+
+function stableGoogleCandidateId(url: string): string {
+  const slug = Buffer.from(url).toString("base64url").slice(0, 48);
+  return `google:${slug}`;
+}
+
+function isAcceptableGoogleSourceUrl(url: string, date: string): boolean {
+  if (isBlockedSourceUrl(url) || isBlockedArticlePickUrl(url)) return false;
+  return isRecognizedMediaUrl(url) || isGenesisForumUrl(url, date);
+}
+
+function candidateFromGoogleUrl(input: {
+  date: string;
+  url: string;
+  tier: "bitcoin" | "crypto" | "macro";
+  title: string;
+  summary: string;
+  rank: number;
+}): ArticleCandidate | null {
+  const normalized = normalizeHttpsUrl(input.url);
+  if (!normalized || !isAcceptableGoogleSourceUrl(normalized, input.date)) {
+    return null;
+  }
+
+  const article: ArticleData = {
+    id: stableGoogleCandidateId(normalized),
+    title: input.title,
+    url: normalized,
+    publishedDate: input.date,
+    author: undefined,
+    text: input.summary,
+    score: 0.9,
+    summary: input.summary,
+  };
+
+  const candidate = toCandidate({
+    article,
+    tier: input.tier,
+    rank: input.rank,
+    targetDate: input.date,
+  });
+  candidate.relevanceNotes = ["added via Google Search fallback", ...(candidate.relevanceNotes ?? [])];
+  return candidate;
+}
+
+async function enrichPoolWithGoogleResearch(
+  date: string,
+  candidates: ArticleCandidate[],
+): Promise<ArticleCandidate[]> {
+  try {
+    const research = await researchSignificantEventForDateWithGoogle(date);
+    if (!research.found || !research.tier) {
+      return candidates;
+    }
+
+    const additions: ArticleCandidate[] = [];
+    const urls = new Set<string>();
+    if (research.sourceUrl) urls.add(research.sourceUrl);
+    for (const citation of research.citations) {
+      if (citation) urls.add(citation);
+    }
+
+    let rank = 0;
+    for (const url of urls) {
+      const candidate = candidateFromGoogleUrl({
+        date,
+        url,
+        tier: research.tier,
+        title: research.eventTitle || research.sourceTitle || "Google Search result",
+        summary: research.eventSnippet || research.reasoning || "",
+        rank,
+      });
+      rank += 1;
+      if (candidate) additions.push(candidate);
+    }
+
+    if (additions.length === 0) return candidates;
+    return dedupeByUrl([...additions, ...candidates]).slice(0, MAX_TOTAL_CANDIDATES);
+  } catch (error) {
+    console.warn(`[source-finder-v2] Google research fallback failed for ${date}:`, error);
+    return candidates;
+  }
+}
+
+function assignRecommendedCandidate(candidates: ArticleCandidate[], date: string): void {
+  for (const candidate of candidates) {
+    candidate.recommended = false;
+  }
+  const recommended =
+    [...candidates]
+      .filter((candidate) => canRecommendCandidate(candidate, date))
+      .sort((a, b) => (b.relevanceScore ?? 0) - (a.relevanceScore ?? 0))[0] ?? null;
+  if (!recommended) return;
+  recommended.recommended = true;
+  if (recommended.relevanceNotes) {
+    recommended.relevanceNotes = [
+      "recommended (highest score with date sanity)",
+      ...recommended.relevanceNotes,
+    ];
+  }
+}
+
+function sortCandidates(candidates: ArticleCandidate[]): void {
+  candidates.sort((a, b) => {
+    const sa = a.relevanceScore ?? 0;
+    const sb = b.relevanceScore ?? 0;
+    if (sb !== sa) return sb - sa;
+    const ta = TIER_WEIGHT[a.tier];
+    const tb = TIER_WEIGHT[b.tier];
+    if (tb !== ta) return tb - ta;
+    return a.rank - b.rank;
+  });
+}
+
 export type CandidatePoolForDate = {
   date: string;
   candidates: ArticleCandidate[];
   perTierCounts: { bitcoin: number; crypto: number; macro: number };
   /** True iff the candidate pool is non-empty. */
   hasCandidates: boolean;
+  /** Operator note when the pool is empty or filtered down intentionally. */
+  poolNote?: string;
 };
 
 export async function fetchCandidatesForDate(
@@ -365,38 +543,33 @@ export async function fetchCandidatesForDate(
   );
 
   const unique = dedupeByUrl(candidates).slice(0, MAX_TOTAL_CANDIDATES);
+  sortCandidates(unique);
 
-  // Sort by relevance (recommended-first ordering). Tie-break by tier weight
-  // then by intra-tier rank so deterministic and readable.
-  unique.sort((a, b) => {
-    const sa = a.relevanceScore ?? 0;
-    const sb = b.relevanceScore ?? 0;
-    if (sb !== sa) return sb - sa;
-    const ta = TIER_WEIGHT[a.tier];
-    const tb = TIER_WEIGHT[b.tier];
-    if (tb !== ta) return tb - ta;
-    return a.rank - b.rank;
-  });
-
-  // Only auto-recommend a candidate that actually passes calendar/story sanity.
-  // If none pass, leave `recommended = false` on every candidate so the operator
-  // is forced to make an explicit override pick instead of trusting the badge.
-  const recommended = unique.find((c) => c.calendarSanityOk) ?? null;
-  if (recommended) {
-    recommended.recommended = true;
-    if (recommended.relevanceNotes) {
-      recommended.relevanceNotes = ["recommended (highest score with date sanity)", ...recommended.relevanceNotes];
-    }
+  let finalCandidates = unique;
+  if (isCandidatePoolWeak(unique, date)) {
+    finalCandidates = await enrichPoolWithGoogleResearch(date, unique);
+    sortCandidates(finalCandidates);
   }
+
+  finalCandidates = filterEligibleCandidates(finalCandidates, date);
+
+  let poolNote: string | undefined;
+  if (isGenesisEraDate(date) && !finalCandidates.some(hasCryptoSignal)) {
+    finalCandidates = [];
+    poolNote = GENESIS_EMPTY_POOL_NOTE;
+  }
+
+  assignRecommendedCandidate(finalCandidates, date);
 
   return {
     date,
-    candidates: unique,
+    candidates: finalCandidates,
     perTierCounts: {
       bitcoin: bitcoin.length,
       crypto: crypto.length,
       macro: macro.length,
     },
-    hasCandidates: unique.length > 0,
+    hasCandidates: finalCandidates.length > 0,
+    poolNote,
   };
 }

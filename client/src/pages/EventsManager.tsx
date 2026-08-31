@@ -82,7 +82,7 @@ function applyQualityCheckSummaryFilter(
   rows: QualityViolation[],
   checkId: string | null,
 ): QualityViolation[] {
-  if (!checkId || checkId === "empty-summary" || checkId === "missing-months") {
+  if (!checkId || checkId === "empty-summary" || checkId === "missing-months" || checkId === "unlocked-url-no-summary") {
     return rows;
   }
   return rows.filter(qualityCheckRowHasSummary);
@@ -346,10 +346,13 @@ export default function EventsManager() {
   const {
     running: qualityAgentRunning,
     logLines: qualityAgentLogLines,
+    dayGroups: qualityAgentDayGroups,
+    planLine: qualityAgentPlanLine,
     progressLabel: qualityAgentProgressLabel,
     logScrollRef: qualityAgentLogScrollRef,
     runQualityCheckAgent,
     stopRun: stopQualityCheckAgent,
+    toggleDayExpanded: toggleQualityAgentDay,
     clearLog: clearQualityAgentLog,
   } = useQualityCheckAgentRun();
 
@@ -374,6 +377,19 @@ export default function EventsManager() {
     queryFn: async () => {
       const res = await fetch('/api/quality-check/empty-summaries');
       if (!res.ok) throw new Error('Failed to fetch empty summaries');
+      return res.json();
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const { data: unlockedUrlNoSummaryData, isLoading: unlockedUrlNoSummaryLoading } = useQuery<{
+    entries: { date: string; summary: string; topArticleUrl: string }[];
+    totalCount: number;
+  }>({
+    queryKey: ['events-manager-unlocked-url-no-summary'],
+    queryFn: async () => {
+      const res = await fetch('/api/quality-check/unlocked-url-no-summary');
+      if (!res.ok) throw new Error('Failed to fetch unlocked URL / no summary rows');
       return res.json();
     },
     staleTime: 1000 * 60 * 5,
@@ -1047,6 +1063,7 @@ export default function EventsManager() {
     const items: QualityCheckItem[] = [];
     const violations = qualityViolationsData || [];
     const emptyCount = emptySummaryData?.totalCount || 0;
+    const unlockedUrlNoSummaryCount = unlockedUrlNoSummaryData?.totalCount || 0;
     const untaggedCount = (untaggedData?.entries || []).filter(qualityCheckRowHasSummary).length;
     const missingMonthsCount = missingMonthsData?.totalCount || 0;
     const flaggedCount = (flaggedData?.entries || []).filter(qualityCheckRowHasSummary).length;
@@ -1071,6 +1088,7 @@ export default function EventsManager() {
       qualityCheckRowHasSummary,
     ).length;
     const isEmptyLoading = emptySummaryLoading;
+    const isUnlockedUrlNoSummaryLoading = unlockedUrlNoSummaryLoading;
     const isUntaggedLoading = untaggedLoading;
     const isMissingMonthsLoading = missingMonthsLoading;
     const isFlaggedLoading = flaggedLoading;
@@ -1085,6 +1103,14 @@ export default function EventsManager() {
       count: emptyCount,
       hasIssues: emptyCount > 0,
       isLoading: isEmptyLoading,
+    });
+
+    items.push({
+      id: 'unlocked-url-no-summary',
+      label: 'Unlocked with URL, no summary',
+      count: unlockedUrlNoSummaryCount,
+      hasIssues: unlockedUrlNoSummaryCount > 0,
+      isLoading: isUnlockedUrlNoSummaryLoading,
     });
 
     // Untagged
@@ -1196,7 +1222,7 @@ export default function EventsManager() {
     }
 
     return items;
-  }, [qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, rarityQualityData, qualityLoading, emptySummaryLoading, untaggedLoading, missingMonthsLoading, flaggedLoading, topicQualityLoading, rarityQualityLoading]);
+  }, [qualityViolationsData, emptySummaryData, unlockedUrlNoSummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, rarityQualityData, qualityLoading, emptySummaryLoading, unlockedUrlNoSummaryLoading, untaggedLoading, missingMonthsLoading, flaggedLoading, topicQualityLoading, rarityQualityLoading]);
 
   // Build Google Check items for sidebar
   const veriBadgeItems = useMemo<QualityCheckItem[]>(() => {
@@ -1312,6 +1338,16 @@ export default function EventsManager() {
           tags_version2: null,
         };
       });
+    }
+
+    if (selectedQualityCheck === 'unlocked-url-no-summary') {
+      return (unlockedUrlNoSummaryData?.entries || []).map((entry) => ({
+        date: entry.date,
+        summary: entry.topArticleUrl,
+        violations: ['Unlocked with URL, no summary'],
+        length: 0,
+        tags_version2: null,
+      }));
     }
 
     if (selectedQualityCheck === 'untagged') {
@@ -1494,7 +1530,7 @@ export default function EventsManager() {
     if (!type) return violations;
 
     return applyQualityCheckSummaryFilter(violations.filter(type.filterFn), selectedQualityCheck);
-  }, [selectedLocked, selectedUnlocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, rarityQualityData, lockedDaysData, unlockedDaysData, datesApprovedData, uncertainData, notVerifiedData, didntHappenData]);
+  }, [selectedLocked, selectedUnlocked, selectedQualityCheck, selectedVeriBadge, qualityViolationsData, emptySummaryData, unlockedUrlNoSummaryData, untaggedData, missingMonthsData, flaggedData, topicQualityData, rarityQualityData, lockedDaysData, unlockedDaysData, datesApprovedData, uncertainData, notVerifiedData, didntHappenData]);
 
   const qualityCheckAgentRows = useMemo<QualityCheckDateInput[]>(() => {
     return filteredQualityViolations.map((violation) => ({
@@ -2046,7 +2082,10 @@ export default function EventsManager() {
                     running={qualityAgentRunning}
                     progressLabel={qualityAgentProgressLabel}
                     logLines={qualityAgentLogLines}
+                    dayGroups={qualityAgentDayGroups}
+                    planLine={qualityAgentPlanLine}
                     logScrollRef={qualityAgentLogScrollRef}
+                    onToggleDay={toggleQualityAgentDay}
                     onRun={() =>
                       void runQualityCheckAgent({
                         checkId: selectedQualityCheck,
@@ -2090,7 +2129,9 @@ export default function EventsManager() {
                       : selectedVeriBadge === "didnt-happen"
                       ? didntHappenLoading
                       : selectedQualityCheck === 'empty-summary' 
-                      ? emptySummaryLoading 
+                      ? emptySummaryLoading
+                      : selectedQualityCheck === 'unlocked-url-no-summary'
+                      ? unlockedUrlNoSummaryLoading
                       : selectedQualityCheck === 'untagged'
                       ? untaggedLoading
                       : selectedQualityCheck === 'no-topic' ||
@@ -2135,6 +2176,21 @@ export default function EventsManager() {
                     };
                     const query = serializePageState(state);
                     setLocation(`/day/${date}?${query}`);
+                  }}
+                  getRowHref={(analysis) => {
+                    const state: HomePageState = {
+                      page: 'events-manager',
+                      selectedEntities,
+                      showUntagged,
+                      searchQuery,
+                      currentPage,
+                      pageSize,
+                      viewMode,
+                      selectedQualityCheck,
+                      selectedVeriBadge,
+                      qualityCheckPage,
+                    };
+                    return `/day/${analysis.date}?${serializePageState(state)}`;
                   }}
                   onTagClick={(tagName) => setSearchQuery(tagName)}
                   emptyMessage="No issues found in this category"
@@ -2238,6 +2294,21 @@ export default function EventsManager() {
                     };
                     const query = serializePageState(state);
                     setLocation(`/day/${date}?${query}`);
+                  }}
+                  getRowHref={(analysis) => {
+                    const state: HomePageState = {
+                      page: 'events-manager',
+                      selectedEntities,
+                      showUntagged,
+                      searchQuery,
+                      currentPage,
+                      pageSize,
+                      viewMode,
+                      selectedQualityCheck,
+                      selectedVeriBadge,
+                      qualityCheckPage,
+                    };
+                    return `/day/${analysis.date}?${serializePageState(state)}`;
                   }}
                   onTagClick={(tagName) => setSearchQuery(tagName)}
                   onToggleFlag={(analysis) => {

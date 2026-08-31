@@ -73,11 +73,11 @@ test("partitionGoogleCheckItems skips already-checked rows", () => {
   assert.equal(isGoogleCheckAlreadyDone("uncertain"), true);
 });
 
-test("getGoogleCheckProviderType defaults to openai", () => {
+test("getGoogleCheckProviderType defaults to gemini", () => {
   const previous = process.env.GOOGLE_CHECK_PROVIDER;
   delete process.env.GOOGLE_CHECK_PROVIDER;
   try {
-    assert.equal(getGoogleCheckProviderType(), "openai");
+    assert.equal(getGoogleCheckProviderType(), "gemini");
   } finally {
     if (previous === undefined) delete process.env.GOOGLE_CHECK_PROVIDER;
     else process.env.GOOGLE_CHECK_PROVIDER = previous;

@@ -6,6 +6,7 @@ import {
 import { IAiProvider, CompletionOptions, CompletionResult, JsonCompletionOptions } from "./types";
 import { GoogleGenAI } from "@google/genai";
 import { apiMonitor } from "../api-monitor";
+import { BLOCKED_ARTICLE_PICK_HOSTS } from "../editorial-pipeline/article-pick-quality";
 import { z } from "zod";
 
 export class GeminiProvider implements IAiProvider {
@@ -459,22 +460,41 @@ If all dates are accurate, distinct, or show a chronological progression of an e
       return `${candidate.id}|${candidate.tier}|${published}|${title}|${summary}`;
     });
 
-    const prompt = `Pick the single best article for calendar day ${input.date}. Use Google Search to verify what actually happened on or near that day.
+    const genesisEra = Number(input.date.slice(0, 4)) < 2011;
+    const blockedHosts = BLOCKED_ARTICLE_PICK_HOSTS.slice(0, 12).join(", ");
+
+    const prompt = `Pick the single best article for a Bitcoin/crypto/Web3 historical timeline on calendar day ${input.date}. Use Google Search to verify what actually happened on or near that day.
 
 Context: ${scenario}
 ${betterStorylineBlock}
-Rules:
-1. DATE FIT: The article must describe an event that occurred on ${input.date} or within 2 days. Reject articles about famous events on wrong dates, evergreen guides, listicles, or multi-story roundups.
-2. SIGNIFICANCE: Prefer the most historically notable Bitcoin/crypto/macro event for that day — not a minor blog post or marketing page.
-3. TIER: Prefer bitcoin-tier when Bitcoin is the main story; crypto-tier for exchange/DeFi/altcoin news; macro-tier when macro/politics is the day's story. Do not pick off-topic sports/celebrity content.
-4. BETTER STORYLINE: When replacing a vague summary, pick a candidate only if it names a concrete dated event; otherwise return null.
-5. NO GOOD MATCH: If none of the candidates are a reliable fit for ${input.date}, return null — do not guess.
+HARD REJECT — never pick these (return null if every candidate matches):
+- Entertainment, awards shows, celebrity gossip, sports, fashion, or lifestyle columns
+- Opinion columns, editorials, blogs, newsletters, house columns, or commentary that is not hard news
+- Philanthropy, charity, nonprofit, pharma/biotech trials, penny-stock press releases, clickbait
+- Blocked domains (never pick): ${blockedHosts}
+- Evergreen explainers, tutorials, "how it works", retrospectives, "on this day", anniversary pieces, listicles, or multi-story roundups
+- Generic tech product reviews/launches unless they are a major crypto/Web3 story
+- Minor or tangential macro crime/society stories when the timeline scope is Bitcoin, crypto, Web3, or major financial markets
+- Candidates in the bitcoin/crypto search bucket with NO Bitcoin/crypto topic in the title or summary
+
+TIER PRIORITY (strict):
+1. Bitcoin — protocol, mining, adoption, regulation, price moves directly about BTC
+2. Crypto/Web3 — exchanges, Ethereum, DeFi, stablecoins, altcoins, crypto policy
+3. Macro — ONLY major financial markets or policy events (central banks, bailouts, stimulus, bank failures, major market moves). Do NOT pick random UN/society/crime headlines unless they are clearly the day's dominant macro markets story.
+
+${genesisEra ? `GENESIS ERA (${input.date}): This is before mainstream Bitcoin news. Return null unless a candidate clearly mentions Bitcoin, BTC, Satoshi, blockchain, cryptocurrency, or early mining. Do NOT pick generic 2008-09 bailout blogs or Fed statistical releases as a substitute for crypto news.` : ""}
+
+RULES:
+1. DATE FIT: The article must describe an event on ${input.date} or within 2 days. Reject wrong-date famous events.
+2. CONCRETE EVENT: Pick only articles about something that HAPPENED — not analysis, background, or archive commentary.
+3. BETTER STORYLINE: When replacing a vague summary, pick only if the candidate names a concrete dated event; otherwise null.
+4. NO GOOD MATCH: If no candidate is a reliable Bitcoin/crypto/Web3 or defensible major-macro timeline event for ${input.date}, return null. Do NOT pick the least-bad off-topic article.
 
 Candidates (ID|TIER|PUBLISHED|TITLE|SUMMARY):
 ${lines.join("\n")}
 
-Return JSON only: {"pick":"exact-candidate-id"}
-If no candidate fits, return: {"pick":null}
+Return JSON only — exactly one object with a single key "pick". No reasoning, rationale, explanation, notes, or any other keys. No text before or after the JSON.
+Examples: {"pick":"exact-candidate-id"} or {"pick":null}
 Use only IDs from the list above.`;
 
     const schema = z.object({
@@ -484,10 +504,10 @@ Use only IDs from the list above.`;
     const result = await this.generateJson<{ pick: string | null }>({
       prompt,
       systemPrompt:
-        "Bitcoin/crypto/macro timeline article picker. Use Google Search to verify dated events. JSON only.",
+        "Strict curator for a Bitcoin/crypto/Web3 historical timeline. Use Google Search to verify dated events. Reject blogs, entertainment, and off-topic filler. Return null when nothing qualifies. Output JSON only: {\"pick\":...} with no reasoning or extra fields.",
       model: this.defaultModel,
       schema: schema as any,
-      maxTokens: 256,
+      maxTokens: 64,
       temperature: 0.1,
       context: "article-pick-google-check",
       purpose: `Pick article for ${input.date} (${input.candidates.length} candidates)`,

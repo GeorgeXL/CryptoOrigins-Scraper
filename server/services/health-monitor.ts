@@ -31,19 +31,18 @@ class HealthMonitor {
     const apis: ApiStatus[] = [];
     
     // Test AI Providers in parallel to avoid timeouts
-    const providers = ['openai', 'gemini', 'perplexity'];
-    const aiPromises = providers.map(provider => this.testAiProvider(provider as any));
-    
+    const providers = ['openai', 'gemini'] as const;
+    const aiPromises = providers.map((provider) => this.testAiProvider(provider));
+
     // Test EXA in parallel
     const exaPromise = this.testExa();
 
-    // Wait for all checks
-    const [openaiResult, geminiResult, perplexityResult, exaResult] = await Promise.all([
+    const [openaiResult, geminiResult, exaResult] = await Promise.all([
       ...aiPromises,
-      exaPromise
+      exaPromise,
     ]);
 
-    apis.push(openaiResult, geminiResult, perplexityResult, exaResult);
+    apis.push(openaiResult, geminiResult, exaResult);
     
     // Determine overall status
     const hasOutage = apis.some(api => api.status === 'outage');
@@ -66,7 +65,7 @@ class HealthMonitor {
     return this.cache;
   }
 
-  private async testAiProvider(providerName: 'openai' | 'gemini' | 'perplexity'): Promise<ApiStatus> {
+  private async testAiProvider(providerName: 'openai' | 'gemini'): Promise<ApiStatus> {
     const startTime = Date.now();
     try {
       const provider = aiService.getProvider(providerName);
@@ -86,16 +85,6 @@ class HealthMonitor {
           name: provider.getName(),
           status: responseTime > 10000 ? 'degraded' : 'operational',
           lastChecked: new Date().toISOString(),
-          responseTime
-        };
-      }
-
-      if (providerName === 'perplexity' && healthError?.includes('429')) {
-        return {
-          name: provider.getName(),
-          status: 'degraded',
-          lastChecked: new Date().toISOString(),
-          error: 'Rate limited (batch may be active)',
           responseTime
         };
       }

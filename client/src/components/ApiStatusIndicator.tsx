@@ -27,7 +27,6 @@ export function ApiStatusIndicator() {
     const nameMap: Record<string, string> = {
       'openai': 'OpenAI',
       'gemini': 'Gemini',
-      'perplexity': 'Perplexity',
       'exa': 'Exa',
       'EXA': 'Exa',
     };

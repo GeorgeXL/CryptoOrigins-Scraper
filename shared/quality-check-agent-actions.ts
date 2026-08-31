@@ -6,7 +6,7 @@ export type QualityCheckPipelineScope =
   | "duplicates"
   | "date";
 
-export type QualityCheckAgentKind = "pipeline" | "remove-periods" | "rarity";
+export type QualityCheckAgentKind = "pipeline" | "remove-periods" | "rarity" | "final";
 
 export type QualityCheckAgentAction = {
   buttonLabel: string;
@@ -27,12 +27,18 @@ export const QUALITY_CHECK_AGENT_ACTIONS: Record<string, QualityCheckAgentAction
     checkScopes: ["relevance"],
   },
   untagged: {
-    buttonLabel: "Run agent: extract tags",
-    confirmTitle: "Extract tags with the Tag Agent?",
+    buttonLabel: "Run final agent",
+    confirmTitle: "Run the final agent on selected untagged days?",
     confirmDescription:
-      "Runs the editorial pipeline (tags scope) on selected days. Tag proposals queue for human approval when needed.",
-    kind: "pipeline",
-    checkScopes: ["tags"],
+      "Runs the full editorial pipeline, then Google Check and rarity (when eligible) — same sequence as the day-page Final agent.",
+    kind: "final",
+  },
+  "unlocked-url-no-summary": {
+    buttonLabel: "Run final agent",
+    confirmTitle: "Run the final agent on days with URL but no summary?",
+    confirmDescription:
+      "Runs the full editorial pipeline to write the summary and tags from the saved article, then Google Check and rarity when eligible.",
+    kind: "final",
   },
   flagged: {
     buttonLabel: "Run agent: review flagged",
@@ -206,7 +212,11 @@ export function isEmptyQualityCheckSummary(summary?: string | null): boolean {
 
 /** Month-gap runs target calendar ranges; empty-summary tab intentionally processes blank days. */
 export function qualityCheckAgentSkipsEmptySummaries(checkId: string): boolean {
-  return checkId !== "empty-summary" && checkId !== "missing-months";
+  return (
+    checkId !== "empty-summary" &&
+    checkId !== "missing-months" &&
+    checkId !== "unlocked-url-no-summary"
+  );
 }
 
 export function filterQualityCheckAgentRows(
@@ -325,7 +335,7 @@ export function resolveQualityCheckRunWindows(
   selectedDates: Set<string>,
 ): PipelineRunWindow[] {
   const action = QUALITY_CHECK_AGENT_ACTIONS[checkId];
-  if (!action || action.kind !== "pipeline") return [];
+  if (!action || (action.kind !== "pipeline" && action.kind !== "final")) return [];
 
   const pickRows = filterQualityCheckAgentRows(checkId, rows, selectedDates);
 

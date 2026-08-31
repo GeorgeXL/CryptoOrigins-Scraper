@@ -4,6 +4,33 @@ export type LogStatus = "pending" | "approved" | "rejected" | "review";
 
 export type LogLine = { id: string; text: string; status: LogStatus; emphasis?: string };
 
+export type DayActivityStatus = "pending" | "running" | "done";
+
+export type DayActivityGroup = {
+  id: string;
+  date: string;
+  dayIndex: number;
+  dayTotal: number;
+  status: DayActivityStatus;
+  outcome?: LogStatus;
+  lines: LogLine[];
+  expanded: boolean;
+};
+
+export function upsertLogLine(lines: LogLine[], line: LogLine): LogLine[] {
+  const idx = lines.findIndex((entry) => entry.id === line.id);
+  if (idx === -1) return [...lines, line];
+  const next = [...lines];
+  next[idx] = line;
+  return next;
+}
+
+export function deriveDayOutcome(lines: LogLine[]): LogStatus {
+  if (lines.some((line) => line.status === "rejected")) return "rejected";
+  if (lines.some((line) => line.status === "review")) return "review";
+  return "approved";
+}
+
 function stepToLogStatus(status: string): LogStatus {
   if (status === "completed" || status === "skipped" || status === "approved") return "approved";
   if (status === "rejected" || status === "error") return "rejected";

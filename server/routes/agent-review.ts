@@ -28,6 +28,10 @@ import {
   type CalendarDecisionInput,
   type DuplicateDecisionInput,
 } from "../services/editorial-pipeline/approved-writer";
+import {
+  finishDayAfterV3SummaryApproval,
+  metadataApprovalPhaseWantsFinishTail,
+} from "../services/editorial-pipeline/finish-day-after-v3-approval";
 import { evaluateCandidateStorySanity } from "../services/editorial-pipeline/source-finder-v2";
 import { detectMilestoneGapsInWindow } from "../services/editorial-pipeline/milestones";
 import { isValidPipelineTopArticleId } from "../services/editorial-pipeline/editorial-quality";
@@ -1198,7 +1202,27 @@ router.post("/api/agent/pipeline/review/:id/approve", async (req, res) => {
       editedTopics,
       reviewer,
     });
-    res.json({ success: true, itemId: updated[0].id, runId: updated[0].runId, execution });
+
+    const skipFinishTail = req.body?.skipFinishTail === true;
+    let finishTail: Awaited<ReturnType<typeof finishDayAfterV3SummaryApproval>> | undefined;
+    const approvalPhase = pickPhaseFromPackage(existing.package);
+    const finishDate = normalizeEventDate(existing.eventDate);
+    if (
+      execution.ok &&
+      finishDate &&
+      metadataApprovalPhaseWantsFinishTail(approvalPhase) &&
+      !skipFinishTail
+    ) {
+      finishTail = await finishDayAfterV3SummaryApproval({ date: finishDate, reviewer });
+    }
+
+    res.json({
+      success: true,
+      itemId: updated[0].id,
+      runId: updated[0].runId,
+      execution,
+      finishTail,
+    });
   } catch (e: any) {
     res.status(e.status || 500).json({ error: e.message || "Approve review failed" });
   }

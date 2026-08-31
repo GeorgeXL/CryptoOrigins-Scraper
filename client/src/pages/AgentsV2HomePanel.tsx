@@ -11,7 +11,6 @@ import {
 } from "@/pages/agents-v2/calendar-date-entries";
 import { AgentsV2ResumeSlicePanel } from "@/pages/agents-v2/AgentsV2ResumeSlicePanel";
 import { AgentsV2ReviewPhasePanel } from "@/pages/agents-v2/AgentsV2ReviewPhasePanels";
-import { formatCorrectionChangeLines, summarizeCorrectionProposals } from "@/lib/correction-proposal-view";
 import {
   consolidateQueueRows,
   duplicatePairKey,
@@ -30,11 +29,12 @@ import {
   fetchReviewQueue,
   rejectReviewItem,
   rememberLastPipelineRunId,
-  verifyEditorialDay,
   type ApproveReviewOpts,
-  type DayVerificationResult,
 } from "@/lib/editorial-pipeline";
-import type { LogLine } from "@/lib/pipelineActivityLog";
+import { BulkDayActivityLog } from "@/components/BulkDayActivityLog";
+import type { DayActivityGroup, LogLine } from "@/lib/pipelineActivityLog";
+import { deriveDayOutcome, upsertLogLine } from "@/lib/pipelineActivityLog";
+import { runFinalAgentTailSteps } from "@/lib/final-agent-tail-steps";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,7 +54,7 @@ import { PipelineActivityLog } from "@/components/PipelineActivityLog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Info, Link2, Loader2, RefreshCw, ShieldCheck, StopCircle, Trash2, X, XCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Info, Link2, Loader2, RefreshCw, StopCircle, Trash2, X, XCircle } from "lucide-react";
 
 type QueueStatus = "pending" | "approved" | "rejected";
 type FilterTab = QueueStatus | "all";
@@ -937,44 +937,18 @@ function TailoredLiveReviewCard({
 
   if (phase === "awaiting_correction_approval") {
     const displayedSummary = item.daySummary?.trim() || row.subtitle || row.title;
-    const proposedChanges = item.proposals ?? [];
     return (
-      <div className="space-y-3">
-        <div className="rounded-lg border border-border bg-background p-4">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-[120px_minmax(0,1fr)_minmax(0,12rem)]">
-            <ReviewCardDateField date={row.date} />
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Summary</p>
-              <p className="mt-1 text-sm">{displayedSummary}</p>
-            </div>
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Tags</p>
-              <p className="mt-1 text-xs text-muted-foreground">{dayTags.join(", ") || "No tags"}</p>
-              <p className="mt-3 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Topics</p>
-              <p className="mt-1 text-xs text-muted-foreground">{dayTopics.join(", ") || "Unassigned"}</p>
-            </div>
-          </div>
-          <div className="mt-3 rounded-md border border-emerald-500/35 bg-emerald-500/[0.06] p-3">
-            <p className="mb-1 text-[11px] uppercase tracking-[0.14em] text-emerald-300">What will change</p>
-            {proposedChanges.length ? (
-              <ul className="space-y-1">
-                {formatCorrectionChangeLines(summarizeCorrectionProposals(proposedChanges)).map((line) => (
-                  <li key={line} className="text-xs text-muted-foreground">
-                    • {line}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                {row.outcomePreview?.line ?? "Apply approved fixes and keep this day in the timeline."}
-              </p>
-            )}
-          </div>
-        </div>
-        <div className="rounded-lg border border-border bg-background p-3">
-          <AgentsV2ReviewPhasePanel item={item} busy={busy} onApprove={(id, opts) => onApprove(id, opts)} />
-        </div>
-      </div>
+      <AgentsV2ReviewPhasePanel
+        item={item}
+        busy={busy}
+        onApprove={(id, opts) => onApprove(id, opts)}
+        layoutContext={{
+          date: row.date,
+          summary: displayedSummary,
+          tags: dayTags.filter(Boolean),
+          topics: dayTopics.filter(Boolean),
+        }}
+      />
     );
   }
 
@@ -1079,8 +1053,6 @@ function QueueList({
 }: QueueListProps) {
   const previousRowsRef = useRef<QueueRow[]>(rows);
   const lastAdvanceNonceRef = useRef<number | null>(null);
-  const [verifyBusyId, setVerifyBusyId] = useState<string | null>(null);
-  const [verifyResults, setVerifyResults] = useState<Record<string, DayVerificationResult>>({});
   const reduceMotion = useReducedMotion();
   const panelTransition = reduceMotion
     ? { duration: 0.15 }
@@ -1256,7 +1228,7 @@ function QueueList({
                           )
                         ) : (
                           reviewRows.map((reviewRow) => (
-                            <div key={reviewRow.id} className="space-y-4">
+                            <div key={reviewRow.id}>
                               {reviewRow.status === "pending" ? (
                                 <TailoredLiveReviewCard
                                   row={reviewRow}
@@ -1267,53 +1239,6 @@ function QueueList({
                               ) : (
                                 <ResolvedReviewBody row={reviewRow} />
                               )}
-                              {reviewRow.status === "pending" ? (
-                                <div className="rounded-xl border border-border/70 bg-background/45 p-4">
-                                  <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="w-full sm:w-auto"
-                                      disabled={busy}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        void onReject(reviewRow.id);
-                                      }}
-                                    >
-                                      Reject
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      className="w-full border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
-                                      disabled={busy}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (
-                                          !window.confirm(
-                                            "Remove this pending review from the queue? This cannot be undone.",
-                                          )
-                                        ) {
-                                          return;
-                                        }
-                                        void onRemove(reviewRow.id);
-                                      }}
-                                    >
-                                      <Trash2 className="mr-2 size-4 shrink-0" aria-hidden />
-                                      Remove from queue
-                                    </Button>
-                                    {/^\d{4}-\d{2}-\d{2}$/.test(reviewRow.date) ? (
-                                      <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" asChild>
-                                        <Link href={`/day/${reviewRow.date}`} target="_blank" rel="noopener noreferrer">
-                                          Open day
-                                        </Link>
-                                      </Button>
-                                    ) : null}
-                                  </div>
-                                </div>
-                              ) : null}
                             </div>
                           ))
                         )}
@@ -1373,79 +1298,23 @@ function QueueList({
                                 <span className="hidden sm:inline">Remove from queue</span>
                               </Button>
                               {/^\d{4}-\d{2}-\d{2}$/.test(row.date) ? (
-                                <>
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="w-full sm:w-auto"
-                                    disabled={busy || verifyBusyId === row.id}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setVerifyBusyId(row.id);
-                                      void verifyEditorialDay(row.date, "quick")
-                                        .then((result) => {
-                                          setVerifyResults((prev) => ({ ...prev, [row.id]: result }));
-                                        })
-                                        .catch(() => {
-                                          toast({
-                                            title: "Verify failed",
-                                            description: "Could not verify this day.",
-                                            variant: "destructive",
-                                          });
-                                        })
-                                        .finally(() => setVerifyBusyId(null));
-                                    }}
-                                  >
-                                    {verifyBusyId === row.id ? (
-                                      <Loader2 className="mr-2 size-4 animate-spin" />
-                                    ) : (
-                                      <ShieldCheck className="mr-2 size-4 shrink-0" aria-hidden />
-                                    )}
-                                    Verify
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="w-full sm:w-auto"
-                                    asChild
-                                    title="Open day (O)"
-                                  >
-                                    <Link href={`/day/${row.date}`} target="_blank" rel="noopener noreferrer">
-                                      Open day{" "}
-                                      <kbd className="ml-1 hidden rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground sm:inline">
-                                        O
-                                      </kbd>
-                                    </Link>
-                                  </Button>
-                                </>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="w-full sm:w-auto"
+                                  asChild
+                                  title="Open day (O)"
+                                >
+                                  <Link href={`/day/${row.date}`} target="_blank" rel="noopener noreferrer">
+                                    Open day{" "}
+                                    <kbd className="ml-1 hidden rounded border border-border/80 px-1 text-[10px] font-normal text-muted-foreground sm:inline">
+                                      O
+                                    </kbd>
+                                  </Link>
+                                </Button>
                               ) : null}
                             </div>
-                            {verifyResults[row.id] ? (
-                              <div
-                                className={cn(
-                                  "mt-3 rounded-lg border px-3 py-2 text-xs leading-relaxed",
-                                  verifyResults[row.id].passed
-                                    ? "border-emerald-500/30 bg-emerald-500/[0.06] text-muted-foreground"
-                                    : "border-amber-500/35 bg-amber-500/[0.06] text-muted-foreground",
-                                )}
-                              >
-                                <p className="font-medium text-foreground">
-                                  {verifyResults[row.id].passed ? "Quick verify passed" : "Quick verify found issues"}
-                                </p>
-                                <ul className="mt-2 space-y-1">
-                                  {verifyResults[row.id].checks
-                                    .filter((c) => c.status !== "pass")
-                                    .slice(0, 4)
-                                    .map((c) => (
-                                      <li key={c.id}>
-                                        {c.label}: {c.message}
-                                      </li>
-                                    ))}
-                                </ul>
-                              </div>
-                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -1575,7 +1444,66 @@ export default function AgentsV2HomePanel() {
   const [articlePickAutoLogLines, setArticlePickAutoLogLines] = useState<LogLine[]>([]);
   const articlePickAutoStopRef = useRef(false);
   const articlePickAutoLogScrollRef = useRef<HTMLDivElement | null>(null);
+  const [finishDayGroups, setFinishDayGroups] = useState<DayActivityGroup[]>([]);
+  const [finishPlanLine, setFinishPlanLine] = useState<LogLine | null>(null);
+  const finishLogScrollRef = useRef<HTMLDivElement | null>(null);
   const autoRunBusy = calendarAutoRunning || articlePickAutoRunning;
+
+  const patchFinishDayGroup = useCallback(
+    (date: string, lines: LogLine[], status: DayActivityGroup["status"] = "running") => {
+      setFinishDayGroups((prev) =>
+        prev.map((group) =>
+          group.id === date
+            ? {
+                ...group,
+                lines,
+                status,
+                expanded: true,
+                outcome: status === "done" ? deriveDayOutcome(lines) : group.outcome,
+              }
+            : group,
+        ),
+      );
+    },
+    [],
+  );
+
+  const ensureFinishDayGroup = useCallback((date: string) => {
+    setFinishPlanLine({
+      id: "review-queue-final-tail-plan",
+      text: "Review queue · final agent tail (Google Check → rarity)",
+      status: "approved",
+    });
+    setFinishDayGroups((prev) => {
+      if (prev.some((group) => group.id === date)) {
+        return prev.map((group) =>
+          group.id === date
+            ? { ...group, status: "running" as const, expanded: true, lines: [], outcome: undefined }
+            : group,
+        );
+      }
+      const dayTotal = prev.length + 1;
+      const next = [
+        ...prev.map((group) => ({ ...group, dayTotal })),
+        {
+          id: date,
+          date,
+          dayIndex: dayTotal,
+          dayTotal,
+          status: "running" as const,
+          lines: [],
+          expanded: true,
+        },
+      ];
+      return next;
+    });
+  }, []);
+
+  const toggleFinishDayExpanded = useCallback((dayId: string) => {
+    setFinishDayGroups((prev) =>
+      prev.map((group) => (group.id === dayId ? { ...group, expanded: !group.expanded } : group)),
+    );
+  }, []);
 
   useEffect(() => {
     if (calendarAutoLogLines.length === 0) return;
@@ -1617,6 +1545,26 @@ export default function AgentsV2HomePanel() {
     };
   }, [articlePickAutoLogLines]);
 
+  useEffect(() => {
+    if (finishDayGroups.length === 0) return;
+    let cancelled = false;
+    let innerRaf = 0;
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(() => {
+        if (cancelled) return;
+        const root = finishLogScrollRef.current;
+        const viewport = root?.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
+        if (!viewport) return;
+        viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(outerRaf);
+      cancelAnimationFrame(innerRaf);
+    };
+  }, [finishDayGroups]);
+
   const loadQueue = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     try {
@@ -1642,49 +1590,162 @@ export default function AgentsV2HomePanel() {
     void loadQueue();
   }, [loadQueue]);
 
+  const runMetadataApprovalTail = (
+    date: string,
+    reviewId: string,
+    phase: "awaiting_correction_approval" | "awaiting_summary_approval",
+  ) => {
+    const runId = `review-${reviewId}`;
+    ensureFinishDayGroup(date);
+
+    let lines: LogLine[] = [
+      {
+        id: `${runId}-apply`,
+        text:
+          phase === "awaiting_correction_approval" ? "Applying correction…" : "Approving summary…",
+        status: "pending",
+      },
+    ];
+    patchFinishDayGroup(date, lines);
+
+    return {
+      runId,
+      lines,
+      patch: (nextLines: LogLine[]) => {
+        lines = nextLines;
+        patchFinishDayGroup(date, lines);
+      },
+    };
+  };
+
   const handleApprove = async (id: string, opts?: ApproveReviewOpts) => {
     setBusyId(id);
+    const source =
+      rows.find((r) => r.id === id) ??
+      rows.flatMap((r) => r.calendarGroup?.rows ?? [r]).find((r) => r.id === id) ??
+      null;
+    const sourceDate = source?.date ?? "";
+    const metadataPhase =
+      source?.pipelinePhase === "awaiting_correction_approval"
+        ? "awaiting_correction_approval"
+        : source?.pipelinePhase === "awaiting_summary_approval"
+          ? "awaiting_summary_approval"
+          : null;
+    const wantsFinishTail = Boolean(metadataPhase && /^\d{4}-\d{2}-\d{2}$/.test(sourceDate));
+
+    let tailCtx:
+      | {
+          runId: string;
+          lines: LogLine[];
+          patch: (nextLines: LogLine[]) => void;
+        }
+      | undefined;
+
     try {
-      const source = rows.find((r) => r.id === id);
       const pair = source?.item.calendarReciprocalPair;
+      let approveResult: Awaited<ReturnType<typeof approveReviewItem>> | undefined;
+
+      if (wantsFinishTail && metadataPhase) {
+        tailCtx = runMetadataApprovalTail(sourceDate, id, metadataPhase);
+      }
+
+      const approveOpts: ApproveReviewOpts = {
+        ...opts,
+        ...(wantsFinishTail ? { skipFinishTail: true } : {}),
+      };
 
       if (opts?.calendarGroupDates && opts?.calendarRemoveDates !== undefined) {
-        await approveReviewItem(id, {
+        approveResult = await approveReviewItem(id, {
           calendarGroupDates: opts.calendarGroupDates,
           calendarRemoveDates: opts.calendarRemoveDates,
+          ...approveOpts,
         });
       } else if (opts?.calendarKeepDate && opts?.calendarRerunDate) {
-        await approveReviewItem(id, {
+        approveResult = await approveReviewItem(id, {
           calendarKeepDate: opts.calendarKeepDate,
           calendarRerunDate: opts.calendarRerunDate,
+          ...approveOpts,
         });
       } else if (opts?.calendarPairResolution === "keep_both" && pair) {
         const pairRows = rows.filter(
           (r) => r.status === "pending" && r.item.calendarReciprocalPair?.pairKey === pair.pairKey,
         );
         for (const row of pairRows) {
-          await approveReviewItem(row.id, { calendarDecision: "keep_as_is" });
+          approveResult = await approveReviewItem(row.id, { calendarDecision: "keep_as_is", ...approveOpts });
         }
       } else {
-        await approveReviewItem(id, opts);
+        approveResult = await approveReviewItem(id, approveOpts);
       }
 
       if (opts?.duplicateDecision && opts.duplicateDecision !== "delete_focal") {
-        const source = rows.find((r) => r.id === id);
         const pairKey = source ? duplicatePairKey(source) : null;
         if (pairKey) {
           const sibling = rows.find(
             (r) => r.id !== id && r.status === "pending" && duplicatePairKey(r) === pairKey,
           );
           if (sibling) {
-            await approveReviewItem(sibling.id, opts);
+            approveResult = await approveReviewItem(sibling.id, approveOpts);
           }
         }
       }
-      toast({ title: "Approved", description: "Changes applied for this review item." });
+
+      if (wantsFinishTail && tailCtx && metadataPhase) {
+        let lines = upsertLogLine(tailCtx.lines, {
+          id: `${tailCtx.runId}-apply`,
+          text:
+            metadataPhase === "awaiting_correction_approval"
+              ? "Correction applied"
+              : "Summary approved",
+          status: "approved",
+        });
+        lines = upsertLogLine(lines, {
+          id: `${tailCtx.runId}-continue`,
+          text: "Decisions done — continuing to Google Check",
+          status: "approved",
+        });
+        tailCtx.patch(lines);
+
+        await runFinalAgentTailSteps({
+          date: sourceDate,
+          topicLeaf: source?.item.dayTopicCategories?.[0] ?? null,
+          runId: tailCtx.runId,
+          onLine: (line) => {
+            lines = upsertLogLine(lines, line);
+            tailCtx?.patch(lines);
+          },
+        });
+
+        patchFinishDayGroup(sourceDate, lines, "done");
+
+        const outcome = deriveDayOutcome(lines);
+        toast({
+          title: outcome === "approved" ? "Approved + final agent" : "Approved with follow-up",
+          description:
+            lines[lines.length - 1]?.text ??
+            approveResult?.execution?.message ??
+            "Changes applied for this review item.",
+          variant: outcome === "rejected" ? "destructive" : "default",
+        });
+      } else {
+        toast({
+          title: "Approved",
+          description:
+            approveResult?.execution?.message ?? "Changes applied for this review item.",
+        });
+      }
+
       await loadQueue({ silent: true });
       setAdvanceSignal({ id, nonce: Date.now() });
     } catch (e) {
+      if (wantsFinishTail && tailCtx) {
+        const lines = upsertLogLine(tailCtx.lines, {
+          id: `${tailCtx.runId}-error`,
+          text: e instanceof Error ? e.message : "Approve failed",
+          status: "rejected",
+        });
+        tailCtx.patch(lines);
+        patchFinishDayGroup(sourceDate, lines, "done");
+      }
       toast({
         title: "Approve failed",
         description: e instanceof Error ? e.message : "Error",
@@ -2319,6 +2380,35 @@ export default function AgentsV2HomePanel() {
                 />
               </section>
             ) : null}
+          </div>
+        ) : null}
+
+        {finishDayGroups.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Activity log
+              </Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs text-muted-foreground"
+                onClick={() => {
+                  setFinishDayGroups([]);
+                  setFinishPlanLine(null);
+                }}
+              >
+                Clear
+              </Button>
+            </div>
+            <BulkDayActivityLog
+              planLine={finishPlanLine}
+              groups={finishDayGroups}
+              scrollRef={finishLogScrollRef}
+              scrollClassName="h-[280px]"
+              onToggleDay={toggleFinishDayExpanded}
+            />
           </div>
         ) : null}
 

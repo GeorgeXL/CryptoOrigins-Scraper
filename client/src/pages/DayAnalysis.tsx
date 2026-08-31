@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/hover-card";
 import { deriveVerificationBadge } from "@shared/verification-badge";
 import { RARITY_LABELS, normalizeRarity, type Rarity } from "@shared/rarity";
+import { RarityBadgeEditor } from "@/components/RarityBadgeEditor";
 import { TopicBadgeEditor } from "@/components/TopicBadgeEditor";
 import { ArticleSelectionDialog } from "@/components/ArticleSelectionDialog";
 import { SingleDayAgentDialog } from "@/components/SingleDayAgentDialog";
@@ -113,6 +114,7 @@ import {
 import { getCategoryColor, getCategoryIcon, getTagCategory } from "@/utils/tagHelpers";
 import { getCategoryKeyFromPath, getCategoryDisplayMeta } from "@shared/taxonomy";
 import { deserializePageState, reconstructPageUrl } from "@/lib/navigationState";
+import { updateDayRarity } from "@/lib/updateDayRarity";
 import { updateDayTopic } from "@/lib/updateDayTopic";
 import { setDayLocked } from "@/lib/dayLock";
 import { parseIsLocked } from "@/lib/parseIsLocked";
@@ -1158,6 +1160,31 @@ export default function DayAnalysis() {
     },
   });
 
+  const updateRarityMutation = useMutation({
+    mutationFn: async (newRarity: Rarity | null) => {
+      if (!date || !dayData?.analysis?.id) {
+        throw new Error("Day analysis not loaded");
+      }
+      return updateDayRarity(date, newRarity);
+    },
+    onSuccess: (rarity) => {
+      queryClient.invalidateQueries({ queryKey: [`supabase-date-${date}`] });
+      queryClient.invalidateQueries({ queryKey: ["analyses-browse"] });
+      queryClient.invalidateQueries({ queryKey: ["supabase-analysis-rarity"] });
+      toast({
+        title: "Rarity updated",
+        description: rarity ? `Set to ${RARITY_LABELS[rarity]}` : "Rarity cleared",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Rarity update failed",
+        description: error instanceof Error ? error.message : "Could not save rarity",
+      });
+    },
+  });
+
   // Handle text selection for tagging - adds to queue instead of direct mutation
   const handleTextSelection = () => {
     if (!isTaggingMode) return;
@@ -2104,11 +2131,11 @@ export default function DayAnalysis() {
                     <div>
                       <h5 className="mb-2 text-sm font-semibold text-foreground">Rarity</h5>
                       {dayData.analysis.id ? (
-                        <Badge variant="outline" className="text-xs font-normal">
-                          {dayData.analysis.rarity
-                            ? RARITY_LABELS[dayData.analysis.rarity]
-                            : "No rarity"}
-                        </Badge>
+                        <RarityBadgeEditor
+                          rarity={dayData.analysis.rarity ?? null}
+                          onRarityChange={(nextRarity) => updateRarityMutation.mutate(nextRarity)}
+                          disabled={updateRarityMutation.isPending}
+                        />
                       ) : (
                         <p className="text-sm text-muted-foreground">No analysis row yet</p>
                       )}

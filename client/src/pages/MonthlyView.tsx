@@ -402,6 +402,16 @@ export default function MonthlyView() {
                   const query = serializePageState(state);
                   navigate(`/day/${date}?${query}`);
                 }}
+                getRowHref={(analysis) => {
+                  const state: MonthlyViewState = {
+                    page: 'monthly',
+                    selectedYear,
+                    selectedMonth: selectedMonth ? MONTH_NUMBERS[selectedMonth] : null,
+                    currentPage,
+                    pageSize,
+                  };
+                  return `/day/${analysis.date}?${serializePageState(state)}`;
+                }}
                 onToggleFlag={(analysis) => {
                   toggleFlagMutation.mutate({
                     date: analysis.date,
