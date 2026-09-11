@@ -1,7 +1,7 @@
 import { findSummaryDisallowedSymbols } from "./editorial-pipeline/editorial-quality";
 
 export interface QualityIssue {
-  type: 'TOO_SHORT' | 'TOO_LONG' | 'EXCESSIVE_DOTS' | 'GENERIC_FALLBACK' | 'REPEATED_WORDS' | 'PLACEHOLDER_TEXT' | 'DUPLICATE_SUMMARY' | 'SIMILAR_SUMMARY' | 'INVALID_LINKS' | 'UNUSUAL_SYMBOLS';
+  type: 'TOO_SHORT' | 'TOO_LONG' | 'EXCESSIVE_DOTS' | 'GENERIC_FALLBACK' | 'REPEATED_WORDS' | 'PLACEHOLDER_TEXT' | 'DUPLICATE_SUMMARY' | 'SIMILAR_SUMMARY' | 'INVALID_LINKS' | 'UNUSUAL_SYMBOLS' | 'TRAILING_PERIOD' | 'TRUNCATED_ENDING';
   message: string;
   severity: 'low' | 'medium' | 'high';
   details?: any; // For storing additional data like invalid URLs
@@ -21,7 +21,34 @@ export interface QualityResults {
     duplicateSummaries: number;
     similarSummaries: number;
     invalidLinks: number;
+    trailingPeriod: number;
+    truncatedEnding: number;
   };
+}
+
+const DANGLING_LAST_WORDS = new Set(["and", "or", "but", "nor", "yet"]);
+
+/** Cut-off prose: dangling conjunction, continuation punctuation, or unbalanced parens. */
+export function findTruncatedEnding(summary: string): string | null {
+  const t = summary.trim();
+  if (!t) return null;
+  if (/\.{3}$/.test(t) || t.endsWith("…")) {
+    return "Truncated ending";
+  }
+  if (/[,;:/\-–—]$/.test(t)) {
+    return "Truncated ending";
+  }
+  const opens = (t.match(/\(/g) || []).length;
+  const closes = (t.match(/\)/g) || []).length;
+  if (opens !== closes) {
+    return "Truncated ending";
+  }
+  const lastToken = t.split(/\s+/).pop() ?? "";
+  const lastWord = lastToken.replace(/[^A-Za-z']/g, "").toLowerCase();
+  if (DANGLING_LAST_WORDS.has(lastWord)) {
+    return "Truncated ending";
+  }
+  return null;
 }
 
 export class QualityCheckerService {
@@ -126,7 +153,61 @@ export class QualityCheckerService {
       });
     }
 
+    // Trailing full stop is a Manager quality-check issue even when length/symbols are fine
+    if (summary.trim().endsWith('.')) {
+      issues.push({
+        type: 'TRAILING_PERIOD',
+        message: 'Summary has a trailing period',
+        severity: 'low'
+      });
+    }
+
+    if (findTruncatedEnding(summary)) {
+      issues.push({
+        type: 'TRUNCATED_ENDING',
+        message: 'Truncated ending',
+        severity: 'medium'
+      });
+    }
+
     return issues;
+  }
+
+  /**
+   * Exact duplicate summaries across the whole corpus (O(n)).
+   * Fuzzy similarity stays in checkMonthQuality — it is too expensive for all years.
+   */
+  exactDuplicateIssues(
+    analyses: Array<{ date: string; summary?: string | null }>,
+  ): Map<string, QualityIssue[]> {
+    const datesByKey = new Map<string, string[]>();
+    for (const analysis of analyses) {
+      const key = analysis.summary?.trim().toLowerCase() ?? "";
+      if (!key) continue;
+      const dates = datesByKey.get(key);
+      if (dates) dates.push(analysis.date);
+      else datesByKey.set(key, [analysis.date]);
+    }
+
+    const issuesByDate = new Map<string, QualityIssue[]>();
+    for (const dates of datesByKey.values()) {
+      const uniqueDates = [...new Set(dates)].sort();
+      if (uniqueDates.length < 2) continue;
+      for (const date of uniqueDates) {
+        const others = uniqueDates.filter((d) => d !== date).slice(0, 5);
+        const extra = uniqueDates.length - 1 > others.length
+          ? ` (+${uniqueDates.length - 1 - others.length} more)`
+          : "";
+        const list = issuesByDate.get(date) ?? [];
+        list.push({
+          type: "DUPLICATE_SUMMARY",
+          message: `Duplicate summary: identical to ${others.join(", ")}${extra}`,
+          severity: "high",
+        });
+        issuesByDate.set(date, list);
+      }
+    }
+    return issuesByDate;
   }
 
   /**
@@ -267,7 +348,9 @@ export class QualityCheckerService {
       placeholderText: 0,
       duplicateSummaries: 0,
       similarSummaries: 0,
-      invalidLinks: 0
+      invalidLinks: 0,
+      trailingPeriod: 0,
+      truncatedEnding: 0
     };
 
     for (const analysis of analyses) {
@@ -317,6 +400,12 @@ export class QualityCheckerService {
             case 'INVALID_LINKS':
               summary.invalidLinks++;
               break;
+            case 'TRAILING_PERIOD':
+              summary.trailingPeriod++;
+              break;
+            case 'TRUNCATED_ENDING':
+              summary.truncatedEnding++;
+              break;
           }
         }
       }
@@ -347,7 +436,7 @@ export class QualityCheckerService {
         if (similarity >= 0.99) {
           const duplicateIssue: QualityIssue = {
             type: 'DUPLICATE_SUMMARY',
-            message: `Identical summary to ${analysisB.analysisDate}`,
+            message: `Duplicate summary: identical to ${analysisB.analysisDate}`,
             severity: 'high'
           };
           
@@ -363,11 +452,11 @@ export class QualityCheckerService {
           
           qualityIssues.get(analysisA.analysisDate)!.push({
             ...duplicateIssue,
-            message: `Identical summary to ${analysisB.analysisDate}`
+            message: `Duplicate summary: identical to ${analysisB.analysisDate}`
           });
           qualityIssues.get(analysisB.analysisDate)!.push({
             ...duplicateIssue,
-            message: `Identical summary to ${analysisA.analysisDate}`
+            message: `Duplicate summary: identical to ${analysisA.analysisDate}`
           });
           
           summary.duplicateSummaries += 2;

@@ -77,6 +77,17 @@ function qualityCheckRowHasSummary(row: { summary?: string | null }): boolean {
   return !isEmptyQualityCheckSummary(row.summary);
 }
 
+function tagsVersion2IsEmpty(tags: unknown): boolean {
+  if (!Array.isArray(tags) || tags.length === 0) return true;
+  return tags.every((tag) => String(tag ?? "").trim() === "");
+}
+
+function parseIsoDateParts(value: string): { year: number; month: number; day: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value).trim());
+  if (!match) return null;
+  return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+}
+
 /** Empty days belong only on the Empty Summary tab; month-gap rows are month-level, not day summaries. */
 function applyQualityCheckSummaryFilter(
   rows: QualityViolation[],
@@ -94,9 +105,9 @@ const VIOLATION_TYPES = [
   { id: 'untagged', label: 'Untagged', filterFn: (v: QualityViolation) => !v.tags_version2 || v.tags_version2.length === 0 },
   { id: 'too-short', label: 'Too short (< 100 chars)', filterFn: (v: QualityViolation) => v.length > 0 && v.length < 100 },
   { id: 'too-long', label: 'Too long (> 110 chars)', filterFn: (v: QualityViolation) => v.length > 110 },
-  { id: 'ends-period', label: 'Ends with period', filterFn: (v: QualityViolation) => v.summary?.trim().endsWith('.') || v.violations.some(x => x.toLowerCase().includes('period')) },
+  { id: 'ends-period', label: 'Ends with period', filterFn: (v: QualityViolation) => v.summary?.trim().endsWith('.') || v.violations.some(x => x.toLowerCase().includes('trailing period')) },
   { id: 'has-hyphen', label: 'Contains unusual symbols', filterFn: (v: QualityViolation) => v.violations.some(x => /unusual symbols|disallowed symbol/i.test(x)) },
-  { id: 'truncated', label: 'Truncated ending', filterFn: (v: QualityViolation) => v.violations.some(x => x.includes('Ends with') || x.includes('Truncated')) },
+  { id: 'truncated', label: 'Truncated ending', filterFn: (v: QualityViolation) => v.violations.some(x => x.toLowerCase().includes('truncated ending')) },
   { id: 'excessive-dots', label: 'Excessive dots', filterFn: (v: QualityViolation) => v.violations.some(x => x.toLowerCase().includes('excessive dots')) },
   { id: 'generic-fallback', label: 'Generic fallback', filterFn: (v: QualityViolation) => v.violations.some(x => x.toLowerCase().includes('generic') || x.toLowerCase().includes('fallback')) },
   { id: 'repeated-words', label: 'Repeated words', filterFn: (v: QualityViolation) => v.violations.some(x => x.toLowerCase().includes('repeated')) },
@@ -430,10 +441,7 @@ export default function EventsManager() {
       }
 
       // Filter for entries without tags (tags_version2 is null or empty array)
-      const untagged = allData.filter(entry => 
-        !entry.tags_version2 || 
-        (Array.isArray(entry.tags_version2) && entry.tags_version2.length === 0)
-      );
+      const untagged = allData.filter(entry => tagsVersion2IsEmpty(entry.tags_version2));
 
       console.log(`Untagged analyses: ${untagged.length}`);
 
@@ -454,19 +462,35 @@ export default function EventsManager() {
         return { entries: [], totalCount: 0 };
       }
 
-      const { data, error } = await supabase
-        .from("historical_news_analyses")
-        .select("date, summary, is_flagged")
-        .eq("is_flagged", true);
+      let allData: any[] = [];
+      let from = 0;
+      const batchSize = 1000;
+      let hasMore = true;
 
-      if (error) {
-        console.error('Error fetching flagged analyses:', error);
-        throw error;
+      while (hasMore) {
+        const { data: batchData, error: batchError } = await supabase
+          .from("historical_news_analyses")
+          .select("date, summary, is_flagged")
+          .eq("is_flagged", true)
+          .range(from, from + batchSize - 1);
+
+        if (batchError) {
+          console.error('Error fetching flagged analyses:', batchError);
+          throw batchError;
+        }
+
+        if (batchData && batchData.length > 0) {
+          allData = allData.concat(batchData);
+          from += batchSize;
+          hasMore = batchData.length === batchSize;
+        } else {
+          hasMore = false;
+        }
       }
 
       return {
-        entries: data || [],
-        totalCount: data?.length || 0,
+        entries: allData,
+        totalCount: allData.length,
       };
     },
     staleTime: 1000 * 60 * 5,
@@ -581,6 +605,9 @@ export default function EventsManager() {
 
       for (const entry of allData) {
         const topics = extractTopicLabelsFromCategories(entry.topic_categories);
+        const uniqueTopicCount = new Set(
+          topics.map((topic) => topic.trim().toLowerCase().replace(/\s+/g, " ")),
+        ).size;
         const summary = entry.summary || "";
         const isLocked = parseIsLocked(entry.is_locked);
 
@@ -628,7 +655,7 @@ export default function EventsManager() {
               google_check_happened: entry.google_check_happened ?? null,
             });
           }
-          if (topics.length >= 2) {
+          if (uniqueTopicCount >= 2) {
             multiTopicEntries.push({
               date: entry.date,
               summary,
@@ -854,7 +881,7 @@ export default function EventsManager() {
   );
 
   // Fetch missing months (months with incomplete data)
-  const { data: missingMonthsData, isLoading: missingMonthsLoading } = useQuery<{ entries: any[]; totalCount: number }>({
+  const { data: missingMonthsData, isLoading: missingMonthsLoading } = useQuery({
     queryKey: ['events-manager-missing-months'],
     queryFn: async () => {
       if (!supabase) {
@@ -888,25 +915,26 @@ export default function EventsManager() {
         }
       }
 
-      // Group dates by month and count days per month
+      // Group dates by calendar month using ISO YYYY-MM-DD (not local Date parsing)
       const monthDataMap = new Map<string, { year: number; month: number; daysPresent: Set<string> }>();
+      let maxYear = 2009;
+      let maxMonth = 1;
       allData.forEach(entry => {
-        const date = new Date(entry.date);
-        const year = date.getFullYear();
-        const month = date.getMonth() + 1;
-        const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
-        
+        const parts = parseIsoDateParts(String(entry.date ?? ""));
+        if (!parts) return;
+        const yearMonth = `${parts.year}-${String(parts.month).padStart(2, "0")}`;
+        const isoDay = `${yearMonth}-${String(parts.day).padStart(2, "0")}`;
         if (!monthDataMap.has(yearMonth)) {
-          monthDataMap.set(yearMonth, { year, month, daysPresent: new Set() });
+          monthDataMap.set(yearMonth, { year: parts.year, month: parts.month, daysPresent: new Set() });
         }
-        monthDataMap.get(yearMonth)!.daysPresent.add(entry.date);
+        monthDataMap.get(yearMonth)!.daysPresent.add(isoDay);
+        if (parts.year > maxYear || (parts.year === maxYear && parts.month > maxMonth)) {
+          maxYear = parts.year;
+          maxMonth = parts.month;
+        }
       });
 
-      // Generate all months from 2009-01 to end of 2024 (exclude 2025)
-      const startDate = new Date('2009-01-03');
-      const endDate = new Date('2024-12-31'); // Stop at end of 2024, exclude 2025
       const incompleteMonths: any[] = [];
-      const currentDate = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
       const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
       const today = new Date();
@@ -914,21 +942,18 @@ export default function EventsManager() {
       const currentMonth = today.getMonth() + 1;
       const currentDay = today.getDate();
 
-      while (currentDate <= endDate) {
-        const year = currentDate.getFullYear();
-        const month = currentDate.getMonth() + 1;
+      let year = 2009;
+      let month = 1;
+      while (year < maxYear || (year === maxYear && month <= maxMonth)) {
         const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
         const daysInMonth = new Date(year, month, 0).getDate();
         
-        // Calculate expected days
         let expectedDays = daysInMonth;
         
-        // For January 2009, start from day 3
         if (year === 2009 && month === 1) {
           expectedDays = daysInMonth - 2; // Skip Jan 1 and 2
         }
         
-        // For current month, only count up to today
         if (year === currentYear && month === currentMonth) {
           expectedDays = currentDay;
         }
@@ -936,14 +961,6 @@ export default function EventsManager() {
         const monthInfo = monthDataMap.get(yearMonth);
         const daysPresent = monthInfo ? monthInfo.daysPresent.size : 0;
         
-        // Exclude months in 2025
-        if (year === 2025) {
-          // Move to next month
-          currentDate.setMonth(currentDate.getMonth() + 1);
-          continue;
-        }
-        
-        // Include month if it's completely missing or incomplete
         if (daysPresent < expectedDays) {
           const monthName = monthNames[month - 1];
           const missingDays = expectedDays - daysPresent;
@@ -960,9 +977,12 @@ export default function EventsManager() {
             missingDays,
           });
         }
-        
-        // Move to next month
-        currentDate.setMonth(currentDate.getMonth() + 1);
+
+        month += 1;
+        if (month > 12) {
+          month = 1;
+          year += 1;
+        }
       }
 
       // Sort by year and month

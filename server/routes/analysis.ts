@@ -2539,6 +2539,32 @@ Return ONLY the shortened summary (100-110 chars), nothing else.`;
           });
         }
       }
+
+      const duplicateIssues = qualityChecker.exactDuplicateIssues(allAnalyses);
+      const violationByDate = new Map(violations.map((row) => [row.date, row]));
+      const analysisByDate = new Map(allAnalyses.map((row) => [row.date, row]));
+      for (const [date, extras] of duplicateIssues) {
+        const messages = extras.map((issue) => issue.message);
+        const existing = violationByDate.get(date);
+        if (existing) {
+          existing.violations.push(...messages);
+          continue;
+        }
+        const analysis = analysisByDate.get(date);
+        if (!analysis?.summary) continue;
+        const row = {
+          date: analysis.date,
+          summary: analysis.summary,
+          violations: messages,
+          length: analysis.summary.length,
+          tags_version2: analysis.tagsVersion2 || null,
+          readyForTagging: (analysis as any).readyForTagging,
+          doubleCheckReasoning: (analysis as any).doubleCheckReasoning,
+          isLocked: analysis.isLocked === true,
+        };
+        violations.push(row);
+        violationByDate.set(date, row);
+      }
       
       res.json({
         data: violations,
