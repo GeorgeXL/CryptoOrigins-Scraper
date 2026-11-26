@@ -128,9 +128,13 @@ test("filterQualityCheckAgentRows skips empty summaries except empty-summary tab
   );
 });
 
-test("untagged and unlocked-url-no-summary use final agent kind", () => {
+test("untagged, unlocked-url-no-summary, and not-yes topic tabs use final agent kind", () => {
   assert.equal(QUALITY_CHECK_AGENT_ACTIONS.untagged?.kind, "final");
   assert.equal(QUALITY_CHECK_AGENT_ACTIONS["unlocked-url-no-summary"]?.kind, "final");
+  assert.equal(QUALITY_CHECK_AGENT_ACTIONS["no-topic"]?.kind, "final");
+  assert.equal(QUALITY_CHECK_AGENT_ACTIONS["not-approved-has-topic"]?.kind, "final");
+  assert.equal(QUALITY_CHECK_AGENT_ACTIONS["no-topic"]?.buttonLabel, "Run final agent");
+  assert.equal(QUALITY_CHECK_AGENT_ACTIONS["not-approved-has-topic"]?.buttonLabel, "Run final agent");
 });
 
 test("resolveQualityCheckRunWindows ignores empty summaries for untagged final agent", () => {

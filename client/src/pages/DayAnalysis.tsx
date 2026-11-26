@@ -135,6 +135,7 @@ interface DayAnalysisData {
     veriBadge?: 'Manual' | 'Verified' | 'Not Available' | null;
     tagsVersion2?: string[];
     topicCategories?: string[];
+    storyLine?: string | null;
     rarity?: Rarity | null;
     googleCheckHappened?: "yes" | "no" | "uncertain" | null;
     googleCheckCheckedAt?: string | null;
@@ -377,6 +378,7 @@ export default function DayAnalysis() {
             isLocked: false,
             tagsVersion2: [],
             topicCategories: [],
+            storyLine: null,
             rarity: null,
             googleCheckHappened: null,
             googleCheckCheckedAt: null,
@@ -444,6 +446,7 @@ export default function DayAnalysis() {
                 })
                 .filter((topic: string) => topic.trim().length > 0)
             : [],
+          storyLine: typeof analysis.story_line === "string" ? analysis.story_line.trim() || null : null,
           rarity: normalizeRarity(analysis.rarity),
           googleCheckHappened:
             analysis.google_check_happened === "yes" ||
@@ -2109,7 +2112,7 @@ export default function DayAnalysis() {
                     )}
                   </div>
 
-                  <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
+                  <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
                     <div>
                       <h5 className="mb-2 text-sm font-semibold text-foreground">Topics</h5>
                       {dayData.analysis.id ? (
@@ -2136,6 +2139,18 @@ export default function DayAnalysis() {
                           onRarityChange={(nextRarity) => updateRarityMutation.mutate(nextRarity)}
                           disabled={updateRarityMutation.isPending}
                         />
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No analysis row yet</p>
+                      )}
+                    </div>
+                    <div>
+                      <h5 className="mb-2 text-sm font-semibold text-foreground">Storyline</h5>
+                      {dayData.analysis.id ? (
+                        dayData.analysis.storyLine ? (
+                          <p className="text-sm text-foreground">{dayData.analysis.storyLine}</p>
+                        ) : (
+                          <p className="text-sm italic text-muted-foreground">none</p>
+                        )
                       ) : (
                         <p className="text-sm text-muted-foreground">No analysis row yet</p>
                       )}

@@ -49,12 +49,11 @@ export const QUALITY_CHECK_AGENT_ACTIONS: Record<string, QualityCheckAgentAction
     checkScopes: ["relevance", "summary", "topics", "tags", "duplicates", "date"],
   },
   "no-topic": {
-    buttonLabel: "Run agent: assign topic",
-    confirmTitle: "Assign topics with the Topic Agent?",
+    buttonLabel: "Run final agent",
+    confirmTitle: "Run the final agent on days that are not Google-yes and have no topic?",
     confirmDescription:
-      "Runs the editorial pipeline (topics scope) on days that are not Google-approved yet and still have no storyline topic.",
-    kind: "pipeline",
-    checkScopes: ["topics"],
+      "Runs the full editorial pipeline, then Google Check and rarity (when eligible) — same sequence as the day-page Final agent. Days already pending in Agents are skipped.",
+    kind: "final",
   },
   "google-yes-no-topic": {
     buttonLabel: "Run agent: assign topic",
@@ -65,12 +64,11 @@ export const QUALITY_CHECK_AGENT_ACTIONS: Record<string, QualityCheckAgentAction
     checkScopes: ["topics"],
   },
   "not-approved-has-topic": {
-    buttonLabel: "Run agent: fix topic",
-    confirmTitle: "Fix storyline topics on unapproved days?",
+    buttonLabel: "Run final agent",
+    confirmTitle: "Run the final agent on days that are not Google-yes but already have a topic?",
     confirmDescription:
-      "Runs the editorial pipeline (topics scope) on days where Google Check is not yes but a storyline topic is still assigned.",
-    kind: "pipeline",
-    checkScopes: ["topics"],
+      "Runs the full editorial pipeline, then Google Check and rarity (when eligible) — same sequence as the day-page Final agent. Days already pending in Agents are skipped.",
+    kind: "final",
   },
   "locked-no-topic": {
     buttonLabel: "Run agent: assign topic",
