@@ -356,9 +356,7 @@ export default function EventsManager() {
 
   const {
     running: qualityAgentRunning,
-    logLines: qualityAgentLogLines,
-    dayGroups: qualityAgentDayGroups,
-    planLine: qualityAgentPlanLine,
+    activityStore: qualityAgentActivity,
     progressLabel: qualityAgentProgressLabel,
     logScrollRef: qualityAgentLogScrollRef,
     runQualityCheckAgent,
@@ -2078,7 +2076,7 @@ export default function EventsManager() {
                         totalCount={filteredQualityViolations.length}
                         running={qualityAgentRunning}
                         progressLabel={qualityAgentProgressLabel}
-                        logLines={qualityAgentLogLines}
+                        activityStore={qualityAgentActivity}
                         logScrollRef={qualityAgentLogScrollRef}
                         onRun={() =>
                           void runQualityCheckAgent({
@@ -2101,9 +2099,7 @@ export default function EventsManager() {
                     totalCount={filteredQualityViolations.length}
                     running={qualityAgentRunning}
                     progressLabel={qualityAgentProgressLabel}
-                    logLines={qualityAgentLogLines}
-                    dayGroups={qualityAgentDayGroups}
-                    planLine={qualityAgentPlanLine}
+                    activityStore={qualityAgentActivity}
                     logScrollRef={qualityAgentLogScrollRef}
                     onToggleDay={toggleQualityAgentDay}
                     onRun={() =>

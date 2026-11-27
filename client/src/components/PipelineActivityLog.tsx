@@ -1,9 +1,9 @@
-import type { Ref, RefObject } from "react";
+import { useEffect, type Ref, type RefObject } from "react";
 import { Check, Loader2, UserRound, X } from "lucide-react";
 import { motion } from "framer-motion";
 
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { LogLine, LogStatus } from "@/lib/pipelineActivityLog";
+import { scrollActivityLogToEnd, type LogLine, type LogStatus } from "@/lib/pipelineActivityLog";
 import { cn } from "@/lib/utils";
 
 const LUXURY_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
@@ -36,6 +36,11 @@ export function PipelineActivityLog({
   scrollClassName,
   emptyMessage,
 }: PipelineActivityLogProps) {
+  const lastLine = lines[lines.length - 1];
+  useEffect(() => {
+    scrollActivityLogToEnd(scrollRef?.current ?? null);
+  }, [scrollRef, lines.length, lastLine?.id, lastLine?.text, lastLine?.status]);
+
   return (
     <div
       className={cn(

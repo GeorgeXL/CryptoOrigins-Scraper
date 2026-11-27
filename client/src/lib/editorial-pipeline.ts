@@ -329,8 +329,9 @@ export async function startPipelineRun(body: {
   return (await res.json()) as { runId: string; status?: string };
 }
 
-export async function fetchPipelineRun(runId: string) {
-  const res = await fetch(`/api/agent/pipeline/runs/${runId}`, {
+export async function fetchPipelineRun(runId: string, opts?: { activity?: boolean }) {
+  const qs = opts?.activity ? "?view=activity" : "";
+  const res = await fetch(`/api/agent/pipeline/runs/${runId}${qs}`, {
     headers: jsonHeaders,
     credentials: "include",
   });

@@ -11,6 +11,7 @@ import {
 } from "../services/editorial-pipeline/contracts";
 import {
   getEditorialCutoverStatus,
+  getEditorialPipelineActivity,
   getEditorialPipelineRun,
   getEditorialResumeOptions,
   continueExistingDayChecksAfterKeepingStoryline,
@@ -524,7 +525,10 @@ router.post("/api/agent/pipeline/run", async (req, res) => {
 router.get("/api/agent/pipeline/runs/:id", async (req, res) => {
   try {
     requireAgentSecret(req);
-    const out = await getEditorialPipelineRun(req.params.id);
+    const out =
+      req.query.view === "activity"
+        ? await getEditorialPipelineActivity(req.params.id)
+        : await getEditorialPipelineRun(req.params.id);
     if (!out) return res.status(404).json({ error: "Run not found" });
     res.json(out);
   } catch (e: any) {

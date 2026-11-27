@@ -2735,6 +2735,72 @@ export function isEditorialPipelineRunActive(runId: string): boolean {
   return controllers.has(runId);
 }
 
+/**
+ * Poll payload for the activity log. Omits step output, evidence, and handoff
+ * bodies — those blobs grow while a day is in flight and were being re-read
+ * every 1.5s for no log field.
+ */
+export async function getEditorialPipelineActivity(runId: string): Promise<{
+  run: unknown;
+  steps: unknown[];
+  humanReviewItems: unknown[];
+  handoffs: unknown[];
+  live: { activeInThisRuntime: boolean };
+} | null> {
+  const [runRow] = await db
+    .select({
+      id: pipelineRuns.id,
+      status: pipelineRuns.status,
+      dateFrom: pipelineRuns.dateFrom,
+      dateTo: pipelineRuns.dateTo,
+      model: pipelineRuns.model,
+      startedAt: pipelineRuns.startedAt,
+      completedAt: pipelineRuns.completedAt,
+      stats: pipelineRuns.stats,
+    })
+    .from(pipelineRuns)
+    .where(eq(pipelineRuns.id, runId))
+    .limit(1);
+  if (!runRow) return null;
+
+  const stepResult = await db.execute(sql`
+    SELECT
+      id,
+      step_index AS "stepIndex",
+      agent_name AS "agentName",
+      status,
+      rejection_reason AS "rejectionReason",
+      started_at AS "startedAt",
+      completed_at AS "completedAt",
+      jsonb_build_object('date', input->>'date', 'mode', input->>'mode') AS input
+    FROM pipeline_steps
+    WHERE run_id = ${runId}::uuid
+    ORDER BY step_index ASC
+  `);
+
+  const humanReviewItems = await db
+    .select({
+      id: humanReviewQueue.id,
+      stepId: humanReviewQueue.stepId,
+      eventDate: humanReviewQueue.eventDate,
+      status: humanReviewQueue.status,
+      createdAt: humanReviewQueue.createdAt,
+    })
+    .from(humanReviewQueue)
+    .where(eq(humanReviewQueue.runId, runId))
+    .orderBy(asc(humanReviewQueue.createdAt));
+
+  return {
+    run: runRow,
+    steps: stepResult.rows,
+    humanReviewItems,
+    handoffs: [],
+    live: {
+      activeInThisRuntime: isEditorialPipelineRunActive(runId),
+    },
+  };
+}
+
 export async function getEditorialPipelineRun(runId: string): Promise<{
   run: unknown;
   steps: unknown[];

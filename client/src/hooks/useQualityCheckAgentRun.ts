@@ -10,6 +10,7 @@ import {
 } from "@/lib/editorial-pipeline";
 import {
   buildActivityLogFromDetail,
+  dayGroupsEqual,
   deriveDayOutcome,
   humanReviewQueuedCount,
   logLinesEqual,
@@ -58,21 +59,77 @@ function taskLinesFromBuilt(built: LogLine[], runId: string): LogLine[] {
   return built.filter((line) => line.id !== `${runId}-run-header`);
 }
 
+type ActivitySnapshot = {
+  logLines: LogLine[];
+  dayGroups: DayActivityGroup[];
+  planLine: LogLine | null;
+};
+
+function createActivityStore() {
+  let snapshot: ActivitySnapshot = { logLines: [], dayGroups: [], planLine: null };
+  const listeners = new Set<() => void>();
+  const emit = () => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    setLogLines: (next: LogLine[] | ((prev: LogLine[]) => LogLine[])) => {
+      const resolved = typeof next === "function" ? next(snapshot.logLines) : next;
+      if (logLinesEqual(snapshot.logLines, resolved)) return;
+      snapshot = { ...snapshot, logLines: resolved };
+      emit();
+    },
+    setDayGroups: (next: DayActivityGroup[] | ((prev: DayActivityGroup[]) => DayActivityGroup[])) => {
+      const resolved = typeof next === "function" ? next(snapshot.dayGroups) : next;
+      if (dayGroupsEqual(snapshot.dayGroups, resolved)) return;
+      snapshot = { ...snapshot, dayGroups: resolved };
+      emit();
+    },
+    setPlanLine: (next: LogLine | null) => {
+      const prev = snapshot.planLine;
+      if (prev === next) return;
+      if (
+        prev &&
+        next &&
+        prev.id === next.id &&
+        prev.text === next.text &&
+        prev.status === next.status &&
+        prev.emphasis === next.emphasis
+      ) {
+        return;
+      }
+      snapshot = { ...snapshot, planLine: next };
+      emit();
+    },
+  };
+}
+
+export type QualityCheckActivityStore = ReturnType<typeof createActivityStore>;
+
 export function useQualityCheckAgentRun() {
   const { toast } = useToast();
   const [running, setRunning] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
-  const [logLines, setLogLines] = useState<LogLine[]>([]);
-  const [dayGroups, setDayGroups] = useState<DayActivityGroup[]>([]);
-  const [planLine, setPlanLine] = useState<LogLine | null>(null);
   const [progressLabel, setProgressLabel] = useState<string | null>(null);
+  const activityStoreRef = useRef<QualityCheckActivityStore | null>(null);
+  if (!activityStoreRef.current) activityStoreRef.current = createActivityStore();
+  const activityStore = activityStoreRef.current;
+  const setLogLines = activityStore.setLogLines;
+  const setDayGroups = activityStore.setDayGroups;
+  const setPlanLine = activityStore.setPlanLine;
 
   const runningRef = useRef(running);
   runningRef.current = running;
   const runIdRef = useRef<string | null>(null);
-  runIdRef.current = runId;
   const stopRequestedRef = useRef(false);
   const finalAgentActiveRef = useRef(false);
+  if (!finalAgentActiveRef.current) {
+    runIdRef.current = runId;
+  }
   const slicePlanRef = useRef<SlicePlan | null>(null);
   const completedLogRef = useRef<LogLine[]>([]);
   const logScrollRef = useRef<HTMLDivElement | null>(null);
@@ -350,6 +407,7 @@ export function useQualityCheckAgentRun() {
     async (dates: string[]) => {
       stopRequestedRef.current = false;
       finalAgentActiveRef.current = true;
+      setRunId(null);
       resetBulkDayState();
       setRunning(true);
       setLogLines([]);
@@ -464,7 +522,7 @@ export function useQualityCheckAgentRun() {
             patchDayLines(date, lines);
 
             while (!stopRequestedRef.current) {
-              const detail = await fetchPipelineRun(out.runId);
+              const detail = await fetchPipelineRun(out.runId, { activity: true });
               const built = namespaceLogLines(buildActivityLogFromDetail(detail), detail.run.id);
               const tasks = taskLinesFromBuilt(built, out.runId);
               lines = tasks;
@@ -789,13 +847,13 @@ export function useQualityCheckAgentRun() {
   }, [pushLog, toast]);
 
   useEffect(() => {
-    if (!running || !runId) return;
+    if (!running || !runId || finalAgentActiveRef.current) return;
 
     const poll = async () => {
-      if (!runningRef.current || stopRequestedRef.current) return;
+      if (!runningRef.current || stopRequestedRef.current || finalAgentActiveRef.current) return;
       const pollRunId = runId;
       try {
-        const detail = await fetchPipelineRun(pollRunId);
+        const detail = await fetchPipelineRun(pollRunId, { activity: true });
         if (!runningRef.current || stopRequestedRef.current) return;
         if (runIdRef.current !== pollRunId && detail.run.status === "running") return;
 
@@ -923,13 +981,6 @@ export function useQualityCheckAgentRun() {
   }, [running, runId, scheduleDayCollapse, startPipelineSlice, toast]);
 
   useEffect(() => {
-    const root = logScrollRef.current;
-    const viewport = root?.querySelector("[data-radix-scroll-area-viewport]") as HTMLElement | null;
-    if (!viewport) return;
-    viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
-  }, [dayGroups, logLines]);
-
-  useEffect(() => {
     return () => {
       for (const timer of collapseTimersRef.current.values()) {
         clearTimeout(timer);
@@ -940,9 +991,7 @@ export function useQualityCheckAgentRun() {
 
   return {
     running,
-    logLines,
-    dayGroups,
-    planLine,
+    activityStore,
     progressLabel,
     logScrollRef,
     runQualityCheckAgent,

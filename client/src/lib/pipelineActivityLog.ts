@@ -241,6 +241,36 @@ export function logLinesEqual(a: LogLine[], b: LogLine[]): boolean {
   return true;
 }
 
+export function dayGroupsEqual(a: DayActivityGroup[], b: DayActivityGroup[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      !y ||
+      x.id !== y.id ||
+      x.date !== y.date ||
+      x.dayIndex !== y.dayIndex ||
+      x.dayTotal !== y.dayTotal ||
+      x.status !== y.status ||
+      x.outcome !== y.outcome ||
+      x.expanded !== y.expanded ||
+      !logLinesEqual(x.lines, y.lines)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Jump the log to the latest line. Smooth scrolling stacks on every poll and freezes long bulk runs. */
+export function scrollActivityLogToEnd(root: HTMLElement | null): void {
+  const viewport = root?.querySelector("[data-radix-scroll-area-viewport]");
+  if (!(viewport instanceof HTMLElement)) return;
+  viewport.scrollTop = viewport.scrollHeight;
+}
+
 export function namespaceLogLines(lines: LogLine[], runId: string): LogLine[] {
   return lines.map((line) => ({ ...line, id: `${runId}-${line.id}` }));
 }

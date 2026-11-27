@@ -1,13 +1,14 @@
-import type { Ref, RefObject } from "react";
+import { useEffect, type Ref, type RefObject } from "react";
 import { format, parseISO } from "date-fns";
 import { Check, ChevronRight, Circle, Loader2, UserRound, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { DayActivityGroup, LogLine, LogStatus } from "@/lib/pipelineActivityLog";
+import { scrollActivityLogToEnd, type DayActivityGroup, type LogLine, type LogStatus } from "@/lib/pipelineActivityLog";
 import { cn } from "@/lib/utils";
 
 const LUXURY_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+const RECENT_DONE_DAYS = 8;
 
 function StatusGlyph({ status }: { status: LogStatus }) {
   if (status === "pending") {
@@ -150,8 +151,19 @@ export function BulkDayActivityLog({
   scrollClassName,
   onToggleDay,
 }: BulkDayActivityLogProps) {
-  const visibleGroups = groups.filter((group) => group.status !== "pending");
-  const pendingCount = groups.filter((group) => group.status === "pending").length;
+  const pendingCount = groups.reduce((count, group) => (group.status === "pending" ? count + 1 : count), 0);
+  const doneGroups = groups.filter((group) => group.status === "done");
+  const activeGroups = groups.filter((group) => group.status === "running");
+  const hiddenDoneCount = Math.max(0, doneGroups.length - RECENT_DONE_DAYS);
+  const recentDone = hiddenDoneCount > 0 ? doneGroups.slice(-RECENT_DONE_DAYS) : doneGroups;
+  const runningGroup = activeGroups[activeGroups.length - 1];
+  const scrollToken = runningGroup
+    ? `${runningGroup.id}:${runningGroup.lines.length}:${runningGroup.lines[runningGroup.lines.length - 1]?.text ?? ""}`
+    : String(recentDone.length);
+
+  useEffect(() => {
+    scrollActivityLogToEnd(scrollRef?.current ?? null);
+  }, [scrollRef, scrollToken]);
 
   return (
     <div
@@ -166,12 +178,22 @@ export function BulkDayActivityLog({
           {planLine ? (
             <p className="mb-1 font-mono text-[11px] leading-relaxed text-muted-foreground">{planLine.text}</p>
           ) : null}
-          {visibleGroups.length === 0 ? (
+          {recentDone.length === 0 && activeGroups.length === 0 ? (
             <p className="font-mono text-[11px] text-muted-foreground/80">Starting editorial agent…</p>
           ) : (
-            visibleGroups.map((group) => (
-              <DayGroupRow key={group.id} group={group} onToggle={() => onToggleDay(group.id)} />
-            ))
+            <>
+              {hiddenDoneCount > 0 ? (
+                <p className="font-mono text-[10px] text-muted-foreground/70">
+                  {hiddenDoneCount} earlier day{hiddenDoneCount === 1 ? "" : "s"} finished
+                </p>
+              ) : null}
+              {recentDone.map((group) => (
+                <DayGroupRow key={group.id} group={group} onToggle={() => onToggleDay(group.id)} />
+              ))}
+              {activeGroups.map((group) => (
+                <DayGroupRow key={group.id} group={group} onToggle={() => onToggleDay(group.id)} />
+              ))}
+            </>
           )}
           {pendingCount > 0 ? (
             <p className="pt-1 font-mono text-[10px] text-muted-foreground/70">

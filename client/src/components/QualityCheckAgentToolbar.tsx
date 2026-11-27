@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { Bot, Loader2, StopCircle } from "lucide-react";
 
 import {
@@ -15,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { BulkDayActivityLog } from "@/components/BulkDayActivityLog";
 import { PipelineActivityLog } from "@/components/PipelineActivityLog";
-import type { DayActivityGroup, LogLine } from "@/lib/pipelineActivityLog";
+import type { QualityCheckActivityStore } from "@/hooks/useQualityCheckAgentRun";
 import { getQualityCheckAgentAction } from "@shared/quality-check-agent-actions";
 
 type QualityCheckAgentToolbarProps = {
@@ -24,9 +25,7 @@ type QualityCheckAgentToolbarProps = {
   totalCount: number;
   running: boolean;
   progressLabel: string | null;
-  logLines: LogLine[];
-  dayGroups?: DayActivityGroup[];
-  planLine?: LogLine | null;
+  activityStore: QualityCheckActivityStore;
   logScrollRef: React.RefObject<HTMLDivElement | null>;
   onRun: () => void;
   onStop: () => void;
@@ -93,21 +92,22 @@ function QualityCheckAgentButton({
 function QualityCheckAgentLogPanel({
   running,
   progressLabel,
-  logLines,
-  dayGroups,
-  planLine,
+  activityStore,
   logScrollRef,
   onToggleDay,
 }: {
   running: boolean;
   progressLabel: string | null;
-  logLines: LogLine[];
-  dayGroups?: DayActivityGroup[];
-  planLine?: LogLine | null;
+  activityStore: QualityCheckActivityStore;
   logScrollRef: React.RefObject<HTMLDivElement | null>;
   onToggleDay?: (dayId: string) => void;
 }) {
-  const useDayGroups = (dayGroups?.length ?? 0) > 0;
+  const { logLines, dayGroups, planLine } = useSyncExternalStore(
+    activityStore.subscribe,
+    activityStore.getSnapshot,
+    activityStore.getSnapshot,
+  );
+  const useDayGroups = dayGroups.length > 0;
   if (!running && logLines.length === 0 && !useDayGroups) return null;
 
   return (
@@ -122,8 +122,8 @@ function QualityCheckAgentLogPanel({
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Activity log</Label>
         {useDayGroups ? (
           <BulkDayActivityLog
-            planLine={planLine ?? null}
-            groups={dayGroups ?? []}
+            planLine={planLine}
+            groups={dayGroups}
             scrollRef={logScrollRef}
             scrollClassName="h-[200px]"
             onToggleDay={onToggleDay ?? (() => undefined)}
@@ -142,9 +142,7 @@ export function QualityCheckAgentToolbar({
   totalCount,
   running,
   progressLabel,
-  logLines,
-  dayGroups,
-  planLine,
+  activityStore,
   logScrollRef,
   onRun,
   onStop,
@@ -179,9 +177,7 @@ export function QualityCheckAgentToolbar({
       <QualityCheckAgentLogPanel
         running={running}
         progressLabel={progressLabel}
-        logLines={logLines}
-        dayGroups={dayGroups}
-        planLine={planLine}
+        activityStore={activityStore}
         logScrollRef={logScrollRef}
         onToggleDay={onToggleDay}
       />
@@ -203,9 +199,7 @@ export function QualityCheckAgentToolbar({
       <QualityCheckAgentLogPanel
         running={running}
         progressLabel={progressLabel}
-        logLines={logLines}
-        dayGroups={dayGroups}
-        planLine={planLine}
+        activityStore={activityStore}
         logScrollRef={logScrollRef}
         onToggleDay={onToggleDay}
       />
