@@ -556,6 +556,7 @@ export default function EventsManager() {
         const { data: batchData, error: batchError } = await supabase
           .from("historical_news_analyses")
           .select("date, summary, topic_categories, google_check_happened, is_locked")
+          .order("date", { ascending: true })
           .range(from, from + batchSize - 1);
 
         if (batchError) {

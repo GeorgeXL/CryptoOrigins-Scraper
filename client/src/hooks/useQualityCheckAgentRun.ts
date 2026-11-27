@@ -414,7 +414,8 @@ export function useQualityCheckAgentRun() {
   }
 
   const runFinalAgent = useCallback(
-    async (dates: string[]) => {
+    async (inputDates: string[]) => {
+      const dates = [...inputDates].sort();
       stopRequestedRef.current = false;
       finalAgentActiveRef.current = true;
       setRunId(null);
@@ -427,24 +428,29 @@ export function useQualityCheckAgentRun() {
       const runnableDates = dates.filter((date) => !pendingDates.has(date));
       const skippedCount = dates.length - runnableDates.length;
 
-      const groups: DayActivityGroup[] = dates.map((date, index) => ({
-        id: date,
-        date,
-        dayIndex: index + 1,
-        dayTotal: dates.length,
-        status: pendingDates.has(date) ? "done" : runnableDates[0] === date ? "running" : "pending",
-        outcome: pendingDates.has(date) ? "review" : undefined,
-        lines: pendingDates.has(date)
-          ? [
-              {
-                id: `${date}-skip-pending`,
-                text: formatPendingAgentQueueSkipLabel(pendingByDate[date] ?? []),
-                status: "review",
-              },
-            ]
-          : [],
-        expanded: pendingDates.has(date) ? false : runnableDates[0] === date,
-      }));
+      let runOrdinal = 0;
+      const groups: DayActivityGroup[] = dates.map((date) => {
+        const skipped = pendingDates.has(date);
+        if (!skipped) runOrdinal += 1;
+        return {
+          id: date,
+          date,
+          dayIndex: skipped ? 0 : runOrdinal,
+          dayTotal: runnableDates.length,
+          status: pendingDates.has(date) ? "done" : runnableDates[0] === date ? "running" : "pending",
+          outcome: pendingDates.has(date) ? "review" : undefined,
+          lines: pendingDates.has(date)
+            ? [
+                {
+                  id: `${date}-skip-pending`,
+                  text: formatPendingAgentQueueSkipLabel(pendingByDate[date] ?? []),
+                  status: "review",
+                },
+              ]
+            : [],
+          expanded: pendingDates.has(date) ? false : runnableDates[0] === date,
+        };
+      });
       setDayGroups(groups);
       setPlanLine({
         id: `qc-final-plan-${Date.now()}`,

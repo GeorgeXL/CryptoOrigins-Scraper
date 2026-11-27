@@ -97,7 +97,7 @@ function DayGroupRow({
         <DayHeaderGlyph group={group} />
         <span className="min-w-0 flex-1 font-medium text-foreground/95">{formatDayLabel(group.date)}</span>
         <span className="shrink-0 text-muted-foreground">
-          {group.dayIndex}/{group.dayTotal}
+          {group.dayIndex > 0 ? `${group.dayIndex}/${group.dayTotal}` : "skip"}
         </span>
         {canExpand ? (
           <motion.span
