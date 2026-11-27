@@ -1,5 +1,4 @@
-import { Agent, run } from "@openai/agents";
-import { and, asc, count, desc, eq, gte, lte, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, lte, ne, sql } from "drizzle-orm";
 import { db } from "../../db";
 import {
   historicalNewsAnalyses,
@@ -337,6 +336,7 @@ async function runAgentWithRetry(
   let lastOutput: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await noteActiveAgent(runId, agentName.replace(/Agent$/, "").replace(/([a-z])([A-Z])/g, "$1 $2"));
     const result = await executeAgent(agentName, { runId, triageItem });
     const stepId = await createStep({
       runId,
@@ -372,24 +372,22 @@ async function runAgentWithRetry(
   return { nextStepIndex: stepIndex, lastStepId, lastStatus, lastOutput };
 }
 
-async function generateManagerNarrative(triage: TriageItem[], signal?: AbortSignal): Promise<string | null> {
-  if (!process.env.OPENAI_API_KEY) return null;
-  const counts = triage.reduce<Record<string, number>>((acc, item) => {
-    acc[item.route] = (acc[item.route] || 0) + 1;
-    return acc;
-  }, {});
-  const planner = new Agent({
-    name: "NewsManager",
-    model: EDITORIAL_DEFAULT_MODEL,
-    instructions:
-      "You are NewsManager for The Origins editorial pipeline. Summarize triage outcome in 2 concise sentences. No markdown.",
+/** Shown in the activity log while the next model call is in flight and no step row exists yet. */
+async function noteActiveAgent(runId: string, activeAgent: string): Promise<void> {
+  const patch = JSON.stringify({
+    phase: "running",
+    activeAgent,
+    heartbeatIso: new Date().toISOString(),
   });
-  const result = await run(
-    planner,
-    `Triage route counts: ${JSON.stringify(counts)}. Give a short operator summary.`,
-    { maxTurns: 2, signal }
-  );
-  return String(result.finalOutput ?? "").trim() || null;
+  try {
+    await db.execute(sql`
+      UPDATE pipeline_runs
+      SET stats = COALESCE(stats, '{}'::jsonb) || ${patch}::jsonb
+      WHERE id = ${runId}::uuid
+    `);
+  } catch (error) {
+    console.warn("pipeline active-agent heartbeat failed:", error instanceof Error ? error.message : error);
+  }
 }
 
 /**
@@ -1321,13 +1319,55 @@ async function runV3ExistingDayChecks(opts: {
 
   const summary = bootstrap.summary || (row.summary ?? "").trim();
 
+  const wantsDateCheck = checkScopes.has("date") && Boolean(summary) && Boolean(triage.analysisId);
+  const wantsRelevance = checkScopes.has("relevance") && summary.length >= 15;
+  const wantsNeighbors =
+    Boolean(summary) && Boolean(triage.analysisId) && (wantsDateCheck || checkScopes.has("duplicates"));
+  if (wantsDateCheck || wantsRelevance || checkScopes.has("duplicates")) {
+    const label = [
+      wantsDateCheck ? "Date check" : null,
+      checkScopes.has("duplicates") ? "duplicates" : null,
+      wantsRelevance ? "relevance" : null,
+    ]
+      .filter(Boolean)
+      .join(" and ");
+    await noteActiveAgent(runId, label);
+  }
+
+  // One neighbor window feeds both the date model and the duplicate check.
+  const sharedDupContext = wantsNeighbors
+    ? await getEditorialDuplicateNeighborContext({
+        date: triage.date,
+        analysisId: triage.analysisId!,
+        windowDays: 56,
+        maxNeighbors: 12,
+      })
+    : null;
+
+  // Date and relevance are independent model calls. Running them together is the
+  // gap the activity log used to show as "waiting for next agent".
+  const [dateCheck, prefetchedRelevance] = await Promise.all([
+    wantsDateCheck
+      ? evaluateDateConsistencyForDay({
+          date: triage.date,
+          analysisId: triage.analysisId!,
+          summary,
+          dupContext: sharedDupContext,
+        })
+      : Promise.resolve(null),
+    wantsRelevance
+      ? evaluateRelevanceWithAgent({
+          date: triage.date,
+          summary,
+          tags: normalizedTagsFromRow(row.tagsVersion2),
+          topics: topicLabelsFromRow(row.topicCategories),
+          topArticleId: row.topArticleId,
+        })
+      : Promise.resolve(null),
+  ]);
+
   // 1. Canonical / LLM date consistency (highest priority)
-  if (checkScopes.has("date") && summary && triage.analysisId) {
-    const dateCheck = await evaluateDateConsistencyForDay({
-      date: triage.date,
-      analysisId: triage.analysisId,
-      summary,
-    });
+  if (dateCheck) {
 
     const calendarExpected =
       dateCheck.status === "canonical"
@@ -1452,14 +1492,10 @@ async function runV3ExistingDayChecks(opts: {
     return { nextStepIndex: stepIndex, autoApproved: false };
   }
 
-  // 2. Strong duplicate neighbor
-  const duplicateCtx = summary
-    ? await getEditorialDuplicateNeighborContext({
-        date: triage.date,
-        analysisId: triage.analysisId,
-        windowDays: 56,
-        maxNeighbors: 6,
-      })
+  // 2. Strong duplicate neighbor. Date check already loaded the top 12; duplicate
+  // decisions stay on the top 6, matching the previous window.
+  const duplicateCtx = sharedDupContext
+    ? { ...sharedDupContext, neighbors: sharedDupContext.neighbors.slice(0, 6) }
     : null;
   const strongNeighbors = duplicateCtx?.neighbors.filter(isStrongDuplicateNeighbor) ?? [];
   if (checkScopes.has("duplicates") && strongNeighbors.length > 0 && duplicateCtx) {
@@ -1508,7 +1544,9 @@ async function runV3ExistingDayChecks(opts: {
   }
 
   if (checkScopes.has("duplicates") && duplicateCtx?.neighbors.length && summary) {
-    for (const neighbor of duplicateCtx.neighbors.filter(isBorderlineDuplicateNeighbor).slice(0, 2)) {
+    const borderline = duplicateCtx.neighbors.filter(isBorderlineDuplicateNeighbor).slice(0, 2);
+    if (borderline.length > 0) await noteActiveAgent(runId, "Duplicate check");
+    for (const neighbor of borderline) {
       const semantic = await evaluateSemanticDuplicateForDay({ date: triage.date, summary, neighbor });
       if (semantic.status === "duplicate") {
         const dupePkg: DuplicateDecisionPackage = {
@@ -1631,14 +1669,8 @@ async function runV3ExistingDayChecks(opts: {
     return { nextStepIndex: stepIndex, autoApproved: false };
   }
 
-  if (checkScopes.has("relevance") && summary.length >= 15) {
-    const relevance = await evaluateRelevanceWithAgent({
-      date: triage.date,
-      summary,
-      tags: normalizedTagsFromRow(row.tagsVersion2),
-      topics: topicLabelsFromRow(row.topicCategories),
-      topArticleId: row.topArticleId,
-    });
+  if (prefetchedRelevance) {
+    const relevance = prefetchedRelevance;
     const needsArticlePick = relevanceRequiresArticlePick(relevance);
 
     if (needsArticlePick && storedCandidates.length > 0) {
@@ -1778,7 +1810,8 @@ async function runV3ExistingDayChecks(opts: {
     return { nextStepIndex: stepIndex, autoApproved: false };
   }
 
-  // 4. Correction proposals
+  // 4. Correction proposals. Topic, tag, and summary models run together inside this call.
+  await noteActiveAgent(runId, "Topics, tags, and summary");
   const articleText = collectArticleTextForGrounding(row.tieredArticles, row.analyzedArticles);
   const canonicalTagIndex = await loadCanonicalTagIndex();
   const proposals = await buildScopedCorrectionProposals({
@@ -2544,7 +2577,9 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
     });
   }
 
-  const managerNarrative = await generateManagerNarrative(effectiveTriageForStats, signal);
+  if (signal?.aborted) {
+    throw new Error("Pipeline run aborted");
+  }
   const [pendingReview] = await db
     .select({ c: count() })
     .from(humanReviewQueue)
@@ -2562,7 +2597,7 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
           acc[tri.route] = (acc[tri.route] || 0) + 1;
           return acc;
         }, {}),
-        managerNarrative,
+        managerNarrative: null,
         humanReviewQueued: Number(pendingReview?.c ?? 0),
         autoApprovedCount,
         shortCircuitOnReject: EDITORIAL_PIPELINE_SHORT_CIRCUIT_ON_REJECT,

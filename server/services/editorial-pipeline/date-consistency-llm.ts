@@ -41,6 +41,8 @@ export async function evaluateDateConsistencyForDay(opts: {
   date: string;
   analysisId: string;
   summary: string;
+  /** When the caller already loaded neighbors, skip a second window query. */
+  dupContext?: Awaited<ReturnType<typeof getEditorialDuplicateNeighborContext>> | null;
 }): Promise<DateConsistencyLlmResult> {
   const summary = opts.summary.trim();
   if (summary.length < 20) {
@@ -62,10 +64,12 @@ export async function evaluateDateConsistencyForDay(opts: {
   }
 
   const dupContext =
-    (await getEditorialDuplicateNeighborContext({
-      date: opts.date,
-      analysisId: opts.analysisId,
-    })) ?? { focalTags: [], focalTopics: [], focalSummaryPreview: "", neighbors: [] };
+    opts.dupContext !== undefined
+      ? (opts.dupContext ?? { focalTags: [], focalTopics: [], focalSummaryPreview: "", neighbors: [] })
+      : ((await getEditorialDuplicateNeighborContext({
+          date: opts.date,
+          analysisId: opts.analysisId,
+        })) ?? { focalTags: [], focalTopics: [], focalSummaryPreview: "", neighbors: [] });
 
   const system = `You verify whether a short "day in history" summary plausibly belongs on a given calendar date.
 You do NOT have access to source articles — use only public knowledge, the focal summary, focal tags/topics, and the taxonomy_neighbors list (other days' summaries are short previews only; same DB metadata editors see).

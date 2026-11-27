@@ -36,6 +36,7 @@ export interface RawAnalysisRow {
   google_check_happened?: "yes" | "no" | "uncertain" | null;
   google_check_checked_at?: string | null;
   rarity?: string | null;
+  story_line?: string | null;
 }
 
 export interface AnalysesBrowseQueryResult {

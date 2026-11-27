@@ -109,6 +109,11 @@ function isSuccessfulTerminal(status: string): boolean {
   return status === "completed" || status === "skipped" || status === "approved";
 }
 
+function activeWorkLabel(stats: Record<string, unknown> | undefined): string | null {
+  const active = stats?.activeAgent;
+  return typeof active === "string" && active.trim() ? active.trim() : null;
+}
+
 function humanReviewQueuedCount(stats: Record<string, unknown> | undefined): number {
   const raw = stats?.humanReviewQueued;
   const n = typeof raw === "number" ? raw : Number(raw);
@@ -244,10 +249,13 @@ function buildActivityLogFromDetail(detail: PipelineRunDetail): LogLine[] {
   if (run.status === "running") {
     const last = sortedSteps[sortedSteps.length - 1];
     if (last && isSuccessfulTerminal(last.status)) {
+      const active = activeWorkLabel(run.stats);
       const tail =
         isMultiDayWindow && isV3GatedSourceFinderStep(last) ?
           "Orchestrator · continuing range (next calendar day may be fetching)…"
-        : "Orchestrator · waiting for next agent…";
+        : active
+          ? `${active}…`
+          : "Orchestrator · waiting for next agent…";
       lines.push({
         id: "awaiting-next-agent",
         text: tail,

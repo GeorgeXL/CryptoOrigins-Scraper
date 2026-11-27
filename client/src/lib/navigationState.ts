@@ -11,7 +11,7 @@ export interface HomePageState {
   pageSize: number;
   viewMode: 'keywords' | 'topics';
   /** Home browse axis: storyline topics vs collector rarity vs entity tags */
-  browseAxis?: 'topic' | 'rarity' | 'tags';
+  browseAxis?: 'topic' | 'rarity' | 'tags' | 'story';
   /** Left sidebar: tag taxonomy vs DB narrative topics (`topics` / `page_topics`) */
   sidebarMenu?: 'tags' | 'topics';
   // EventsManager-specific fields
@@ -28,10 +28,11 @@ export interface MonthlyViewState {
   pageSize: number;
 }
 
-function parseBrowseAxis(searchParams: URLSearchParams): 'topic' | 'rarity' | 'tags' {
+function parseBrowseAxis(searchParams: URLSearchParams): 'topic' | 'rarity' | 'tags' | 'story' {
   const browse = searchParams.get('browse');
   if (browse === 'rarity') return 'rarity';
   if (browse === 'tags') return 'tags';
+  if (browse === 'story') return 'story';
   return 'topic';
 }
 
@@ -61,7 +62,7 @@ export function serializePageState(state: HomePageState | MonthlyViewState): str
     params.set('page', state.currentPage.toString());
     params.set('pageSize', state.pageSize.toString());
     params.set('viewMode', state.viewMode);
-    if (state.browseAxis === 'rarity' || state.browseAxis === 'tags') {
+    if (state.browseAxis === 'rarity' || state.browseAxis === 'tags' || state.browseAxis === 'story') {
       params.set('browse', state.browseAxis);
     }
     if (state.sidebarMenu === 'topics') {
@@ -206,7 +207,7 @@ export function reconstructPageUrl(state: HomePageState | MonthlyViewState): str
     params.set('page', state.currentPage.toString());
     params.set('pageSize', state.pageSize.toString());
     params.set('viewMode', state.viewMode);
-    if (state.browseAxis === 'rarity' || state.browseAxis === 'tags') {
+    if (state.browseAxis === 'rarity' || state.browseAxis === 'tags' || state.browseAxis === 'story') {
       params.set('browse', state.browseAxis);
     }
     if (state.sidebarMenu === 'topics') {

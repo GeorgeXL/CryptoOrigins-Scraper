@@ -82,6 +82,12 @@ import {
   type AnalysisTagRow,
 } from "@/lib/tagCatalog";
 import { isValidRarity } from "@shared/rarity";
+import {
+  analysisMatchesStory,
+  buildStoryCatalogData,
+  resolveSelectedStoryFromSelection,
+  type AnalysisStoryRow,
+} from "@/lib/storyCatalog";
 import { fetchAllSupabaseRows } from "@/lib/supabaseBatch";
 import { PerplexityIcon } from "@/components/PerplexityIcon";
 import { analysisHasStorylineTopic } from "@shared/storyline-topic-eligibility";
@@ -98,7 +104,7 @@ import {
   AnalysesBrowseBulkActions,
 } from "@/features/analyses-browse/AnalysesBrowseLayout";
 
-type BrowseAxis = "topic" | "rarity" | "tags";
+type BrowseAxis = "topic" | "rarity" | "tags" | "story";
 
 function isHomeDefaultBrowseView(
   browseAxis: BrowseAxis,
@@ -120,6 +126,13 @@ function isTagsDefaultBrowseView(
   selectedEntities: Set<string>,
 ): boolean {
   return browseAxis === "tags" && selectedEntities.size === 0;
+}
+
+function isStoryDefaultBrowseView(
+  browseAxis: BrowseAxis,
+  selectedEntities: Set<string>,
+): boolean {
+  return browseAxis === "story" && selectedEntities.size === 0;
 }
 
 function buildGoogleCheckSummary(
@@ -176,7 +189,11 @@ export default function HomePage() {
     }
     params.set("page", currentState.currentPage.toString());
     params.set("pageSize", currentState.pageSize.toString());
-    if (currentState.browseAxis === "rarity" || currentState.browseAxis === "tags") {
+    if (
+      currentState.browseAxis === "rarity" ||
+      currentState.browseAxis === "tags" ||
+      currentState.browseAxis === "story"
+    ) {
       params.set("browse", currentState.browseAxis);
     }
     const query = params.toString();
@@ -239,12 +256,28 @@ export default function HomePage() {
     [analysisTagRows],
   );
 
+  const { data: analysisStoryRows = [] } = useQuery({
+    queryKey: ["supabase-analysis-story-lines"],
+    queryFn: async (): Promise<AnalysisStoryRow[]> =>
+      fetchAllSupabaseRows<AnalysisStoryRow>("historical_news_analyses", "id, story_line", {
+        orderBy: { column: "date", ascending: true },
+      }),
+    staleTime: 60_000,
+  });
+
+  const storyCatalogData = useMemo(
+    () => buildStoryCatalogData(analysisStoryRows),
+    [analysisStoryRows],
+  );
+
   const activeCatalogData =
     browseAxis === "rarity"
       ? rarityCatalogData
       : browseAxis === "tags"
         ? tagCatalogData
-        : topicCatalogData;
+        : browseAxis === "story"
+          ? storyCatalogData
+          : topicCatalogData;
 
   const browseFilterRow = useCallback(
     (row: RawAnalysisRow, filters: AnalysesBrowseFilterState) => {
@@ -261,6 +294,14 @@ export default function HomePage() {
         if (!Array.isArray(row.tags_version2) || row.tags_version2.length === 0) return false;
         const selectedTag = resolveSelectedTagFromSelection(filters.selectedEntities);
         if (selectedTag) return analysisMatchesTag(row, selectedTag);
+        return true;
+      }
+
+      if (browseAxis === "story") {
+        const story = row.story_line?.trim();
+        if (!story) return false;
+        const selectedStory = resolveSelectedStoryFromSelection(filters.selectedEntities);
+        if (selectedStory) return analysisMatchesStory(row, selectedStory);
         return true;
       }
 
@@ -309,7 +350,9 @@ export default function HomePage() {
     refetchOnMount: "always",
     staleTime: 0,
     selectColumns:
-      "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked, google_check_happened, google_check_checked_at, rarity",
+      browseAxis === "story"
+        ? "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked, google_check_happened, google_check_checked_at, rarity, story_line"
+        : "id, date, summary, tags_version2, tier_used, is_manual_override, is_flagged, is_locked, google_check_happened, google_check_checked_at, rarity",
     includeTopicCategories: browseAxis === "topic",
     applyServerQuery: (query, filters) => {
       if (browseAxis === "rarity") {
@@ -317,6 +360,9 @@ export default function HomePage() {
       }
       if (browseAxis === "tags") {
         return query.eq("is_locked", true);
+      }
+      if (browseAxis === "story") {
+        return query.not("story_line", "is", null);
       }
       if (isHomeDefaultBrowseView(browseAxis, filters.showUntagged, filters.selectedEntities)) {
         return query.eq("is_locked", true);
@@ -326,6 +372,7 @@ export default function HomePage() {
     needsFullFetch: (filters) =>
       browseAxis === "rarity" ||
       browseAxis === "tags" ||
+      browseAxis === "story" ||
       filters.showUntagged ||
       filters.selectedEntities.size > 0 ||
       isHomeDefaultBrowseView(browseAxis, filters.showUntagged, filters.selectedEntities),
@@ -342,9 +389,12 @@ export default function HomePage() {
       googleCheckCheckedAt: row.google_check_checked_at ?? null,
       topic_categories: row.topic_categories,
       rarity: row.rarity ?? null,
+      storyLine: row.story_line?.trim() || null,
     }),
     buildExtra: (filteredRows, filters) => {
-      if (browseAxis === "rarity" || browseAxis === "tags") return { googleCheckSummary: null };
+      if (browseAxis === "rarity" || browseAxis === "tags" || browseAxis === "story") {
+        return { googleCheckSummary: null };
+      }
       const topicLeaf =
         filters.selectedEntities.size > 0 && !filters.showUntagged
           ? resolveSelectedTopicLeafFromSelection(filters.selectedEntities, topicCatalogData)
@@ -400,6 +450,8 @@ export default function HomePage() {
   const defaultBrowseView = isHomeDefaultBrowseView(browseAxis, showUntagged, selectedEntities);
   const rarityDefaultView = isRarityDefaultBrowseView(browseAxis, selectedEntities);
   const tagsDefaultView = isTagsDefaultBrowseView(browseAxis, selectedEntities);
+  const storyDefaultView = isStoryDefaultBrowseView(browseAxis, selectedEntities);
+  const selectedStoryLabel = resolveSelectedStoryFromSelection(selectedEntities);
   const selectedTopicLabel = resolveTopicLabelFromSelection(selectedEntities, topicCatalogData);
   const selectedRarityLabel = resolveRarityLabelFromSelection(selectedEntities);
   const selectedTagLabel = resolveSelectedTagFromSelection(selectedEntities);
@@ -1106,6 +1158,21 @@ export default function HomePage() {
             >
               Tags
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={browseAxis === "story" ? "default" : "ghost"}
+              className="flex-1 px-2"
+              onClick={() => {
+                setBrowseAxis("story");
+                setSelectedEntities(new Set());
+                setShowUntagged(false);
+                setCurrentPage(1);
+                updateUrl({ browseAxis: "story", selectedEntities: new Set(), showUntagged: false, currentPage: 1 });
+              }}
+            >
+              Story
+            </Button>
           </div>
 
           {!activeCatalogData ? (
@@ -1114,7 +1181,9 @@ export default function HomePage() {
                 ? "No locked days with rarity yet. Assign rarity from Quality Check."
                 : browseAxis === "tags"
                   ? "No frequent entity tags yet on locked days."
-                  : "No storylines in catalog yet. Assign topic_categories on day rows."}
+                  : browseAxis === "story"
+                    ? "No story lines on day rows yet."
+                    : "No storylines in catalog yet. Assign topic_categories on day rows."}
             </Card>
           ) : (
             <TagsSidebar
@@ -1165,6 +1234,12 @@ export default function HomePage() {
                   : tagsDefaultView
                     ? "Locked by tag"
                     : "Tags browse"
+                : browseAxis === "story"
+                  ? selectedStoryLabel
+                    ? `${selectedStoryLabel} days`
+                    : storyDefaultView
+                      ? "Days by story"
+                      : "Story browse"
               : showUntagged
                 ? "Untagged Analyses"
                 : "Bitcoinpedia"
@@ -1225,7 +1300,7 @@ export default function HomePage() {
               analyses={paginatedAnalyses}
               googleCheckSummary={googleCheckSummary}
               metadataColumn={
-                browseAxis === "rarity" ? "rarity" : browseAxis === "tags" ? "tags" : "topic"
+                browseAxis === "rarity" ? "rarity" : browseAxis === "tags" ? "tags" : browseAxis === "story" ? "story" : "topic"
               }
               isLoading={isLoading}
               selectedDates={selectedDates}
@@ -1295,6 +1370,12 @@ export default function HomePage() {
                         : tagsDefaultView
                           ? "No locked days with tags found"
                           : "Select a tag"
+                      : browseAxis === "story"
+                        ? selectedStoryLabel
+                          ? `No days in ${selectedStoryLabel}`
+                          : storyDefaultView
+                            ? "No days with a story line yet"
+                            : "Select a story"
                       : showUntagged
                         ? "No untagged analyses found"
                         : selectedEntities.size > 0

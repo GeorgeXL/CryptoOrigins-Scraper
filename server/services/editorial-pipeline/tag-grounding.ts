@@ -63,20 +63,31 @@ export type CanonicalTagIndex = {
   canonicalsShortestFirst: string[];
 };
 
+const CANONICAL_TAG_INDEX_TTL_MS = 60_000;
+let canonicalTagIndexCache: { at: number; index: CanonicalTagIndex } | null = null;
+
 /**
  * Snapshot distinct tag strings from tags_version2 into a fast in-memory index.
+ * Bulk runs hit this once per day; the tag set barely changes during a batch,
+ * so a short cache avoids a full-table unnest between agents.
  */
 export async function loadCanonicalTagIndex(): Promise<CanonicalTagIndex> {
+  const now = Date.now();
+  if (canonicalTagIndexCache && now - canonicalTagIndexCache.at < CANONICAL_TAG_INDEX_TTL_MS) {
+    return canonicalTagIndexCache.index;
+  }
   const rows = await db.execute<{ tag_name: string }>(sql`
     SELECT DISTINCT unnest(tags_version2) AS tag_name
     FROM historical_news_analyses
     WHERE tags_version2 IS NOT NULL AND array_length(tags_version2, 1) > 0
   `);
-  return buildCanonicalTagIndex(
+  const index = buildCanonicalTagIndex(
     rows.rows
       .map((r) => r.tag_name)
       .filter((name): name is string => typeof name === "string" && name.trim().length > 0),
   );
+  canonicalTagIndexCache = { at: now, index };
+  return index;
 }
 
 /** Pure builder used by tests; takes an explicit list of canonical names. */

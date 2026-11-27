@@ -51,6 +51,7 @@ export interface HistoricalNewsAnalysis {
   googleCheckCheckedAt?: string | null;
   topic_categories?: unknown;
   rarity?: string | null;
+  storyLine?: string | null;
 }
 
 interface CategoryData {
@@ -129,7 +130,7 @@ interface AnalysesTableProps {
   rowAnnotations?: Record<string, AnalysisRowAnnotation>;
   googleCheckSummary?: GoogleCheckSummary | null;
   /** Right column: entity tags (default), storyline topic, or collector rarity */
-  metadataColumn?: "tags" | "topic" | "rarity";
+  metadataColumn?: "tags" | "topic" | "rarity" | "story";
 }
 
 export function AnalysesTable({
@@ -453,7 +454,13 @@ export function AnalysesTable({
             <TableHead className="w-8 px-1"><span className="sr-only">Lock</span></TableHead>
             <TableHead>Summary</TableHead>
             <TableHead className="w-32">
-              {metadataColumn === "rarity" ? "Rarity" : metadataColumn === "topic" ? "Topic" : "Tags"}
+              {metadataColumn === "rarity"
+                ? "Rarity"
+                : metadataColumn === "topic"
+                  ? "Topic"
+                  : metadataColumn === "story"
+                    ? "Story"
+                    : "Tags"}
             </TableHead>
           </TableRow>
         </TableHeader>
@@ -610,6 +617,14 @@ export function AnalysesTable({
                     analysis.rarity && isValidRarity(analysis.rarity) ? (
                       <Badge variant="outline" className="text-xs">
                         {RARITY_LABELS[analysis.rarity]}
+                      </Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )
+                  ) : metadataColumn === "story" ? (
+                    analysis.storyLine ? (
+                      <Badge variant="outline" className="text-xs max-w-[140px] truncate" title={analysis.storyLine}>
+                        {analysis.storyLine}
                       </Badge>
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
