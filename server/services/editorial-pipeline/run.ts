@@ -372,6 +372,20 @@ async function runAgentWithRetry(
   return { nextStepIndex: stepIndex, lastStepId, lastStatus, lastOutput };
 }
 
+/** Keeps the poll heartbeat fresh while a model call is in flight. */
+async function touchPipelineHeartbeat(runId: string): Promise<void> {
+  const patch = JSON.stringify({ heartbeatIso: new Date().toISOString() });
+  try {
+    await db.execute(sql`
+      UPDATE pipeline_runs
+      SET stats = COALESCE(stats, '{}'::jsonb) || ${patch}::jsonb
+      WHERE id = ${runId}::uuid
+    `);
+  } catch (error) {
+    console.warn("pipeline heartbeat failed:", error instanceof Error ? error.message : error);
+  }
+}
+
 /** Shown in the activity log while the next model call is in flight and no step row exists yet. */
 async function noteActiveAgent(runId: string, activeAgent: string): Promise<void> {
   const patch = JSON.stringify({
@@ -2251,6 +2265,10 @@ async function runV3ExistingDayChecks(opts: {
 }
 
 async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal): Promise<void> {
+  const heartbeat = setInterval(() => {
+    void touchPipelineHeartbeat(runId);
+  }, 8_000);
+  try {
   const checkScopes = normalizeCheckScopes(opts.checkScopes);
   await db
     .update(pipelineRuns)
@@ -2283,6 +2301,30 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
 
   let stepIndex = 1;
   for (const item of triage) {
+    const [pendingReview] = await db
+      .select({ c: count() })
+      .from(humanReviewQueue)
+      .where(and(eq(humanReviewQueue.eventDate, item.date), eq(humanReviewQueue.status, "pending")));
+    if (Number(pendingReview?.c ?? 0) > 0) {
+      const skipStepId = await createStep({
+        runId,
+        stepIndex,
+        agentName: "NewsManager",
+        status: "skipped",
+        confidence: 100,
+        input: { date: item.date, analysisId: item.analysisId },
+        output: buildStepOutput({
+          summary: `Skipped ${item.date} — already pending in Agents`,
+          findings: ["A review item is already waiting. Resolve it before running this day again."],
+        }),
+        evidence: { reason: "pending_review" },
+      });
+      await recordConfidence(runId, skipStepId, "NewsManager", 100, "Already pending in Agents");
+      stepIndex += 1;
+      effectiveTriageForStats.push(item);
+      continue;
+    }
+
     const [lockRow] = await db
       .select({ isLocked: historicalNewsAnalyses.isLocked })
       .from(historicalNewsAnalyses)
@@ -2604,6 +2646,9 @@ async function executeRun(runId: string, opts: StartOpts, signal?: AbortSignal):
       },
     })
     .where(eq(pipelineRuns.id, runId));
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
 
 export async function startEditorialPipelineRun(opts: StartOpts): Promise<{ runId: string }> {

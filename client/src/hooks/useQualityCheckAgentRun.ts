@@ -34,6 +34,8 @@ import {
 } from "@shared/quality-check-agent-actions";
 
 const POLL_MS = 1500;
+const STALE_WORKER_MS = 25_000;
+const DAY_DEADLINE_MS = 4 * 60 * 1000;
 const DAY_COLLAPSE_MS = 900;
 const FINAL_AGENT_SCOPES: PipelineCheckScope[] = [
   "relevance",
@@ -57,6 +59,14 @@ type SlicePlan = {
 
 function taskLinesFromBuilt(built: LogLine[], runId: string): LogLine[] {
   return built.filter((line) => line.id !== `${runId}-run-header`);
+}
+
+function heartbeatAgeMs(stats: unknown): number | null {
+  if (!stats || typeof stats !== "object") return null;
+  const iso = (stats as { heartbeatIso?: unknown }).heartbeatIso;
+  if (typeof iso !== "string") return null;
+  const beat = Date.parse(iso);
+  return Number.isFinite(beat) ? Date.now() - beat : null;
 }
 
 type ActivitySnapshot = {
@@ -521,6 +531,7 @@ export function useQualityCheckAgentRun() {
             ];
             patchDayLines(date, lines);
 
+            const dayStarted = Date.now();
             while (!stopRequestedRef.current) {
               const detail = await fetchPipelineRun(out.runId, { activity: true });
               const built = namespaceLogLines(buildActivityLogFromDetail(detail), detail.run.id);
@@ -529,6 +540,16 @@ export function useQualityCheckAgentRun() {
               patchDayLines(date, lines);
               pipelineStatus = detail.run.status;
               if (detail.run.status !== "running") break;
+              const silentFor = heartbeatAgeMs(detail.run.stats) ?? Date.now() - dayStarted;
+              if (silentFor > STALE_WORKER_MS || Date.now() - dayStarted > DAY_DEADLINE_MS) {
+                pipelineStatus = "stale";
+                try {
+                  await stopPipelineRun(out.runId);
+                } catch {
+                  /* the worker is already gone */
+                }
+                break;
+              }
               await sleep(POLL_MS);
             }
 
@@ -550,7 +571,9 @@ export function useQualityCheckAgentRun() {
 
             if (pipelineStatus !== "completed") {
               const errMsg =
-                pipelineStatus === "error" || pipelineStatus === "stopped"
+                pipelineStatus === "stale"
+                  ? "Pipeline stopped responding — moved on to the next day"
+                  : pipelineStatus === "error" || pipelineStatus === "stopped"
                   ? `Pipeline ended with status=${pipelineStatus}`
                   : `Pipeline ended with status=${pipelineStatus}`;
               lines = [...lines, { id: `${date}-pipeline-failed`, text: errMsg, status: "rejected" }];

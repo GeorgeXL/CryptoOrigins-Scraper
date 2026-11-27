@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/[...slug].ts": {
-      "maxDuration": 60
+      "maxDuration": 300
     }
   },
   "rewrites": [

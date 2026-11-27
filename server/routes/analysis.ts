@@ -405,7 +405,7 @@ function parsePerplexityDate(dateText: string | null): string | null {
         .select({
           id: humanReviewQueue.id,
           eventDate: humanReviewQueue.eventDate,
-          package: humanReviewQueue.package,
+          phase: sql<string | null>`${humanReviewQueue.package}->>'phase'`,
           priority: humanReviewQueue.priority,
           createdAt: humanReviewQueue.createdAt,
         })
@@ -413,7 +413,15 @@ function parsePerplexityDate(dateText: string | null): string | null {
         .where(and(eq(humanReviewQueue.status, "pending"), inArray(humanReviewQueue.eventDate, validDates)))
         .orderBy(asc(humanReviewQueue.eventDate), asc(humanReviewQueue.createdAt));
 
-      res.json({ byDate: mapPendingAgentQueueRows(rows) });
+      const mapped = rows.map((row) => ({
+        id: row.id,
+        eventDate: row.eventDate,
+        package: { phase: row.phase },
+        priority: row.priority,
+        createdAt: row.createdAt,
+      }));
+
+      res.json({ byDate: mapPendingAgentQueueRows(mapped) });
     } catch (error) {
       console.error("pending-agent-queue batch:", error);
       res.status(500).json({ error: (error as Error).message });

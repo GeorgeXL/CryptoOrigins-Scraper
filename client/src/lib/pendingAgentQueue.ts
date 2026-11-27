@@ -43,7 +43,9 @@ export async function fetchPendingAgentQueueByDates(
       body: JSON.stringify({ dates: chunk }),
     });
 
-    if (!res.ok) continue;
+    if (!res.ok) {
+      throw new Error(`Pending queue check failed (${res.status})`);
+    }
 
     const data = (await res.json()) as { byDate?: Record<string, PendingAgentQueueItem[]> };
     Object.assign(byDate, data.byDate ?? {});

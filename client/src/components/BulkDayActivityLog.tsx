@@ -152,7 +152,10 @@ export function BulkDayActivityLog({
   onToggleDay,
 }: BulkDayActivityLogProps) {
   const pendingCount = groups.reduce((count, group) => (group.status === "pending" ? count + 1 : count), 0);
-  const doneGroups = groups.filter((group) => group.status === "done");
+  const runningPos = groups.findIndex((group) => group.status === "running");
+  const doneGroups = groups.filter(
+    (group, index) => group.status === "done" && (runningPos === -1 || index < runningPos),
+  );
   const activeGroups = groups.filter((group) => group.status === "running");
   const hiddenDoneCount = Math.max(0, doneGroups.length - RECENT_DONE_DAYS);
   const recentDone = hiddenDoneCount > 0 ? doneGroups.slice(-RECENT_DONE_DAYS) : doneGroups;
